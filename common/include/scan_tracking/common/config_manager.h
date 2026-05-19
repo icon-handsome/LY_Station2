@@ -3,6 +3,8 @@
 #include <QSettings>
 #include <QString>
 #include <QtCore/QtGlobal>
+#include <array>
+#include <vector>
 
 namespace scan_tracking {
 namespace common {
@@ -81,6 +83,60 @@ struct LbPoseConfig {
     float minPercent;
 };
 
+/**
+ * @brief 扫描点位配置
+ * 
+ * 定义单个扫描点位的参数，包括是否需要转动转盘、转动角度等。
+ */
+struct ScanPointConfig {
+    int pointIndex;           // 点位索引（从 1 开始）
+    QString pointName;        // 点位名称
+    bool needRotation;        // 是否需要转动转盘（关键标志）
+    float rotationAngle;      // 转盘目标角度（度）
+    QString description;      // 点位描述
+};
+
+/**
+ * @brief 扫描路径配置
+ * 
+ * 定义一条完整的扫描路径，包含多个点位。
+ */
+struct ScanPathConfig {
+    int pathId;               // 路径唯一标识符
+    QString pathName;         // 路径名称
+    QString description;      // 路径描述
+    bool enabled;             // 是否启用此路径
+    int totalPoints;          // 路径包含的点位总数
+    std::vector<ScanPointConfig> points;  // 点位配置列表
+};
+
+/**
+ * @brief 扫描路径总配置
+ * 
+ * 包含所有扫描路径配置、标定矩阵、执行策略等。
+ * 从 scan_paths_config.json 文件加载。
+ */
+struct ScanPathsConfig {
+    // 标定矩阵 T0（4x4 矩阵，行优先存储）
+    std::array<float, 16> calibrationMatrixT0;
+    
+    // 所有扫描路径定义
+    std::vector<ScanPathConfig> scanPaths;
+    
+    // 执行策略
+    bool executeAllPaths;                // 是否执行所有启用的路径
+    std::vector<int> selectedPathIds;    // 指定要执行的路径 ID 列表
+    bool allowPathSkipOnError;           // 路径失败时是否跳过继续执行
+    
+    // 转盘配置
+    bool turntableEnabled;               // 是否启用转盘控制
+    
+    // 配置文件元数据
+    QString version;                     // 配置文件版本
+    QString lastModified;                // 最后修改时间
+};
+
+
 class ConfigManager {
 public:
     static void initialize();
@@ -95,6 +151,7 @@ public:
     const FlowControlConfig& flowControlConfig() const;
     const TrackingConfig& trackingConfig() const;
     const LbPoseConfig& lbPoseConfig() const;
+    const ScanPathsConfig& scanPathsConfig() const;  // 新增：获取扫描路径配置
 
 private:
     ConfigManager();
@@ -105,6 +162,12 @@ private:
 
     void load(const QString& filePath);
     void writeDefaults(QSettings& settings);
+    
+    // 新增：加载扫描路径配置（JSON 格式）
+    void loadScanPathsConfig(const QString& jsonFilePath);
+    
+    // 新增：验证扫描路径配置的合法性
+    bool validateScanPathsConfig(QString* errorMessage = nullptr) const;
 
     static ConfigManager* s_instance;
 
@@ -116,6 +179,7 @@ private:
     FlowControlConfig m_flowControlConfig;
     TrackingConfig m_trackingConfig;
     LbPoseConfig m_lbPoseConfig;
+    ScanPathsConfig m_scanPathsConfig;  // 新增：扫描路径配置
 };
 
 }  // namespace common

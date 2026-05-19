@@ -2,7 +2,11 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLoggingCategory>
 
 #include "scan_tracking/common/logger.h"
@@ -23,6 +27,28 @@ QString projectRootConfigPath()
         return rootDir.filePath(QStringLiteral("config.ini"));
     }
     return QCoreApplication::applicationDirPath() + QStringLiteral("/config.ini");
+}
+
+/**
+ * @brief 获取扫描路径配置文件的路径
+ * 
+ * 优先查找项目根目录，如果找不到则使用可执行文件目录。
+ * 
+ * @return 扫描路径配置文件的完整路径
+ */
+QString scanPathsConfigPath()
+{
+    // 优先使用项目根目录
+    QDir rootDir(QCoreApplication::applicationDirPath());
+    if (rootDir.cdUp() && rootDir.cdUp() && rootDir.cdUp()) {
+        QString rootPath = rootDir.filePath(QStringLiteral("scan_paths_config.json"));
+        if (QFileInfo::exists(rootPath)) {
+            return rootPath;
+        }
+    }
+    
+    // 回退到可执行文件目录
+    return QCoreApplication::applicationDirPath() + QStringLiteral("/scan_paths_config.json");
 }
 
 }  // namespace
@@ -56,6 +82,10 @@ ConfigManager::ConfigManager()
 {
     const QString configPath = projectRootConfigPath();
     load(configPath);
+    
+    // 加载扫描路径配置
+    const QString scanPathsPath = scanPathsConfigPath();
+    loadScanPathsConfig(scanPathsPath);
 }
 
 ConfigManager::~ConfigManager() = default;
@@ -68,6 +98,7 @@ const VisionConfig& ConfigManager::visionConfig() const { return m_visionConfig;
 const FlowControlConfig& ConfigManager::flowControlConfig() const { return m_flowControlConfig; }
 const TrackingConfig& ConfigManager::trackingConfig() const { return m_trackingConfig; }
 const LbPoseConfig& ConfigManager::lbPoseConfig() const { return m_lbPoseConfig; }
+const ScanPathsConfig& ConfigManager::scanPathsConfig() const { return m_scanPathsConfig; }
 
 void ConfigManager::writeDefaults(QSettings& settings)
 {
@@ -250,6 +281,225 @@ void ConfigManager::load(const QString& filePath)
         << "unitId=" << m_modbusConfig.unitId
         << "timeoutMs=" << m_modbusConfig.timeoutMs
         << "reconnectIntervalMs=" << m_modbusConfig.reconnectIntervalMs;
+}
+
+/**
+ * @brief 加载扫描路径配置（JSON 格式）
+ * 
+ * 从 scan_paths_config.json 文件加载多路径扫描配置，包括：
+ * - 标定矩阵 T0
+ * - 所有扫描路径定义
+ * - 执行策略
+ * - 转盘配置
+ * 
+ * @param jsonFilePath JSON 配置文件路径
+ */
+void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
+{
+    // 检查文件是否存在
+    if (!QFileInfo::exists(jsonFilePath)) {
+        qWarning(LOG_CONFIG) << "扫描路径配置文件不存在：" << jsonFilePath;
+        qWarning(LOG_CONFIG) << "将使用空配置，多路径扫描功能不可用。";
+        return;
+    }
+    
+    // 读取 JSON 文件
+    QFile file(jsonFilePath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        qCritical(LOG_CONFIG) << "无法打开扫描路径配置文件：" << jsonFilePath;
+        return;
+    }
+    
+    const QByteArray jsonData = file.readAll();
+    file.close();
+    
+    // 解析 JSON
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(jsonData, &parseError);
+    
+    if (parseError.error != QJsonParseError::NoError) {
+        qCritical(LOG_CONFIG) << "扫描路径配置文件 JSON 解析失败："
+                              << parseError.errorString()
+                              << "位置：" << parseError.offset;
+        return;
+    }
+    
+    if (!doc.isObject()) {
+        qCritical(LOG_CONFIG) << "扫描路径配置文件格式错误：根节点不是对象";
+        return;
+    }
+    
+    const QJsonObject root = doc.object();
+    
+    // 1. 读取配置文件元数据
+    m_scanPathsConfig.version = root.value("version").toString("1.0");
+    m_scanPathsConfig.lastModified = root.value("lastModified").toString();
+    
+    // 2. 读取标定矩阵 T0
+    const QJsonObject calibMatrixObj = root.value("calibrationMatrix").toObject();
+    const QJsonArray t0Array = calibMatrixObj.value("T0").toArray();
+    
+    if (t0Array.size() == 4) {
+        // 4x4 矩阵，行优先存储
+        int index = 0;
+        for (int row = 0; row < 4; ++row) {
+            const QJsonArray rowArray = t0Array.at(row).toArray();
+            for (int col = 0; col < 4; ++col) {
+                m_scanPathsConfig.calibrationMatrixT0[index++] = 
+                    static_cast<float>(rowArray.at(col).toDouble(row == col ? 1.0 : 0.0));
+            }
+        }
+    } else {
+        qWarning(LOG_CONFIG) << "标定矩阵 T0 格式错误，使用单位矩阵";
+        // 初始化为单位矩阵
+        m_scanPathsConfig.calibrationMatrixT0.fill(0.0f);
+        m_scanPathsConfig.calibrationMatrixT0[0] = 1.0f;
+        m_scanPathsConfig.calibrationMatrixT0[5] = 1.0f;
+        m_scanPathsConfig.calibrationMatrixT0[10] = 1.0f;
+        m_scanPathsConfig.calibrationMatrixT0[15] = 1.0f;
+    }
+    
+    // 3. 读取扫描路径列表
+    const QJsonArray pathsArray = root.value("scanPaths").toArray();
+    m_scanPathsConfig.scanPaths.clear();
+    m_scanPathsConfig.scanPaths.reserve(pathsArray.size());
+    
+    for (const QJsonValue& pathValue : pathsArray) {
+        const QJsonObject pathObj = pathValue.toObject();
+        
+        ScanPathConfig pathConfig;
+        pathConfig.pathId = pathObj.value("pathId").toInt();
+        pathConfig.pathName = pathObj.value("pathName").toString();
+        pathConfig.description = pathObj.value("description").toString();
+        pathConfig.enabled = pathObj.value("enabled").toBool(true);
+        pathConfig.totalPoints = pathObj.value("totalPoints").toInt();
+        
+        // 读取点位列表
+        const QJsonArray pointsArray = pathObj.value("points").toArray();
+        pathConfig.points.clear();
+        pathConfig.points.reserve(pointsArray.size());
+        
+        for (const QJsonValue& pointValue : pointsArray) {
+            const QJsonObject pointObj = pointValue.toObject();
+            
+            ScanPointConfig pointConfig;
+            pointConfig.pointIndex = pointObj.value("pointIndex").toInt();
+            pointConfig.pointName = pointObj.value("pointName").toString();
+            pointConfig.needRotation = pointObj.value("needRotation").toBool(false);
+            pointConfig.rotationAngle = static_cast<float>(pointObj.value("rotationAngle").toDouble(0.0));
+            pointConfig.description = pointObj.value("description").toString();
+            
+            pathConfig.points.push_back(pointConfig);
+        }
+        
+        m_scanPathsConfig.scanPaths.push_back(pathConfig);
+    }
+    
+    // 4. 读取执行策略
+    const QJsonObject execConfigObj = root.value("executionConfig").toObject();
+    m_scanPathsConfig.executeAllPaths = execConfigObj.value("executeAllPaths").toBool(false);
+    m_scanPathsConfig.allowPathSkipOnError = execConfigObj.value("allowPathSkipOnError").toBool(false);
+    
+    const QJsonArray selectedIdsArray = execConfigObj.value("selectedPathIds").toArray();
+    m_scanPathsConfig.selectedPathIds.clear();
+    m_scanPathsConfig.selectedPathIds.reserve(selectedIdsArray.size());
+    for (const QJsonValue& idValue : selectedIdsArray) {
+        m_scanPathsConfig.selectedPathIds.push_back(idValue.toInt());
+    }
+    
+    // 5. 读取转盘配置
+    const QJsonObject turntableObj = root.value("turntableConfig").toObject();
+    m_scanPathsConfig.turntableEnabled = turntableObj.value("enabled").toBool(true);
+    
+    // 6. 验证配置
+    QString validationError;
+    if (!validateScanPathsConfig(&validationError)) {
+        qWarning(LOG_CONFIG) << "扫描路径配置验证失败：" << validationError;
+    }
+    
+    // 7. 输出加载信息
+    qInfo(LOG_CONFIG) << "已从以下位置加载扫描路径配置：" << jsonFilePath;
+    qInfo(LOG_CONFIG).noquote()
+        << "扫描路径配置："
+        << "版本=" << m_scanPathsConfig.version
+        << "路径数=" << m_scanPathsConfig.scanPaths.size()
+        << "执行所有路径=" << m_scanPathsConfig.executeAllPaths
+        << "选中路径数=" << m_scanPathsConfig.selectedPathIds.size()
+        << "转盘启用=" << m_scanPathsConfig.turntableEnabled;
+    
+    // 输出每条路径的详细信息
+    for (const auto& path : m_scanPathsConfig.scanPaths) {
+        qInfo(LOG_CONFIG).noquote()
+            << "  路径" << path.pathId << ":" << path.pathName
+            << "启用=" << path.enabled
+            << "点位数=" << path.points.size();
+    }
+}
+
+/**
+ * @brief 验证扫描路径配置的合法性
+ * 
+ * 检查配置是否符合以下规则：
+ * - 路径 ID 唯一
+ * - 点位索引连续（从 1 开始）
+ * - 点位数量与 totalPoints 一致
+ * - 选中的路径 ID 存在
+ * 
+ * @param errorMessage 输出参数，验证失败时包含错误信息
+ * @return 验证是否通过
+ */
+bool ConfigManager::validateScanPathsConfig(QString* errorMessage) const
+{
+    // 1. 检查路径 ID 唯一性
+    std::vector<int> pathIds;
+    pathIds.reserve(m_scanPathsConfig.scanPaths.size());
+    
+    for (const auto& path : m_scanPathsConfig.scanPaths) {
+        if (std::find(pathIds.begin(), pathIds.end(), path.pathId) != pathIds.end()) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("路径 ID 重复：%1").arg(path.pathId);
+            }
+            return false;
+        }
+        pathIds.push_back(path.pathId);
+        
+        // 2. 检查点位数量
+        if (static_cast<int>(path.points.size()) != path.totalPoints) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("路径 %1 的点位数量不匹配：配置 %2，实际 %3")
+                    .arg(path.pathId)
+                    .arg(path.totalPoints)
+                    .arg(path.points.size());
+            }
+            return false;
+        }
+        
+        // 3. 检查点位索引连续性（从 1 开始）
+        for (size_t i = 0; i < path.points.size(); ++i) {
+            const int expectedIndex = static_cast<int>(i) + 1;
+            if (path.points[i].pointIndex != expectedIndex) {
+                if (errorMessage) {
+                    *errorMessage = QStringLiteral("路径 %1 的点位索引不连续：期望 %2，实际 %3")
+                        .arg(path.pathId)
+                        .arg(expectedIndex)
+                        .arg(path.points[i].pointIndex);
+                }
+                return false;
+            }
+        }
+    }
+    
+    // 4. 检查选中的路径 ID 是否存在
+    for (int selectedId : m_scanPathsConfig.selectedPathIds) {
+        if (std::find(pathIds.begin(), pathIds.end(), selectedId) == pathIds.end()) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("选中的路径 ID 不存在：%1").arg(selectedId);
+            }
+            return false;
+        }
+    }
+    
+    return true;
 }
 
 }  // namespace common
