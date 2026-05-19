@@ -1,0 +1,325 @@
+{
+  "version": "1.0",
+  "description": "封头检测多路径扫描配置文件",
+  "lastModified": "2026-05-19",
+  
+  "calibrationMatrix": {
+    "T0": [
+      [1.0, 0.0, 0.0, 0.0],
+      [0.0, 1.0, 0.0, 0.0],
+      [0.0, 0.0, 1.0, 0.0],
+      [0.0, 0.0, 0.0, 1.0]
+    ],
+    "description": "Mech-Eye 相机到机械臂基座的标定变换矩阵 (4x4)",
+    "unit": "mm for translation, no unit for rotation"
+  },
+  
+  "scanPaths": [
+    {
+      "pathId": 1,
+      "pathName": "外圈扫描路径",
+      "description": "扫描封头外圈区域，覆盖边缘缺陷检测",
+      "enabled": true,
+      "totalPoints": 8,
+      "points": [
+        {
+          "pointIndex": 1,
+          "pointName": "外圈起点",
+          "needRotation": true,
+          "rotationAngle": 0,
+          "description": "路径起点，需要转盘归零并重新标定"
+        },
+        {
+          "pointIndex": 2,
+          "pointName": "外圈点2",
+          "needRotation": false,
+          "rotationAngle": 0,
+          "description": "转盘保持不动，仅采集3D点云"
+        },
+        {
+          "pointIndex": 3,
+          "pointName": "外圈点3",
+          "needRotation": false,
+          "rotationAngle": 0,
+          "description": "转盘保持不动，仅采集3D点云"
+        },
+        {
+          "pointIndex": 4,
+          "pointName": "外圈点4",
+          "needRotation": false,
+          "rotationAngle": 0,
+          "description": "转盘保持不动，仅采集3D点云"
+        },
+        {
+          "pointIndex": 5,
+          "pointName": "外圈中点",
+          "needRotation": true,
+          "rotationAngle": 90,
+          "description": "转盘旋转90度，重新标定"
+        },
+        {
+          "pointIndex": 6,
+          "pointName": "外圈点6",
+          "needRotation": false,
+          "rotationAngle": 90,
+          "description": "转盘保持90度，仅采集3D点云"
+        },
+        {
+          "pointIndex": 7,
+          "pointName": "外圈点7",
+          "needRotation": false,
+          "rotationAngle": 90,
+          "description": "转盘保持90度，仅采集3D点云"
+        },
+        {
+          "pointIndex": 8,
+          "pointName": "外圈终点",
+          "needRotation": true,
+          "rotationAngle": 180,
+          "description": "转盘旋转180度，重新标定"
+        }
+      ]
+    },
+    {
+      "pathId": 2,
+      "pathName": "内圈扫描路径",
+      "description": "扫描封头内圈区域，覆盖中心缺陷检测",
+      "enabled": true,
+      "totalPoints": 6,
+      "points": [
+        {
+          "pointIndex": 1,
+          "pointName": "内圈起点",
+          "needRotation": true,
+          "rotationAngle": 0,
+          "description": "路径起点，转盘归零并重新标定"
+        },
+        {
+          "pointIndex": 2,
+          "pointName": "内圈点2",
+          "needRotation": false,
+          "rotationAngle": 0,
+          "description": "转盘保持不动"
+        },
+        {
+          "pointIndex": 3,
+          "pointName": "内圈点3",
+          "needRotation": false,
+          "rotationAngle": 0,
+          "description": "转盘保持不动"
+        },
+        {
+          "pointIndex": 4,
+          "pointName": "内圈中点",
+          "needRotation": true,
+          "rotationAngle": 120,
+          "description": "转盘旋转120度，重新标定"
+        },
+        {
+          "pointIndex": 5,
+          "pointName": "内圈点5",
+          "needRotation": false,
+          "rotationAngle": 120,
+          "description": "转盘保持120度"
+        },
+        {
+          "pointIndex": 6,
+          "pointName": "内圈终点",
+          "needRotation": true,
+          "rotationAngle": 240,
+          "description": "转盘旋转240度，重新标定"
+        }
+      ]
+    },
+    {
+      "pathId": 3,
+      "pathName": "焊缝检测路径",
+      "description": "专门针对焊缝区域的精细扫描",
+      "enabled": true,
+      "totalPoints": 12,
+      "points": [
+        {
+          "pointIndex": 1,
+          "pointName": "焊缝起点",
+          "needRotation": true,
+          "rotationAngle": 0,
+          "description": "焊缝扫描起点"
+        },
+        {
+          "pointIndex": 2,
+          "pointName": "焊缝点2",
+          "needRotation": false,
+          "rotationAngle": 0,
+          "description": "密集采样点"
+        },
+        {
+          "pointIndex": 3,
+          "pointName": "焊缝点3",
+          "needRotation": false,
+          "rotationAngle": 0,
+          "description": "密集采样点"
+        },
+        {
+          "pointIndex": 4,
+          "pointName": "焊缝点4",
+          "needRotation": true,
+          "rotationAngle": 30,
+          "description": "转盘旋转30度"
+        },
+        {
+          "pointIndex": 5,
+          "pointName": "焊缝点5",
+          "needRotation": false,
+          "rotationAngle": 30,
+          "description": "密集采样点"
+        },
+        {
+          "pointIndex": 6,
+          "pointName": "焊缝点6",
+          "needRotation": false,
+          "rotationAngle": 30,
+          "description": "密集采样点"
+        },
+        {
+          "pointIndex": 7,
+          "pointName": "焊缝点7",
+          "needRotation": true,
+          "rotationAngle": 60,
+          "description": "转盘旋转60度"
+        },
+        {
+          "pointIndex": 8,
+          "pointName": "焊缝点8",
+          "needRotation": false,
+          "rotationAngle": 60,
+          "description": "密集采样点"
+        },
+        {
+          "pointIndex": 9,
+          "pointName": "焊缝点9",
+          "needRotation": false,
+          "rotationAngle": 60,
+          "description": "密集采样点"
+        },
+        {
+          "pointIndex": 10,
+          "pointName": "焊缝点10",
+          "needRotation": true,
+          "rotationAngle": 90,
+          "description": "转盘旋转90度"
+        },
+        {
+          "pointIndex": 11,
+          "pointName": "焊缝点11",
+          "needRotation": false,
+          "rotationAngle": 90,
+          "description": "密集采样点"
+        },
+        {
+          "pointIndex": 12,
+          "pointName": "焊缝终点",
+          "needRotation": false,
+          "rotationAngle": 90,
+          "description": "焊缝扫描终点"
+        }
+      ]
+    },
+    {
+      "pathId": 4,
+      "pathName": "快速预检路径",
+      "description": "快速预检模式，仅扫描关键点位",
+      "enabled": false,
+      "totalPoints": 4,
+      "points": [
+        {
+          "pointIndex": 1,
+          "pointName": "预检点1",
+          "needRotation": true,
+          "rotationAngle": 0,
+          "description": "快速预检起点"
+        },
+        {
+          "pointIndex": 2,
+          "pointName": "预检点2",
+          "needRotation": true,
+          "rotationAngle": 90,
+          "description": "转盘旋转90度"
+        },
+        {
+          "pointIndex": 3,
+          "pointName": "预检点3",
+          "needRotation": true,
+          "rotationAngle": 180,
+          "description": "转盘旋转180度"
+        },
+        {
+          "pointIndex": 4,
+          "pointName": "预检点4",
+          "needRotation": true,
+          "rotationAngle": 270,
+          "description": "转盘旋转270度"
+        }
+      ]
+    }
+  ],
+  
+  "executionConfig": {
+    "executeAllPaths": false,
+    "description": "是否执行所有启用的路径，false 表示仅执行 selectedPathIds 中指定的路径",
+    "selectedPathIds": [1, 2],
+    "pathExecutionOrder": "sequential",
+    "allowPathSkipOnError": false,
+    "description2": "路径执行顺序：sequential(顺序) 或 parallel(并行，暂不支持)"
+  },
+  
+  "turntableConfig": {
+    "enabled": true,
+    "description": "转盘是否启用，具体转动角度在各点位配置中指定"
+  },
+  
+  "captureConfig": {
+    "mechEye": {
+      "capture3DTimeoutMs": 5000,
+      "capture2DTimeoutMs": 3000,
+      "depthRangeMin": 500,
+      "depthRangeMax": 2000,
+      "description": "Mech-Eye 相机采集配置：3D超时、2D超时、深度范围(mm)"
+    },
+    "hikCamera": {
+      "captureTimeoutMs": 1000,
+      "exposureTimeUs": 1307379,
+      "gain": 0.0,
+      "description": "海康相机采集配置：超时(ms)、曝光时间(us)、增益(dB)"
+    }
+  },
+  
+  "algorithmConfig": {
+    "lbn": {
+      "enabled": true,
+      "timeoutMs": 2000,
+      "confidenceThreshold": 0.8,
+      "description": "LBN 算法配置：是否启用、超时、置信度阈值"
+    },
+    "lb": {
+      "enabled": true,
+      "timeoutMs": 1500,
+      "minFeaturePoints": 50,
+      "description": "LB 双目跟踪算法配置：是否启用、超时、最小特征点数"
+    },
+    "lanyou": {
+      "enabled": true,
+      "timeoutMs": 10000,
+      "qualityThreshold": 0.7,
+      "description": "蓝友最终解算算法配置：是否启用、超时、质量阈值"
+    }
+  },
+  
+  "dataManagement": {
+    "savePointClouds": true,
+    "saveRawImages": true,
+    "saveIntermediateResults": true,
+    "outputDirectory": "./scan_results",
+    "maxStorageDays": 30,
+    "description": "数据管理配置：是否保存点云、原始图像、中间结果，输出目录，最大保存天数"
+  }
+}
