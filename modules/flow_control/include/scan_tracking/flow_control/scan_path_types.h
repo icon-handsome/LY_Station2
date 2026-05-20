@@ -183,7 +183,7 @@ struct MultiPathScanResult {
         const double elapsedSeconds = totalElapsedMs / 1000.0;
         
         return QStringLiteral("%1/%2 路径成功，%3 个点位，耗时 %4 秒")
-            .arg(successCount)
+			.arg(successCount)  
             .arg(totalCount)
             .arg(totalPoints)
             .arg(elapsedSeconds, 0, 'f', 1);
@@ -208,7 +208,7 @@ struct ScanPointContext {
      * @brief 默认构造函数
      */
     ScanPointContext()
-        : pathId(-1)
+        : pathId(-1)    
         , pathIndex(-1)
         , pointIndex(-1)
         , needRotation(false)
