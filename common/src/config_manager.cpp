@@ -164,7 +164,7 @@ void ConfigManager::writeDefaults(QSettings& settings)
     settings.beginGroup("LbnPose");
     settings.setValue("enabled", true);
     settings.setValue("dataRoot", "D:/work/LY/IPC-192.168.110.173_track-main/third_party/LBN/data");
-    settings.setValue("templateFile", "");
+    settings.setValue("templateFile", "D:/work/LY/IPC-192.168.110.173_track-main/third_party/LBN/data/template-3D-ALL-Shift-Cut-Cut.txt");
     settings.setValue("minDistance", 30.0);
     settings.setValue("maxDistance", 650.0);
     settings.setValue("cosTolerance", 0.015);
@@ -265,7 +265,10 @@ void ConfigManager::load(const QString& filePath)
         "dataRoot",
         QStringLiteral("D:/work/LY/IPC-192.168.110.173_track-main/third_party/LBN/data"))
         .toString();
-    m_lbnPoseConfig.templateFile = settings.value("templateFile", "").toString();
+    m_lbnPoseConfig.templateFile = settings.value(
+        "templateFile",
+        QStringLiteral("D:/work/LY/IPC-192.168.110.173_track-main/third_party/LBN/data/template-3D-ALL-Shift-Cut-Cut.txt"))
+        .toString();
     m_lbnPoseConfig.minDistance = settings.value("minDistance", 30.0).toFloat();
     m_lbnPoseConfig.maxDistance = settings.value("maxDistance", 650.0).toFloat();
     m_lbnPoseConfig.cosTolerance = settings.value("cosTolerance", 0.015).toFloat();

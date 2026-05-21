@@ -95,7 +95,7 @@ void VisionPipelineService::stop()
     setState(VisionPipelineState::Stopped, QStringLiteral("视觉流水线已停止。"));
 }
 
-quint64 VisionPipelineService::requestCaptureBundle(int segmentIndex, quint32 taskId)
+quint64 VisionPipelineService::requestCaptureBundle(int segmentIndex, quint32 taskId, bool needMechEye2D)
 {
     if (!m_started) {
         emit fatalError(VisionErrorCode::NotStarted, QStringLiteral("视觉流水线未启动。"));
@@ -114,6 +114,7 @@ quint64 VisionPipelineService::requestCaptureBundle(int segmentIndex, quint32 ta
     request.requestId = m_nextRequestId++;
     request.taskId = taskId;
     request.segmentIndex = segmentIndex;
+    request.needMechEye2D = needMechEye2D;
     request.mechEyeCameraKey = m_config.mechEyeCameraKey;
     request.mechEyeTimeoutMs = m_config.mechCaptureTimeoutMs > 0 ? m_config.mechCaptureTimeoutMs : 5000;
     request.hikCameraAKey = m_config.hikCameraA.cameraKey;
@@ -124,9 +125,13 @@ quint64 VisionPipelineService::requestCaptureBundle(int segmentIndex, quint32 ta
     pending.active = true;
     pending.bundle.request = request;
 
-    const auto mechCaptureMode = m_lbnPoseConfig.enabled
+    const bool invokeLbn = needMechEye2D && m_lbnPoseConfig.enabled;
+    const auto mechCaptureMode = invokeLbn
         ? scan_tracking::mech_eye::CaptureMode::Capture2DAnd3D
         : scan_tracking::mech_eye::CaptureMode::Capture3DOnly;
+    qInfo() << "[VisionPipeline] segment=" << segmentIndex
+            << "needMechEye2D=" << needMechEye2D
+            << "mechMode=" << (invokeLbn ? "2D+3D" : "3D-only");
     pending.mechRequestId = m_mechEyeService->requestCapture(
         request.mechEyeCameraKey,
         mechCaptureMode,
@@ -205,40 +210,33 @@ void VisionPipelineService::finishBundleIfReady()
     const auto bundle = m_pending.bundle;
     m_pending = PendingCaptureContext{};
 
-    if (!bundle.mechEyeResult.success() || !bundle.hikCameraAResult.success() || !bundle.hikCameraBResult.success()) {
+    if (!bundle.mechEyeResult.success()) {
         m_processing = false;
         setState(
             VisionPipelineState::Error,
-            QStringLiteral("一个或多个采集步骤失败：%1").arg(bundle.summary()));
+            QStringLiteral("Mech-Eye 采集失败：%1").arg(bundle.mechEyeResult.errorMessage));
         emit bundleCaptureFinished(bundle);
         return;
     }
 
+    const bool hikReady =
+        bundle.hikCameraAResult.success() && bundle.hikCameraBResult.success();
+    const bool runLbn = bundle.request.needMechEye2D && m_lbnPoseConfig.enabled;
+
     m_processing = true;
     setState(
         VisionPipelineState::Capturing,
-        QStringLiteral("所有图像已采集，正在处理视觉结果。"));
-
-    // TODO: 海康 A/B 未接入时跳过 LB 位姿检测，直接完成 bundle
-    // 当海康相机正式上线后，恢复 LB 位姿检测逻辑
-    if (!bundle.hikCameraAResult.success() || !bundle.hikCameraBResult.success()) {
-        m_processing = false;
-        auto completedBundle = bundle;
-        completedBundle.lbPoseResult.invoked = false;
-        completedBundle.lbPoseResult.success = false;
-        completedBundle.lbPoseResult.message = QStringLiteral("海康相机未就绪，跳过 LB 位姿检测");
-        setState(VisionPipelineState::Ready, QStringLiteral("视觉组合采集完成（跳过LB位姿）。"));
-        emit bundleCaptureFinished(completedBundle);
-        return;
-    }
+        QStringLiteral("Mech-Eye 采集完成，正在处理视觉结果（hik=%1, lbn=%2）")
+            .arg(hikReady ? QStringLiteral("ok") : QStringLiteral("skip"))
+            .arg(runLbn ? QStringLiteral("on") : QStringLiteral("off")));
 
     const auto lbConfig = m_lbPoseConfig;
     const auto lbnConfig = m_lbnPoseConfig;
     QPointer<VisionPipelineService> self(this);
-    std::thread([self, bundle, lbConfig, lbnConfig]() mutable {
+    std::thread([self, bundle, lbConfig, lbnConfig, hikReady, runLbn]() mutable {
         auto completedBundle = bundle;
 
-        if (lbnConfig.enabled) {
+        if (runLbn) {
             qInfo() << "[LBN位姿] 开始检测"
                     << "texture=" << bundle.mechEyeResult.texture2D.width << "x"
                     << bundle.mechEyeResult.texture2D.height
@@ -250,31 +248,40 @@ void VisionPipelineService::finishBundleIfReady()
                     << "message=" << lbn.message << "matched=" << lbn.matchedPointCount;
         } else {
             completedBundle.lbnPoseResult.invoked = false;
-            completedBundle.lbnPoseResult.message = QStringLiteral("LBN 位姿检测已禁用。");
+            completedBundle.lbnPoseResult.message =
+                bundle.request.needMechEye2D
+                    ? QStringLiteral("LBN 位姿检测已在配置中禁用。")
+                    : QStringLiteral("非转动点位，跳过 LBN 位姿检测。");
         }
 
-        qInfo() << "[LB位姿] 开始检测, leftFrame=" << bundle.hikCameraAResult.frame.width << "x"
-                << bundle.hikCameraAResult.frame.height
-                << "rightFrame=" << bundle.hikCameraBResult.frame.width << "x"
-                << bundle.hikCameraBResult.frame.height;
+        if (hikReady) {
+            qInfo() << "[LB位姿] 开始检测, leftFrame=" << bundle.hikCameraAResult.frame.width << "x"
+                    << bundle.hikCameraAResult.frame.height
+                    << "rightFrame=" << bundle.hikCameraBResult.frame.width << "x"
+                    << bundle.hikCameraBResult.frame.height;
 
-        completedBundle.lbPoseResult = runLbPoseDetection(
-            completedBundle.hikCameraAResult.frame,
-            completedBundle.hikCameraBResult.frame,
-            lbConfig);
+            completedBundle.lbPoseResult = runLbPoseDetection(
+                completedBundle.hikCameraAResult.frame,
+                completedBundle.hikCameraBResult.frame,
+                lbConfig);
 
-        const auto& lr = completedBundle.lbPoseResult;
-        qInfo() << "[LB位姿] 完成: success=" << lr.success << "message=" << lr.message
-                << "framePointCount=" << lr.framePointCount;
-        if (lr.poseMatrix.valid) {
-            qInfo() << "[LB位姿] Rt矩阵:";
-            for (int row = 0; row < 4; ++row) {
-                qInfo().noquote() << QString("  [%1, %2, %3, %4]")
-                    .arg(static_cast<double>(lr.poseMatrix.values[row * 4 + 0]), 12, 'f', 6)
-                    .arg(static_cast<double>(lr.poseMatrix.values[row * 4 + 1]), 12, 'f', 6)
-                    .arg(static_cast<double>(lr.poseMatrix.values[row * 4 + 2]), 12, 'f', 6)
-                    .arg(static_cast<double>(lr.poseMatrix.values[row * 4 + 3]), 12, 'f', 6);
+            const auto& lr = completedBundle.lbPoseResult;
+            qInfo() << "[LB位姿] 完成: success=" << lr.success << "message=" << lr.message
+                    << "framePointCount=" << lr.framePointCount;
+            if (lr.poseMatrix.valid) {
+                qInfo() << "[LB位姿] Rt矩阵:";
+                for (int row = 0; row < 4; ++row) {
+                    qInfo().noquote() << QString("  [%1, %2, %3, %4]")
+                        .arg(static_cast<double>(lr.poseMatrix.values[row * 4 + 0]), 12, 'f', 6)
+                        .arg(static_cast<double>(lr.poseMatrix.values[row * 4 + 1]), 12, 'f', 6)
+                        .arg(static_cast<double>(lr.poseMatrix.values[row * 4 + 2]), 12, 'f', 6)
+                        .arg(static_cast<double>(lr.poseMatrix.values[row * 4 + 3]), 12, 'f', 6);
+                }
             }
+        } else {
+            completedBundle.lbPoseResult.invoked = false;
+            completedBundle.lbPoseResult.success = false;
+            completedBundle.lbPoseResult.message = QStringLiteral("海康相机未就绪，跳过 LB 位姿检测");
         }
 
         if (!self) {
@@ -283,13 +290,14 @@ void VisionPipelineService::finishBundleIfReady()
 
         QMetaObject::invokeMethod(
             self.data(),
-            [self, completedBundle]() mutable {
+            [self, completedBundle, hikReady]() mutable {
                 if (!self || !self->m_started) {
                     return;
                 }
 
                 self->m_processing = false;
-                const bool ok = completedBundle.success();
+                const bool ok = completedBundle.mechEyeResult.success() &&
+                                (!hikReady || completedBundle.lbPoseResult.success);
                 self->setState(
                     ok ? VisionPipelineState::Ready : VisionPipelineState::Error,
                     ok ? QStringLiteral("视觉组合采集成功完成。")

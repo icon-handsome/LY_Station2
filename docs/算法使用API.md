@@ -515,10 +515,13 @@ LbnPoseResult runLbnPoseDetection(
 
 ### 14.4 调用链（当前）
 
-1. `VisionPipelineService` 加载 `LbnPoseConfig`。
-2. `requestCaptureBundle`：若 `lbnPoseConfig.enabled`，Mech-Eye 请求 `Capture2DAnd3D`。
-3. 采集完成后在后台线程调用 `runLbnPoseDetection`，结果写入 `VisionCaptureBundle::lbnPoseResult`。
-4. **尚未**：状态机根据 `ScanPointConfig::needRotation` 用 `poseMatrix` 更新 `T0`。
+1. `ConfigManager` 加载 `[LbnPose]` 与 `scan_paths_config.json`。
+2. `StateMachine::executeScanSegmentTask`：`needMechEye2D = resolveNeedRotationForSegment(segmentIndex)`。
+3. `requestCaptureBundle(segment, taskId, needMechEye2D)`：转动点 → `Capture2DAnd3D` 且后台跑 LBN；非转动点 → 仅 3D。
+4. Mech-Eye 成功即可跑 LBN（海康失败时跳过 LB，不阻断 LBN）。
+5. `onVisionBundleCaptureFinished` → `applyLbnCalibrationUpdate`：`T0' = Rt × T0`（转动点且 LBN 成功）。
+
+HMI 可选 payload 字段 `needMechEye2D`；未传时按 `scan_paths_config.json` 推断。
 
 ### 14.5 Visual Studio 中看不到 `third_party/LBN`？
 
@@ -528,12 +531,38 @@ CMake 中 `SCAN_TRACKING_SHOW_EIGEN_IN_IDE` / `SCAN_TRACKING_SHOW_MECHEYE_SDK_IN
 
 若仍看不到其它目录：删除 CMake 缓存并重新配置。
 
+### 14.7 离线测试需要准备的数据
+
+在无相机时，可按下列最小集验证 LBN 与标定逻辑：
+
+| 数据 | 格式要求 | 用途 | 是否必需 |
+|------|----------|------|----------|
+| GeoHash 模板 | `third_party/LBN/data/template-3D-ALL-Shift-Cut-Cut.txt`（仓库已带） | LBN 建库/匹配 | **必需** |
+| Mech-Eye 灰度图 | 8-bit 单通道，与点云同宽高（如 1280×1024） | `estimate(gray, cloud)` | **必需**（测 LBN 时） |
+| 组织化点云 | `width×height` 个 `float` XYZ，行优先与纹理对齐；可来自 `.ply` 转置或现场导出 | 2D 圆心 lift 到 3D | **必需**（测 LBN 时） |
+| `scan_paths_config.json` | 项目根目录；`pointIndex` 与测试用 `segmentIndex` 一致 | `needRotation` 推断 | 测状态机时必需 |
+| `config.ini` `[LbnPose]` | `enabled=true`，`templateFile` 指向上述 txt | 配置 | 推荐 |
+| 海康双目图 | Mono8 左右图 | LB 双目 | 测 LB 时需要；**测 LBN 可不要** |
+
+**建议测试步骤（无相机）**：
+
+1. 确认 Debug 构建：`build/win-msvc2019-qtcore-ninja-debug/app/scan-tracking.exe`。
+2. 若有工厂导出的 **一对** 纹理图 + 对齐点云：写入临时目录，用 HMI `captureBundle` 或后续 offline runner 喂给 adapter（runner 待 §14.6）。
+3. 无点云时：至少用 `third_party/LBN/main.cpp` + 模板验证 GeoHash 能否加载（不覆盖 IPC 适配层）。
+4. 有模拟数据时：PLC/HMI 触发 `Trig_ScanSegment`，`segmentIndex=1`（外圈起点，`needRotation=true`），看日志 `[LBN位姿]`、`LBN calibration updated T0'`。
+
+**segmentIndex 与配置对应**（`scan_paths_config.json` 路径 1）：
+
+| segmentIndex | needRotation | Mech-Eye 模式 |
+|--------------|--------------|---------------|
+| 1, 5, 8 | true | 2D+3D + LBN |
+| 2,3,4,6,7 | false | 仅 3D |
+
 ### 14.6 后续建议
 
-1. 在状态机完成 `T0' = Rt × T0` 与路径级矩阵缓存。
-2. `requestCaptureBundle` 增加 per-point `needMechEye2D`，与 `needRotation` 对齐。
-3. 增加 LBN 离线调试可执行文件（类似蓝友 `ply_runner`）。
-4. 现场校验 `templateFile` 与 OpenCV DLL 路径。
+1. 增加 `lbn_offline_runner`（读 bmp/png + ply/csv 点云调用 adapter）。
+2. 全量多路径 §2.2.1 与路径级 T0 重置。
+3. 现场校验 OpenCV / Mech-Eye SDK DLL 路径。
 
 ---
 

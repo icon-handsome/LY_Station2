@@ -2,6 +2,7 @@
 
 #include <QtCore/QDateTime>
 #include <QtCore/QDir>
+#include <QtCore/QFileInfo>
 
 #include <cstring>
 
@@ -99,10 +100,25 @@ QString buildTemplatePath(const scan_tracking::common::LbnPoseConfig& config)
     if (!config.templateFile.trimmed().isEmpty()) {
         return config.templateFile.trimmed();
     }
-    const QString dataRoot = config.dataRoot.trimmed().isEmpty()
-        ? QStringLiteral("D:/work/LY/IPC-192.168.110.173_track-main/third_party/LBN/data")
-        : config.dataRoot.trimmed();
-    return QDir(dataRoot).filePath(QStringLiteral("template-3D-ALL-Shift-Cut-Cut.txt"));
+
+    const QString templateName = QStringLiteral("template-3D-ALL-Shift-Cut-Cut.txt");
+    const QStringList candidateRoots = {
+        config.dataRoot.trimmed(),
+        QStringLiteral("D:/work/LY/IPC-192.168.110.173_track-main/third_party/LBN/data"),
+        QStringLiteral("D:/work/LY/IPC-192.168.110.173_track-main/third_party/LB/Data"),
+    };
+
+    for (const QString& root : candidateRoots) {
+        if (root.isEmpty()) {
+            continue;
+        }
+        const QString candidate = QDir(root).filePath(templateName);
+        if (QFileInfo::exists(candidate)) {
+            return candidate;
+        }
+    }
+
+    return QDir(candidateRoots.at(1)).filePath(templateName);
 }
 
 lbn_pose::Config toCoreConfig(const scan_tracking::common::LbnPoseConfig& config)

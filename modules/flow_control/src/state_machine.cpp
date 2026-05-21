@@ -14,6 +14,7 @@
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 #include <QtCore/QTextStream>
+#include <cmath>
 #include <cstring>
 #include <thread>
 #include <qdebug.h>
@@ -52,6 +53,58 @@ constexpr int kDefaultScanSegmentCaptureTimeoutMs = 30000;
 /// 允许的最大连续 Modbus 通信失败次数，超过此值将进入故障状态
 constexpr int kMaxConsecutiveModbusFailures = 3;
 constexpr int kPollLogEveryN = 20;
+
+std::array<float, 16> identityMatrix4x4()
+{
+    std::array<float, 16> m{};
+    m[0] = m[5] = m[10] = m[15] = 1.0f;
+    return m;
+}
+
+/** 行优先 4×4：out = left × right */
+std::array<float, 16> multiplyRowMajor4x4(
+    const std::array<float, 16>& left,
+    const std::array<float, 16>& right)
+{
+    std::array<float, 16> out{};
+    for (int row = 0; row < 4; ++row) {
+        for (int col = 0; col < 4; ++col) {
+            float sum = 0.0f;
+            for (int k = 0; k < 4; ++k) {
+                sum += left[static_cast<std::size_t>(row * 4 + k)] *
+                       right[static_cast<std::size_t>(k * 4 + col)];
+            }
+            out[static_cast<std::size_t>(row * 4 + col)] = sum;
+        }
+    }
+    return out;
+}
+
+std::array<float, 16> poseMatrixToArray(const scan_tracking::vision::PoseMatrix4x4& pose)
+{
+    return pose.isValid() ? pose.values : identityMatrix4x4();
+}
+
+bool lookupNeedRotationForSegment(int segmentIndex)
+{
+    const auto* configMgr = scan_tracking::common::ConfigManager::instance();
+    if (configMgr == nullptr || segmentIndex <= 0) {
+        return false;
+    }
+
+    const auto& pathsConfig = configMgr->scanPathsConfig();
+    for (const auto& path : pathsConfig.scanPaths) {
+        if (!path.enabled) {
+            continue;
+        }
+        for (const auto& point : path.points) {
+            if (point.pointIndex == segmentIndex) {
+                return point.needRotation;
+            }
+        }
+    }
+    return false;
+}
 
 /**
  * @brief 将浮点数转换为 CDAB 字节序的两个寄存器值
@@ -204,6 +257,8 @@ StateMachine::StateMachine(
     connect(m_pollTimer, &QTimer::timeout, this, &StateMachine::pollPlcState);
     connect(m_heartbeatTimer, &QTimer::timeout, this, &StateMachine::publishHeartbeat);
     connect(m_timeoutTimer, &QTimer::timeout, this, &StateMachine::onProcessTimeout);
+
+    reloadCalibrationMatricesFromConfig();
 
     // 如果 Modbus 服务可用，连接其信号
     if (m_modbus) {
@@ -859,9 +914,11 @@ void StateMachine::executeScanSegmentTask()
         ? static_cast<int>(m_activeTask.timeoutSeconds) * 1000
         : kDefaultScanSegmentCaptureTimeoutMs;
 
+    const bool needMechEye2D = resolveNeedRotationForSegment(m_activeTask.scanSegmentIndex);
     const quint64 requestId = m_visionPipeline->requestCaptureBundle(
         m_activeTask.scanSegmentIndex,
-        m_activeTask.taskId);
+        m_activeTask.taskId,
+        needMechEye2D);
 
     if (requestId == 0) {
         finishScanSegmentFailure(
@@ -882,6 +939,7 @@ void StateMachine::executeScanSegmentTask()
         << "Trig_ScanSegment started vision bundle capture"
         << "segmentIndex=" << m_activeTask.scanSegmentIndex
         << "segmentTotal=" << m_activeTask.scanSegmentTotal
+        << "needMechEye2D=" << needMechEye2D
         << "timeoutMs=" << captureTimeoutMs;
     emit scanStarted(m_activeTask.scanSegmentIndex, m_activeTask.taskId);
 }
@@ -916,6 +974,8 @@ void StateMachine::onVisionBundleCaptureFinished(scan_tracking::vision::MultiCam
     }
 
     const auto& result = bundle.mechEyeResult;
+    const bool needRotation = resolveNeedRotationForSegment(m_activeTask.scanSegmentIndex);
+    applyLbnCalibrationUpdate(m_activeTask.scanSegmentIndex, needRotation, bundle);
 
     m_segmentCaptureResults.insert(m_activeTask.scanSegmentIndex, result);
     m_segmentCaptureBundles.insert(m_activeTask.scanSegmentIndex, bundle);
@@ -1818,6 +1878,86 @@ void StateMachine::resetScanSegmentCache()
 {
     resetPointCloudCache();
     m_segmentCaptureBundles.clear();
+    m_segmentCalibrationMatrices.clear();
+    m_currentCalibrationMatrix = m_baseCalibrationMatrix;
+}
+
+void StateMachine::reloadCalibrationMatricesFromConfig()
+{
+    m_baseCalibrationMatrix = identityMatrix4x4();
+    m_currentCalibrationMatrix = m_baseCalibrationMatrix;
+
+    const auto* configMgr = scan_tracking::common::ConfigManager::instance();
+    if (configMgr == nullptr) {
+        return;
+    }
+
+    const auto& t0 = configMgr->scanPathsConfig().calibrationMatrixT0;
+    bool hasNonIdentity = false;
+    for (std::size_t i = 0; i < t0.size(); ++i) {
+        if (i == 0 || i == 5 || i == 10 || i == 15) {
+            if (std::abs(t0[i] - 1.0f) > 1e-6f) {
+                hasNonIdentity = true;
+            }
+        } else if (std::abs(t0[i]) > 1e-6f) {
+            hasNonIdentity = true;
+        }
+    }
+    if (hasNonIdentity) {
+        m_baseCalibrationMatrix = t0;
+        m_currentCalibrationMatrix = t0;
+    }
+
+    qInfo(LOG_FLOW).noquote() << "Calibration T0 loaded from scan_paths_config";
+}
+
+bool StateMachine::resolveNeedRotationForSegment(int segmentIndex) const
+{
+    return lookupNeedRotationForSegment(segmentIndex);
+}
+
+void StateMachine::applyLbnCalibrationUpdate(
+    int segmentIndex,
+    bool needRotation,
+    const scan_tracking::vision::MultiCameraCaptureBundle& bundle)
+{
+    if (!needRotation) {
+        qInfo(LOG_FLOW).noquote()
+            << "LBN calibration: segment=" << segmentIndex
+            << "needRotation=false, keep current T0'";
+        return;
+    }
+
+    const auto& lbn = bundle.lbnPoseResult;
+    if (!lbn.invoked) {
+        qWarning(LOG_FLOW).noquote()
+            << "LBN calibration: segment=" << segmentIndex
+            << "LBN not invoked, keep current T0'";
+        return;
+    }
+    if (!lbn.success || !lbn.poseMatrix.isValid()) {
+        qWarning(LOG_FLOW).noquote()
+            << "LBN calibration: segment=" << segmentIndex
+            << "LBN failed, keep current T0':" << lbn.message;
+        return;
+    }
+
+    const auto rt = poseMatrixToArray(lbn.poseMatrix);
+    m_currentCalibrationMatrix = multiplyRowMajor4x4(rt, m_currentCalibrationMatrix);
+    m_segmentCalibrationMatrices.insert(segmentIndex, m_currentCalibrationMatrix);
+
+    qInfo(LOG_FLOW).noquote()
+        << "LBN calibration updated T0' for segment=" << segmentIndex
+        << "matchedPoints=" << lbn.matchedPointCount;
+    for (int row = 0; row < 4; ++row) {
+        qInfo(LOG_FLOW).noquote()
+            << QStringLiteral("  T0'[%1] %2 %3 %4 %5")
+                   .arg(row)
+                   .arg(m_currentCalibrationMatrix[static_cast<std::size_t>(row * 4 + 0)], 0, 'g', 6)
+                   .arg(m_currentCalibrationMatrix[static_cast<std::size_t>(row * 4 + 1)], 0, 'g', 6)
+                   .arg(m_currentCalibrationMatrix[static_cast<std::size_t>(row * 4 + 2)], 0, 'g', 6)
+                   .arg(m_currentCalibrationMatrix[static_cast<std::size_t>(row * 4 + 3)], 0, 'g', 6);
+    }
 }
 
 /**

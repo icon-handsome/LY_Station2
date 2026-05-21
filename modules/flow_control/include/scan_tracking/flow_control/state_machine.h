@@ -281,6 +281,18 @@ private:
     // 清空扫描分段缓存（点云 + 视觉 bundle）
     void resetScanSegmentCache();
 
+    // 从 scan_paths_config.json 重新加载 T0，并重置当前标定矩阵
+    void reloadCalibrationMatricesFromConfig();
+
+    // segmentIndex 与 scan_paths 中 pointIndex 对齐时返回 needRotation
+    bool resolveNeedRotationForSegment(int segmentIndex) const;
+
+    // 转动点位：用 LBN 的 Rt 更新当前标定矩阵 T0' = Rt × T0
+    void applyLbnCalibrationUpdate(
+        int segmentIndex,
+        bool needRotation,
+        const scan_tracking::vision::MultiCameraCaptureBundle& bundle);
+
     // 记录 Modbus 故障
     // @param alarmCode 报警代码
     // @param message 故障信息
@@ -399,6 +411,9 @@ private:
     QVector<quint16> m_lastCommandBlock;                    // 上一次命令块副本
     QMap<int, scan_tracking::mech_eye::CaptureResult> m_segmentCaptureResults;  // 分段采集结果缓存
     QMap<int, scan_tracking::vision::MultiCameraCaptureBundle> m_segmentCaptureBundles;  // 分段视觉 bundle 缓存
+    std::array<float, 16> m_baseCalibrationMatrix{};       // 基准 T0（来自 scan_paths_config.json）
+    std::array<float, 16> m_currentCalibrationMatrix{};    // 当前 T0' / T0''（转动点由 LBN 链式更新）
+    QMap<int, std::array<float, 16>> m_segmentCalibrationMatrices;  // 每段扫描结束时的标定矩阵快照
 
 
     static constexpr int kMaxPointCloudCacheSize = 20;    // 允许的最大点云缓存条目数，防止内存无限增长

@@ -163,6 +163,7 @@ struct MultiCameraCaptureRequest {
     quint64 requestId = 0;
     quint32 taskId = 0;
     int segmentIndex = 0;
+    bool needMechEye2D = false;
     QString mechEyeCameraKey;
     int mechEyeTimeoutMs = 5000;
     QString hikCameraAKey;

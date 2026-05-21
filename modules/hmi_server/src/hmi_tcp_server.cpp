@@ -534,9 +534,30 @@ void HmiTcpServer::handleCmdCaptureBundle(const QJsonObject& message)
 {
     const QString msgId = message.value(QLatin1String("msgId")).toString();
     if (m_visionPipeline) {
-        int segmentIndex = message.value(QLatin1String("payload")).toObject().value(QLatin1String("segmentIndex")).toInt(1);
-        quint32 taskId = message.value(QLatin1String("payload")).toObject().value(QLatin1String("taskId")).toInt(0);
-        quint64 reqId = m_visionPipeline->requestCaptureBundle(segmentIndex, taskId);
+        const QJsonObject payloadObj = message.value(QLatin1String("payload")).toObject();
+        const int segmentIndex = payloadObj.value(QLatin1String("segmentIndex")).toInt(1);
+        const quint32 taskId = static_cast<quint32>(payloadObj.value(QLatin1String("taskId")).toInt(0));
+        bool needMechEye2D = payloadObj.value(QLatin1String("needMechEye2D")).toBool(false);
+        if (!payloadObj.contains(QLatin1String("needMechEye2D"))) {
+            const auto* configMgr = scan_tracking::common::ConfigManager::instance();
+            if (configMgr != nullptr) {
+                for (const auto& path : configMgr->scanPathsConfig().scanPaths) {
+                    if (!path.enabled) {
+                        continue;
+                    }
+                    for (const auto& point : path.points) {
+                        if (point.pointIndex == segmentIndex) {
+                            needMechEye2D = point.needRotation;
+                            break;
+                        }
+                    }
+                    if (needMechEye2D) {
+                        break;
+                    }
+                }
+            }
+        }
+        quint64 reqId = m_visionPipeline->requestCaptureBundle(segmentIndex, taskId, needMechEye2D);
         
         QJsonObject payload = buildResponsePayload(true, QStringLiteral("组合采集请求已发送"));
         payload[QLatin1String("requestId")] = static_cast<qint64>(reqId);
