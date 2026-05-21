@@ -31,5 +31,6 @@ target_link_libraries(scan_tracking_hmi_server
 target_compile_features(scan_tracking_hmi_server PUBLIC cxx_std_17)
 
 set_target_properties(scan_tracking_hmi_server PROPERTIES
+    AUTOMOC ON
     FOLDER "modules"
 )

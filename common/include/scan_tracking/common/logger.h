@@ -39,7 +39,7 @@ private:
 
     QString log_dir_;
     QFile* log_file_ = nullptr;
-    QMutex mutex_;
+    QRecursiveMutex mutex_;
     QDate current_date_;
     QtMsgType min_level_;
 

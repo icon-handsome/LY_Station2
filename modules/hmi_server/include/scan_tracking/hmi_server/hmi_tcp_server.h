@@ -17,6 +17,7 @@
 #include <QtCore/QHash>
 #include <QtCore/QTimer>
 #include <QtCore/QString>
+#include <QtCore/QJsonObject>
 
 QT_BEGIN_NAMESPACE
 class QTcpServer;
@@ -35,6 +36,12 @@ namespace hmi_server {
 
 class HmiSession;
 
+/// 单路 status.* 去重缓存（payload + 是否已建立，避免与空 QJsonObject 混淆）
+struct HmiStatusPushCache {
+    QJsonObject payload;
+    bool isValid = false;
+};
+
 class HmiTcpServer : public QObject {
     Q_OBJECT
 
@@ -46,6 +53,9 @@ public:
      */
     explicit HmiTcpServer(int port = 9900, QObject* parent = nullptr);
     ~HmiTcpServer() override;
+
+    /// 绑定各业务模块信号（依赖注入完成后调用一次，勿在 start() 里重复 connect）
+    void bindServiceSignals();
 
     /// 启动 TCP 服务器
     bool start();
@@ -177,9 +187,24 @@ private:
 
     QJsonObject buildDeviceStatusPayload() const;
 
+    /// slot.isValid 为 false 或 payload 变化时才发送 status.* 事件
+    bool pushStatusIfChanged(const QString& type, const QJsonObject& payload, HmiStatusPushCache& slot);
+
+    /// 使状态去重缓存失效（新连接 / 断开后调用，勿用空 QJsonObject 充当“未缓存”）
+    void invalidateStatusPushCache();
+
+    /// 缓存失效后向当前客户端全量推送四类 status.*
+    void pushAllStatusToClient();
+
+    /// 用当前构建结果刷新去重缓存（cmd.getStatus 等已主动下发状态后调用）
+    void syncStatusPushCacheFromCurrent();
+
 
     // --- 事件上报连接 ---
     
+    /// 断开 bindServiceSignals 建立的连接（stop 时调用，防止重复 bind 崩溃）
+    void disconnectServiceSignals();
+
     /// 绑定状态机发出的各种业务及异常信号，组装 JSON 转发到 Qt 端
     void connectStateMachineSignals();
     
@@ -192,7 +217,8 @@ private:
     /// 绑定视觉流水线抛出的多相机 Bundle 采集完成信号
     void connectVisionPipelineSignals();
     
-    /// 安装全局 Qt 日志拦截器，将 qDebug/qInfo/qWarning/qCritical 输出转发为 event.log 推送到远端显控
+    // TODO(hmi): 远程 event.log 默认未启用（hmi_tcp_server.cpp 中 kForwardQtLogsToHmi=false）。
+    /// 安装全局 Qt 日志拦截器，将非 HMI 模块的 Warning+ 转发为 event.log（显控有日志页时再开）
     void installLogForwarder();
     
     /// 卸载全局 Qt 日志拦截器，恢复原始日志处理器
@@ -222,6 +248,13 @@ private:
     QTimer* m_heartbeatTimer = nullptr;     ///< 心跳发送定时器
     quint64 m_nextEventId = 1;             ///< 事件 ID 自增序号
 
+    HmiStatusPushCache m_systemStatusCache;  ///< status.system 去重缓存
+    HmiStatusPushCache m_plcStatusCache;     ///< status.plc 去重缓存
+    HmiStatusPushCache m_cameraStatusCache;  ///< status.camera 去重缓存
+    HmiStatusPushCache m_deviceStatusCache;  ///< status.device 去重缓存
+
+    bool m_serviceSignalsBound = false;      ///< 是否已 bindServiceSignals
+
     // --- 服务依赖指针 ---
     flow_control::StateMachine* m_stateMachine = nullptr;
     modbus::ModbusService* m_modbusService = nullptr;
@@ -239,6 +272,9 @@ private:
     
     /// 安装日志拦截器之前保存的原始日志处理器，卸载时恢复
     static QtMessageHandler s_previousHandler;
+
+    /// 防止重复 install/uninstall 破坏 qInstallMessageHandler 链
+    static bool s_logForwarderInstalled;
 };
 
 }  // namespace hmi_server

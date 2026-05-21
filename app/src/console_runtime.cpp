@@ -246,9 +246,8 @@ void ConsoleRuntime::initModules()
         visionPipelineService_.get(),
         trackingService_.get(),
         &application_);
-    stateMachine_->start();
 
-    // HMI TCP 服务端：注入所有依赖后启动监听，放在状态机之后以确保信号绑定正确。
+    // HMI：先注入依赖并绑定信号，再 listen / 启动状态机，避免 start() 内重复 connect 或漏接早期事件
     hmiTcpServer_ = std::make_unique<scan_tracking::hmi_server::HmiTcpServer>(9900, &application_);
     hmiTcpServer_->setStateMachine(stateMachine_.get());
     hmiTcpServer_->setModbusService(modbusService_.get());
@@ -256,11 +255,14 @@ void ConsoleRuntime::initModules()
     hmiTcpServer_->setVisionPipelineService(visionPipelineService_.get());
     hmiTcpServer_->setTrackingService(trackingService_.get());
     hmiTcpServer_->setHikCameraServices(hikCameraAService_.get(), hikCameraBService_.get());
+    hmiTcpServer_->bindServiceSignals();
     if (!hmiTcpServer_->start()) {
         qWarning(appLog) << "HMI TCP 服务器在端口 9900 启动失败。";
     } else {
         qInfo(appLog) << "HMI TCP 服务器已在端口 9900 启动。";
     }
+
+    stateMachine_->start();
 
     // 等状态机接好信号后再建 Modbus 链路，避免启动期漏掉 connected 事件。
     if (!modbusService_->connectDevice()) {

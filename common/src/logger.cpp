@@ -1,12 +1,11 @@
-﻿#include "scan_tracking/common/logger.h"
+#include "scan_tracking/common/logger.h"
 
 #include <QtCore/QDateTime>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QMutexLocker>
-#include <QtCore/QTextStream>
+#include <cstdio>
 #include <iostream>
-
 namespace scan_tracking::common {
 
 Logger* Logger::instance_ = nullptr;
@@ -41,11 +40,22 @@ void Logger::initialize(const QString& log_dir) {
 }
 
 void Logger::cleanup() {
-    if (instance_) {
-        qInstallMessageHandler(previous_handler_);
-        delete instance_;
-        instance_ = nullptr;
+    if (!instance_) {
+        return;
     }
+
+    // 先恢复上游 handler，避免析构过程中仍有线程进入已释放的 Logger
+    QtMessageHandler upstream = previous_handler_;
+    qInstallMessageHandler(upstream);
+    previous_handler_ = nullptr;
+
+    Logger* doomed = instance_;
+    instance_ = nullptr;
+
+    {
+        QMutexLocker locker(&doomed->mutex_);
+    }
+    delete doomed;
 }
 
 Logger* Logger::instance() {
@@ -95,19 +105,22 @@ void Logger::openLogFile(const QDate& target_date) {
 }
 
 void Logger::messageHandler(QtMsgType type, const QMessageLogContext& context, const QString& msg) {
-    if (instance_) {
-        instance_->log(type, context, msg);
-    } else if (previous_handler_) {
+    Logger* logger = instance_;
+    if (logger) {
+        logger->log(type, context, msg);
+        return;
+    }
+    if (previous_handler_) {
         previous_handler_(type, context, msg);
     }
 }
 
 void Logger::log(QtMsgType type, const QMessageLogContext& context, const QString& msg) {
+    QMutexLocker locker(&mutex_);
+
     if (getSeverityLevel(type) < getSeverityLevel(min_level_)) {
         return;
     }
-
-    QMutexLocker locker(&mutex_);
 
     QDateTime now = QDateTime::currentDateTime();
     
@@ -127,20 +140,15 @@ void Logger::log(QtMsgType type, const QMessageLogContext& context, const QStrin
         }
     }
 
+    const QByteArray utf8Line = formatted_message.toUtf8() + '\n';
     if (log_file_ && log_file_->isOpen()) {
-        QTextStream stream(log_file_);
-        stream << formatted_message << "\n";
-        stream.flush();
+        log_file_->write(utf8Line);
     }
 
-    const QByteArray utf8Line = formatted_message.toUtf8() + '\n';
-    if (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg) {
-        std::cerr.write(utf8Line.constData(), utf8Line.size());
-        std::cerr.flush();
-    } else {
-        std::cout.write(utf8Line.constData(), utf8Line.size());
-        std::cout.flush();
-    }
+    // 避免 QTextStream+iostream 混用导致 Debug 堆损坏；控制台仅写 UTF-8 行
+    FILE* out = (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg) ? stderr : stdout;
+    std::fwrite(utf8Line.constData(), 1, static_cast<size_t>(utf8Line.size()), out);
+    std::fflush(out);
 }
 
 } // namespace scan_tracking::common

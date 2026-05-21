@@ -22,6 +22,7 @@
 #include <QtCore/QLoggingCategory>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
+#include <QtCore/QVector>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QUuid>
 #include <qdatetime.h>
@@ -34,6 +35,44 @@ Q_LOGGING_CATEGORY(LOG_HMI_SERVER, "hmi.server")
 // 静态成员初始化：全局日志拦截器回调所需的单例指针和原始日志处理器
 HmiTcpServer* HmiTcpServer::s_instance = nullptr;
 QtMessageHandler HmiTcpServer::s_previousHandler = nullptr;
+bool HmiTcpServer::s_logForwarderInstalled = false;
+namespace {
+
+bool g_inTcpSend = false;
+bool g_inLogForward = false;
+
+bool isHighFrequencyTcpType(const QString& type)
+{
+    using namespace msg_type;
+    return type == QLatin1String(kStatusSystem)
+        || type == QLatin1String(kStatusPlc)
+        || type == QLatin1String(kStatusCamera)
+        || type == QLatin1String(kStatusDevice)
+        || type == QLatin1String(kHeartbeatPing)
+        || type == QLatin1String(kHeartbeatPong)
+        || type == QLatin1String(kEventLog);
+}
+
+// TODO(hmi): 远程 event.log 转发默认关闭，优先保证 TCP 简洁与主业务打通。
+// 若显控需要「远程日志页」，将此处改为 true，并确认 install/uninstall 成对调用。
+constexpr bool kForwardQtLogsToHmi = false;
+
+bool shouldForwardLogToHmi(QtMsgType type, const QString& category, const QString& msg)
+{
+    if (g_inTcpSend || g_inLogForward) {
+        return false;
+    }
+    // HMI 模块日志仅本地可见，不包装成 event.log 发到显控
+    if (category == QLatin1String("hmi.server") || category == QLatin1String("hmi.session")) {
+        return false;
+    }
+    if (msg.contains(QLatin1String("[TCPIP]"))) {
+        return false;
+    }
+    return type >= QtWarningMsg;
+}
+
+}  // namespace
 
 HmiTcpServer::HmiTcpServer(int port, QObject* parent)
     : QObject(parent)
@@ -72,22 +111,22 @@ bool HmiTcpServer::start()
 
     qInfo(LOG_HMI_SERVER) << "HMI TCP 服务端启动成功，监听端口:" << m_port;
 
-    connectStateMachineSignals();
-    connectModbusSignals();
-    connectMechEyeSignals();
-    connectVisionPipelineSignals();
-    
-    // 安装全局日志拦截器，将 qDebug/qInfo/qWarning/qCritical 输出转发为 event.log 推送到远端 Qt 显控
-    installLogForwarder();
+    // TODO(hmi): 需要把 IPC 侧 qWarning+ 推到显控 event.log 时，设 kForwardQtLogsToHmi=true
+    if (kForwardQtLogsToHmi) {
+        installLogForwarder();
+    }
 
     return true;
 }
 
 void HmiTcpServer::stop()
 {
-    // 停止远端日志转发，恢复原始日志处理器
-    uninstallLogForwarder();
-    
+    if (kForwardQtLogsToHmi) {
+        uninstallLogForwarder();
+    }
+
+    disconnectServiceSignals();
+
     m_statusPushTimer->stop();
     m_heartbeatTimer->stop();
 
@@ -115,6 +154,38 @@ bool HmiTcpServer::hasClient() const
 
 void HmiTcpServer::setStateMachine(flow_control::StateMachine* sm) { m_stateMachine = sm; }
 void HmiTcpServer::setModbusService(modbus::ModbusService* svc) { m_modbusService = svc; }
+
+void HmiTcpServer::bindServiceSignals()
+{
+    if (m_serviceSignalsBound) {
+        return;
+    }
+    connectStateMachineSignals();
+    connectModbusSignals();
+    connectMechEyeSignals();
+    connectVisionPipelineSignals();
+    m_serviceSignalsBound = true;
+}
+
+void HmiTcpServer::disconnectServiceSignals()
+{
+    if (!m_serviceSignalsBound) {
+        return;
+    }
+    if (m_stateMachine) {
+        disconnect(m_stateMachine, nullptr, this, nullptr);
+    }
+    if (m_modbusService) {
+        disconnect(m_modbusService, nullptr, this, nullptr);
+    }
+    if (m_mechEyeService) {
+        disconnect(m_mechEyeService, nullptr, this, nullptr);
+    }
+    if (m_visionPipeline) {
+        disconnect(m_visionPipeline, nullptr, this, nullptr);
+    }
+    m_serviceSignalsBound = false;
+}
 void HmiTcpServer::setMechEyeService(mech_eye::MechEyeService* svc) { m_mechEyeService = svc; }
 void HmiTcpServer::setVisionPipelineService(vision::VisionPipelineService* svc) { m_visionPipeline = svc; }
 void HmiTcpServer::setTrackingService(tracking::TrackingService* svc) { m_trackingService = svc; }
@@ -143,11 +214,13 @@ void HmiTcpServer::onNewConnection()
         connect(m_session, &HmiSession::disconnected, this, &HmiTcpServer::onSessionDisconnected);
         connect(m_session, &HmiSession::heartbeatTimeout, this, &HmiTcpServer::onSessionHeartbeatTimeout);
 
+        invalidateStatusPushCache();
         m_statusPushTimer->start();
         m_heartbeatTimer->start();
 
         // 发送 core.hello 欢迎消息
         sendToClient(buildEnvelope(QStringLiteral("core.hello"), nextEventId(), QJsonObject()));
+        pushAllStatusToClient();
     }
 }
 
@@ -158,6 +231,7 @@ void HmiTcpServer::onSessionDisconnected()
         m_session->deleteLater();
         m_session = nullptr;
     }
+    invalidateStatusPushCache();
     m_statusPushTimer->stop();
     m_heartbeatTimer->stop();
 }
@@ -210,15 +284,10 @@ void HmiTcpServer::onMessageReceived(const QJsonObject& message)
     const QString type = message.value(QLatin1String("type")).toString();
     const QString msgId = message.value(QLatin1String("msgId")).toString();
     
-    // [TCPIP关键打印] 将收到的完整 JSON 序列化为字符串，用于存档和追溯
-    const QString rawJson = frameJsonToLogString(
-        QJsonDocument(message).toJson(QJsonDocument::Compact));
-    
-    // 区分高频消息和关键消息的日志级别
-    if (type == QLatin1String(msg_type::kHeartbeatPing) || type == QLatin1String(msg_type::kHeartbeatPong)) {
-        qDebug(LOG_HMI_SERVER).noquote() << "[TCPIP] [RX_TRACE] " << rawJson;
-    } else {
-        qInfo(LOG_HMI_SERVER).noquote() << "[TCPIP] [RX] " << rawJson;
+    // 本地单行摘要；完整 JSON 不再打印/转发，避免套娃与刷屏
+    if (!isHighFrequencyTcpType(type)) {
+        qDebug(LOG_HMI_SERVER).noquote()
+            << "[TCPIP] RX" << type << msgId;
     }
     
     // ------------------------------------------------------------------
@@ -310,6 +379,7 @@ void HmiTcpServer::handleCmdGetStatus(const QJsonObject& message)
     payload[QLatin1String("camera")] = buildCameraStatusPayload();
     payload[QLatin1String("device")] = buildDeviceStatusPayload();
     sendToClient(buildEnvelope(QLatin1String(msg_type::kCmdGetStatus), msgId, payload));
+    syncStatusPushCacheFromCurrent();
 }
 
 void HmiTcpServer::handleCmdReset(const QJsonObject& message)
@@ -577,10 +647,58 @@ void HmiTcpServer::handleCmdCaptureBundle(const QJsonObject& message)
 
 // --- 状态推送实现 ---
 
+void HmiTcpServer::invalidateStatusPushCache()
+{
+    m_systemStatusCache.isValid = false;
+    m_plcStatusCache.isValid = false;
+    m_cameraStatusCache.isValid = false;
+    m_deviceStatusCache.isValid = false;
+}
+
+bool HmiTcpServer::pushStatusIfChanged(const QString& type, const QJsonObject& payload,
+                                       HmiStatusPushCache& slot)
+{
+    if (slot.isValid && payload == slot.payload) {
+        return false;
+    }
+    slot.payload = payload;
+    slot.isValid = true;
+    sendToClient(buildEnvelope(type, nextEventId(), payload));
+    return true;
+}
+
+void HmiTcpServer::pushAllStatusToClient()
+{
+    if (!hasClient()) {
+        return;
+    }
+    pushSystemStatus();
+    pushPlcStatus();
+    pushCameraStatus();
+    pushDeviceStatus();
+}
+
+void HmiTcpServer::syncStatusPushCacheFromCurrent()
+{
+    if (m_stateMachine) {
+        m_systemStatusCache.payload = buildSystemStatusPayload();
+        m_systemStatusCache.isValid = true;
+    }
+    if (m_modbusService) {
+        m_plcStatusCache.payload = buildPlcStatusPayload();
+        m_plcStatusCache.isValid = true;
+    }
+    m_cameraStatusCache.payload = buildCameraStatusPayload();
+    m_cameraStatusCache.isValid = true;
+    m_deviceStatusCache.payload = buildDeviceStatusPayload();
+    m_deviceStatusCache.isValid = true;
+}
+
 void HmiTcpServer::pushSystemStatus()
 {
     if (!m_stateMachine) return;
-    sendToClient(buildEnvelope(QLatin1String(msg_type::kStatusSystem), nextEventId(), buildSystemStatusPayload()));
+    const QJsonObject payload = buildSystemStatusPayload();
+    pushStatusIfChanged(QLatin1String(msg_type::kStatusSystem), payload, m_systemStatusCache);
 }
 
 QJsonObject HmiTcpServer::buildSystemStatusPayload() const
@@ -611,7 +729,8 @@ QJsonObject HmiTcpServer::buildSystemStatusPayload() const
 void HmiTcpServer::pushPlcStatus()
 {
     if (!m_modbusService) return;
-    sendToClient(buildEnvelope(QLatin1String(msg_type::kStatusPlc), nextEventId(), buildPlcStatusPayload()));
+    const QJsonObject payload = buildPlcStatusPayload();
+    pushStatusIfChanged(QLatin1String(msg_type::kStatusPlc), payload, m_plcStatusCache);
 }
 
 QJsonObject HmiTcpServer::buildPlcStatusPayload() const
@@ -649,7 +768,8 @@ QJsonObject HmiTcpServer::buildPlcStatusPayload() const
 
 void HmiTcpServer::pushCameraStatus()
 {
-    sendToClient(buildEnvelope(QLatin1String(msg_type::kStatusCamera), nextEventId(), buildCameraStatusPayload()));
+    const QJsonObject payload = buildCameraStatusPayload();
+    pushStatusIfChanged(QLatin1String(msg_type::kStatusCamera), payload, m_cameraStatusCache);
 }
 
 QJsonObject HmiTcpServer::buildCameraStatusPayload() const
@@ -688,7 +808,8 @@ QJsonObject HmiTcpServer::buildCameraStatusPayload() const
 
 void HmiTcpServer::pushDeviceStatus()
 {
-    sendToClient(buildEnvelope(QLatin1String(msg_type::kStatusDevice), nextEventId(), buildDeviceStatusPayload()));
+    const QJsonObject payload = buildDeviceStatusPayload();
+    pushStatusIfChanged(QLatin1String(msg_type::kStatusDevice), payload, m_deviceStatusCache);
 }
 
 QJsonObject HmiTcpServer::buildDeviceStatusPayload() const
@@ -731,17 +852,25 @@ QJsonObject HmiTcpServer::buildDeviceStatusPayload() const
 
 void HmiTcpServer::connectStateMachineSignals()
 {
-    if (!m_stateMachine) return;
+    if (!m_stateMachine) {
+        return;
+    }
+
+    qRegisterMetaType<QVector<double>>("QVector<double>");
 
     // 绑定核心业务报警事件：将状态机发出的协议级错误拦截并封装为 event.alarm 向远端推送
-    connect(m_stateMachine, &flow_control::StateMachine::protocolEvent, this, [this](const QString& message) {
+    const bool okProtocol = connect(m_stateMachine, &flow_control::StateMachine::protocolEvent, this,
+        [this](const QString& message) {
         QJsonObject payload;
         payload[QLatin1String("message")] = message;
         payload[QLatin1String("level")] = m_stateMachine->alarmLevel();
         payload[QLatin1String("code")] = m_stateMachine->alarmCode();
         payload[QLatin1String("timestamp")] = QDateTime::currentMSecsSinceEpoch();
         sendToClient(buildEnvelope(QLatin1String(msg_type::kEventAlarm), nextEventId(), payload));
-    });
+    }, Qt::UniqueConnection);
+    if (!okProtocol) {
+        qCritical(LOG_HMI_SERVER) << "connect protocolEvent 失败，请完整重编 flow_control 与 hmi_server";
+    }
 
     // 绑定扫描分段启动事件：告知显控界面哪一段扫描正在拍摄
     connect(m_stateMachine, &flow_control::StateMachine::scanStarted, this,
@@ -750,7 +879,7 @@ void HmiTcpServer::connectStateMachineSignals()
         payload[QLatin1String("segmentIndex")] = segmentIndex;
         payload[QLatin1String("taskId")] = static_cast<int>(taskId);
         sendToClient(buildEnvelope(QLatin1String(msg_type::kEventScanStarted), nextEventId(), payload));
-    });
+    }, Qt::UniqueConnection);
 
     // 绑定扫描分段完成事件：推送当前段是否采图成功及有效帧数
     connect(m_stateMachine, &flow_control::StateMachine::scanFinished, this,
@@ -761,7 +890,7 @@ void HmiTcpServer::connectStateMachineSignals()
         payload[QLatin1String("imageCount")] = imageCount;
         payload[QLatin1String("cloudFrameCount")] = cloudFrameCount;
         sendToClient(buildEnvelope(QLatin1String(msg_type::kEventScanFinished), nextEventId(), payload));
-    });
+    }, Qt::UniqueConnection);
 
     // 绑定综合检测算法结束事件：推送所有工艺偏移量计算结果及缺陷诊断信息（如划痕、裂纹等特征字）
     connect(m_stateMachine, &flow_control::StateMachine::inspectionFinished, this,
@@ -785,7 +914,7 @@ void HmiTcpServer::connectStateMachineSignals()
         payload[QLatin1String("inlinerErrorLog")] = inlinerErrorLog;   // 内部孔径瑕疵诊断日志
         payload[QLatin1String("message")] = message;
         sendToClient(buildEnvelope(QLatin1String(msg_type::kEventInspectionFinished), nextEventId(), payload));
-    });
+    }, Qt::UniqueConnection);
 
     // 位姿校验完成
     connect(m_stateMachine, &flow_control::StateMachine::poseCheckFinished, this,
@@ -801,7 +930,7 @@ void HmiTcpServer::connectStateMachineSignals()
         payload[QLatin1String("rt")] = rtArray;
         payload[QLatin1String("message")] = message;
         sendToClient(buildEnvelope(QLatin1String(msg_type::kEventPoseCheckFinished), nextEventId(), payload));
-    });
+    }, Qt::UniqueConnection);
 
     // 上料抓取完成
     connect(m_stateMachine, &flow_control::StateMachine::loadGraspFinished, this,
@@ -815,7 +944,7 @@ void HmiTcpServer::connectStateMachineSignals()
         payload[QLatin1String("ry")] = static_cast<double>(ry);
         payload[QLatin1String("rz")] = static_cast<double>(rz);
         sendToClient(buildEnvelope(QLatin1String(msg_type::kEventLoadGraspFinished), nextEventId(), payload));
-    });
+    }, Qt::UniqueConnection);
 
     // 卸料计算完成
     connect(m_stateMachine, &flow_control::StateMachine::unloadCalcFinished, this,
@@ -829,7 +958,7 @@ void HmiTcpServer::connectStateMachineSignals()
         payload[QLatin1String("ry")] = static_cast<double>(ry);
         payload[QLatin1String("rz")] = static_cast<double>(rz);
         sendToClient(buildEnvelope(QLatin1String(msg_type::kEventUnloadCalcFinished), nextEventId(), payload));
-    });
+    }, Qt::UniqueConnection);
 
     // 自检完成
     connect(m_stateMachine, &flow_control::StateMachine::selfCheckFinished, this,
@@ -838,7 +967,7 @@ void HmiTcpServer::connectStateMachineSignals()
         payload[QLatin1String("resultCode")] = resultCode;
         payload[QLatin1String("failWord0")] = failWord0;
         sendToClient(buildEnvelope(QLatin1String(msg_type::kEventSelfCheckFinished), nextEventId(), payload));
-    });
+    }, Qt::UniqueConnection);
 
     // 条码读取完成
     connect(m_stateMachine, &flow_control::StateMachine::codeReadFinished, this,
@@ -847,7 +976,7 @@ void HmiTcpServer::connectStateMachineSignals()
         payload[QLatin1String("resultCode")] = resultCode;
         payload[QLatin1String("codeValue")] = codeValue;
         sendToClient(buildEnvelope(QLatin1String(msg_type::kEventCodeReadFinished), nextEventId(), payload));
-    });
+    }, Qt::UniqueConnection);
 
     // 结果复位完成
     connect(m_stateMachine, &flow_control::StateMachine::resultResetFinished, this,
@@ -855,7 +984,7 @@ void HmiTcpServer::connectStateMachineSignals()
         QJsonObject payload;
         payload[QLatin1String("resultCode")] = resultCode;
         sendToClient(buildEnvelope(QLatin1String(msg_type::kEventResultResetFinished), nextEventId(), payload));
-    });
+    }, Qt::UniqueConnection);
 }
 
 void HmiTcpServer::connectModbusSignals()
@@ -931,83 +1060,77 @@ void HmiTcpServer::connectVisionPipelineSignals()
     });
 }
 
-// --- 日志转发实现 ---
+// --- 日志转发实现（默认关闭，见 kForwardQtLogsToHmi）---
 
 void HmiTcpServer::installLogForwarder()
 {
+    if (s_logForwarderInstalled) {
+        return;
+    }
+
     // 保存当前实例指针，供全局回调函数使用
     s_instance = this;
     
     // 拦截全局 Qt 日志输出，并保存原有处理器以支持链式调用
     s_previousHandler = qInstallMessageHandler([](QtMsgType type, const QMessageLogContext& context, const QString& msg) {
         const QString category = QString::fromLatin1(context.category ? context.category : "default");
-        // 会话层协议错误仅记录本地日志，不转发到显控，避免干扰排查且减少断连时的日志风暴
-        const bool skipRemoteForward = (category == QLatin1String("hmi.session"));
 
-        if (s_instance && s_instance->hasClient() && !skipRemoteForward) {
+        if (s_instance && s_instance->hasClient() && shouldForwardLogToHmi(type, category, msg)) {
             QJsonObject payload;
-            int severity = 0;
+            int severity = 2;
             switch (type) {
-            case QtDebugMsg: severity = 0; break;
-            case QtInfoMsg: severity = 1; break;
             case QtWarningMsg: severity = 2; break;
             case QtCriticalMsg: severity = 3; break;
             case QtFatalMsg: severity = 4; break;
+            default: break;
             }
             payload[QLatin1String("severity")] = severity;
             payload[QLatin1String("category")] = category;
             payload[QLatin1String("message")] = msg;
-            payload[QLatin1String("file")] = QString::fromLatin1(context.file ? context.file : "");
-            payload[QLatin1String("line")] = context.line;
             payload[QLatin1String("timestamp")] = QDateTime::currentMSecsSinceEpoch();
-            
+
+            g_inLogForward = true;
             s_instance->sendToClient(buildEnvelope(QLatin1String(msg_type::kEventLog), s_instance->nextEventId(), payload));
+            g_inLogForward = false;
         }
-        
-        // 链式调用：保证本地控制台或本地文件日志依然能够正常输出
+
         if (s_previousHandler) {
             s_previousHandler(type, context, msg);
         }
     });
+    s_logForwarderInstalled = true;
 }
 
 void HmiTcpServer::uninstallLogForwarder()
 {
+    if (!s_logForwarderInstalled) {
+        return;
+    }
     if (s_previousHandler) {
         qInstallMessageHandler(s_previousHandler);
         s_previousHandler = nullptr;
     }
     s_instance = nullptr;
+    s_logForwarderInstalled = false;
 }
 
 // --- 辅助发送 ---
 
 void HmiTcpServer::sendToClient(const QJsonObject& envelope)
 {
-    if (m_session) {
-        // [TCPIP关键打印] 将发送的完整 JSON 序列化为单行字符串，用于存档
-        const QString rawJson = frameJsonToLogString(
-            QJsonDocument(envelope).toJson(QJsonDocument::Compact));
-        QString type = envelope.value(QLatin1String("type")).toString();
-        
-        // 区分高频消息和关键消息：
-        // 状态推送、心跳、日志等高频且数据量大的报文使用 Debug 级别（避免撑爆 Info 级别的主日志文件）
-        // 核心控制命令、业务事件的回执使用 Info 级别（永久存档）
-        if (type == QLatin1String(msg_type::kStatusSystem) || 
-            type == QLatin1String(msg_type::kStatusPlc) || 
-            type == QLatin1String(msg_type::kStatusCamera) || 
-            type == QLatin1String(msg_type::kStatusDevice) || 
-            type == QLatin1String(msg_type::kHeartbeatPing) || 
-            type == QLatin1String(msg_type::kHeartbeatPong) ||
-            type == QLatin1String(msg_type::kEventLog)) {
-            
-            qDebug(LOG_HMI_SERVER).noquote() << "[TCPIP] [TX_TRACE] " << rawJson;
-        } else {
-            qInfo(LOG_HMI_SERVER).noquote() << "[TCPIP] [TX] " << rawJson;
-        }
-        
-        m_session->sendMessage(envelope);
+    if (!m_session) {
+        return;
     }
+
+    const QString type = envelope.value(QLatin1String("type")).toString();
+    const QString msgId = envelope.value(QLatin1String("msgId")).toString();
+
+    g_inTcpSend = true;
+    if (!isHighFrequencyTcpType(type)) {
+        qDebug(LOG_HMI_SERVER).noquote() << "[TCPIP] TX" << type << msgId;
+    }
+    m_session->sendMessage(envelope);
+    g_inTcpSend = false;
 }
 
 void HmiTcpServer::sendResponse(const QString& type, const QString& msgId, bool success, const QString& message)
