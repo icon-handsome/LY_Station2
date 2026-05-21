@@ -98,6 +98,7 @@ const VisionConfig& ConfigManager::visionConfig() const { return m_visionConfig;
 const FlowControlConfig& ConfigManager::flowControlConfig() const { return m_flowControlConfig; }
 const TrackingConfig& ConfigManager::trackingConfig() const { return m_trackingConfig; }
 const LbPoseConfig& ConfigManager::lbPoseConfig() const { return m_lbPoseConfig; }
+const LbnPoseConfig& ConfigManager::lbnPoseConfig() const { return m_lbnPoseConfig; }
 const ScanPathsConfig& ConfigManager::scanPathsConfig() const { return m_scanPathsConfig; }
 
 void ConfigManager::writeDefaults(QSettings& settings)
@@ -158,6 +159,17 @@ void ConfigManager::writeDefaults(QSettings& settings)
     settings.setValue("maxDistance", 650.0);
     settings.setValue("cosTolerance", 0.015);
     settings.setValue("minPercent", 0.5);
+    settings.endGroup();
+
+    settings.beginGroup("LbnPose");
+    settings.setValue("enabled", true);
+    settings.setValue("dataRoot", "D:/work/LY/IPC-192.168.110.173_track-main/third_party/LBN/data");
+    settings.setValue("templateFile", "");
+    settings.setValue("minDistance", 30.0);
+    settings.setValue("maxDistance", 650.0);
+    settings.setValue("cosTolerance", 0.015);
+    settings.setValue("minPercent", 0.5);
+    settings.setValue("cloudSearchRadiusPx", 20);
     settings.endGroup();
 
     settings.beginGroup("FlowControl");
@@ -245,6 +257,20 @@ void ConfigManager::load(const QString& filePath)
     m_lbPoseConfig.maxDistance = settings.value("maxDistance", 650.0).toFloat();
     m_lbPoseConfig.cosTolerance = settings.value("cosTolerance", 0.015).toFloat();
     m_lbPoseConfig.minPercent = settings.value("minPercent", 0.5).toFloat();
+    settings.endGroup();
+
+    settings.beginGroup("LbnPose");
+    m_lbnPoseConfig.enabled = settings.value("enabled", true).toBool();
+    m_lbnPoseConfig.dataRoot = settings.value(
+        "dataRoot",
+        QStringLiteral("D:/work/LY/IPC-192.168.110.173_track-main/third_party/LBN/data"))
+        .toString();
+    m_lbnPoseConfig.templateFile = settings.value("templateFile", "").toString();
+    m_lbnPoseConfig.minDistance = settings.value("minDistance", 30.0).toFloat();
+    m_lbnPoseConfig.maxDistance = settings.value("maxDistance", 650.0).toFloat();
+    m_lbnPoseConfig.cosTolerance = settings.value("cosTolerance", 0.015).toFloat();
+    m_lbnPoseConfig.minPercent = settings.value("minPercent", 0.5).toFloat();
+    m_lbnPoseConfig.cloudSearchRadiusPx = settings.value("cloudSearchRadiusPx", 20).toInt();
     settings.endGroup();
 
     settings.beginGroup("FlowControl");

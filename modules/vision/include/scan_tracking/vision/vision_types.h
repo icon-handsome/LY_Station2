@@ -147,6 +147,18 @@ struct LbPoseResult {
     PoseMatrix4x4 poseMatrix;
 };
 
+struct LbnPoseResult {
+    bool invoked = false;
+    bool success = false;
+    QString message;
+    int textureWidth = 0;
+    int textureHeight = 0;
+    int pointCloudWidth = 0;
+    int pointCloudHeight = 0;
+    int matchedPointCount = 0;
+    PoseMatrix4x4 poseMatrix;
+};
+
 struct MultiCameraCaptureRequest {
     quint64 requestId = 0;
     quint32 taskId = 0;
@@ -164,6 +176,7 @@ struct MultiCameraCaptureBundle {
     HikPoseCaptureResult hikCameraAResult;
     HikPoseCaptureResult hikCameraBResult;
     LbPoseResult lbPoseResult;
+    LbnPoseResult lbnPoseResult;
 
     bool success() const
     {
@@ -176,14 +189,15 @@ struct MultiCameraCaptureBundle {
     QString summary() const
     {
         return QStringLiteral(
-                   "bundle requestId=%1 taskId=%2 segment=%3 mech=%4 hikA=%5 hikB=%6 lb=%7")
+                   "bundle requestId=%1 taskId=%2 segment=%3 mech=%4 hikA=%5 hikB=%6 lb=%7 lbn=%8")
             .arg(request.requestId)
             .arg(request.taskId)
             .arg(request.segmentIndex)
             .arg(mechEyeResult.success() ? QStringLiteral("ok") : QStringLiteral("fail"))
             .arg(hikCameraAResult.success() ? QStringLiteral("ok") : QStringLiteral("fail"))
             .arg(hikCameraBResult.success() ? QStringLiteral("ok") : QStringLiteral("fail"))
-            .arg(lbPoseResult.success ? QStringLiteral("ok") : QStringLiteral("fail"));
+            .arg(lbPoseResult.success ? QStringLiteral("ok") : QStringLiteral("fail"))
+            .arg(lbnPoseResult.success ? QStringLiteral("ok") : QStringLiteral("skip"));
     }
 };
 
@@ -197,6 +211,7 @@ Q_DECLARE_METATYPE(scan_tracking::vision::HikMonoFrame)
 Q_DECLARE_METATYPE(scan_tracking::vision::HikPoseCaptureRequest)
 Q_DECLARE_METATYPE(scan_tracking::vision::HikPoseCaptureResult)
 Q_DECLARE_METATYPE(scan_tracking::vision::LbPoseResult)
+Q_DECLARE_METATYPE(scan_tracking::vision::LbnPoseResult)
 Q_DECLARE_METATYPE(scan_tracking::vision::MultiCameraCaptureRequest)
 Q_DECLARE_METATYPE(scan_tracking::vision::MultiCameraCaptureBundle)
 Q_DECLARE_METATYPE(scan_tracking::vision::CaptureType)

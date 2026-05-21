@@ -8,6 +8,7 @@
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/vision/hik_camera_service.h"
 #include "scan_tracking/vision/lb_pose_detection_adapter.h"
+#include "scan_tracking/vision/lbn_pose_detection_adapter.h"
 
 namespace scan_tracking {
 namespace vision {
@@ -71,8 +72,10 @@ void VisionPipelineService::start(const scan_tracking::common::VisionConfig& con
     m_processing = false;
     if (const auto* configManager = scan_tracking::common::ConfigManager::instance()) {
         m_lbPoseConfig = configManager->lbPoseConfig();
+        m_lbnPoseConfig = configManager->lbnPoseConfig();
     } else {
         m_lbPoseConfig = {};
+        m_lbnPoseConfig = {};
     }
     m_started = true;
     setState(
@@ -121,16 +124,18 @@ quint64 VisionPipelineService::requestCaptureBundle(int segmentIndex, quint32 ta
     pending.active = true;
     pending.bundle.request = request;
 
-    // TODO: MechEye 暂时屏蔽（已验证通过），当前只测试海康 A/B
-    // pending.mechRequestId = m_mechEyeService->requestCapture(
-    //     request.mechEyeCameraKey,
-    //     scan_tracking::mech_eye::CaptureMode::Capture3DOnly,
-    //     request.mechEyeTimeoutMs);
-    pending.mechRequestId = 1;  // 占位
-    pending.mechDone = true;
-    pending.bundle.mechEyeResult.requestId = 1;
-    pending.bundle.mechEyeResult.errorCode = scan_tracking::mech_eye::CaptureErrorCode::Success;
-    pending.bundle.mechEyeResult.pointCloud.pointCount = 0;  // MechEye 未连接，点云为空
+    const auto mechCaptureMode = m_lbnPoseConfig.enabled
+        ? scan_tracking::mech_eye::CaptureMode::Capture2DAnd3D
+        : scan_tracking::mech_eye::CaptureMode::Capture3DOnly;
+    pending.mechRequestId = m_mechEyeService->requestCapture(
+        request.mechEyeCameraKey,
+        mechCaptureMode,
+        request.mechEyeTimeoutMs);
+    if (pending.mechRequestId == 0) {
+        emit fatalError(VisionErrorCode::CaptureRejected, QStringLiteral("启动 Mech-Eye 采集失败。"));
+        return 0;
+    }
+    pending.mechDone = false;
 
     // 海康 A/B 正式采集
     pending.hikARequestId = m_hikCameraAService->requestPoseCapture(
@@ -228,11 +233,30 @@ void VisionPipelineService::finishBundleIfReady()
     }
 
     const auto lbConfig = m_lbPoseConfig;
+    const auto lbnConfig = m_lbnPoseConfig;
     QPointer<VisionPipelineService> self(this);
-    std::thread([self, bundle, lbConfig]() mutable {
+    std::thread([self, bundle, lbConfig, lbnConfig]() mutable {
         auto completedBundle = bundle;
-        qInfo() << "[LB位姿] 开始检测, leftFrame=" << bundle.hikCameraAResult.frame.width << "x" << bundle.hikCameraAResult.frame.height
-                << "rightFrame=" << bundle.hikCameraBResult.frame.width << "x" << bundle.hikCameraBResult.frame.height;
+
+        if (lbnConfig.enabled) {
+            qInfo() << "[LBN位姿] 开始检测"
+                    << "texture=" << bundle.mechEyeResult.texture2D.width << "x"
+                    << bundle.mechEyeResult.texture2D.height
+                    << "cloud=" << bundle.mechEyeResult.pointCloud.width << "x"
+                    << bundle.mechEyeResult.pointCloud.height;
+            completedBundle.lbnPoseResult = runLbnPoseDetection(bundle.mechEyeResult, lbnConfig);
+            const auto& lbn = completedBundle.lbnPoseResult;
+            qInfo() << "[LBN位姿] 完成: invoked=" << lbn.invoked << "success=" << lbn.success
+                    << "message=" << lbn.message << "matched=" << lbn.matchedPointCount;
+        } else {
+            completedBundle.lbnPoseResult.invoked = false;
+            completedBundle.lbnPoseResult.message = QStringLiteral("LBN 位姿检测已禁用。");
+        }
+
+        qInfo() << "[LB位姿] 开始检测, leftFrame=" << bundle.hikCameraAResult.frame.width << "x"
+                << bundle.hikCameraAResult.frame.height
+                << "rightFrame=" << bundle.hikCameraBResult.frame.width << "x"
+                << bundle.hikCameraBResult.frame.height;
 
         completedBundle.lbPoseResult = runLbPoseDetection(
             completedBundle.hikCameraAResult.frame,

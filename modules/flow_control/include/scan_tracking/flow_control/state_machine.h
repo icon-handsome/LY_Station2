@@ -44,7 +44,7 @@ public:
     // @param trackingService 跟踪服务指针（可选）
     // @param parent Qt 父对象指针
     explicit StateMachine(
-        modbus::ModbusService* modbusService,
+        modbus::ModbusService* modbusService,   
         mech_eye::MechEyeService* mechEyeService = nullptr,
         vision::VisionPipelineService* visionPipelineService = nullptr,
         tracking::TrackingService* trackingService = nullptr,

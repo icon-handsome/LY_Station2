@@ -83,6 +83,17 @@ struct LbPoseConfig {
     float minPercent;
 };
 
+struct LbnPoseConfig {
+    bool enabled = true;
+    QString dataRoot;
+    QString templateFile;
+    float minDistance = 30.0f;
+    float maxDistance = 650.0f;
+    float cosTolerance = 0.015f;
+    float minPercent = 0.5f;
+    int cloudSearchRadiusPx = 20;
+};
+
 /**
  * @brief 扫描点位配置
  * 
@@ -151,6 +162,7 @@ public:
     const FlowControlConfig& flowControlConfig() const;
     const TrackingConfig& trackingConfig() const;
     const LbPoseConfig& lbPoseConfig() const;
+    const LbnPoseConfig& lbnPoseConfig() const;
     const ScanPathsConfig& scanPathsConfig() const;  // 新增：获取扫描路径配置
 
 private:
@@ -179,6 +191,7 @@ private:
     FlowControlConfig m_flowControlConfig;
     TrackingConfig m_trackingConfig;
     LbPoseConfig m_lbPoseConfig;
+    LbnPoseConfig m_lbnPoseConfig;
     ScanPathsConfig m_scanPathsConfig;  // 新增：扫描路径配置
 };
 

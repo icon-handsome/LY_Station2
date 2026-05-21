@@ -55,6 +55,19 @@ struct CameraInfoSnapshot {
     bool connected = false; // 是否已连接
 };
 
+/* 与 3D 纹理点云对齐的 2D 灰度图（Capture2DAnd3D 时有效） */
+struct GrayTextureFrame {
+    std::shared_ptr<std::vector<uint8_t>> pixels;
+    int width = 0;
+    int height = 0;
+
+    bool isValid() const
+    {
+        return pixels && !pixels->empty() && width > 0 && height > 0 &&
+               static_cast<int>(pixels->size()) >= width * height;
+    }
+};
+
 /* 点云帧数据
  * 使用 shared_ptr 保存大数组，避免跨线程传递时发生深拷贝。
  */
@@ -103,6 +116,7 @@ struct CaptureResult {
     QString errorMessage;   // 错误描述，便于日志记录和调试
     CameraInfoSnapshot cameraInfo;  // 采集时的相机信息快照
     PointCloudFrame pointCloud; // 采集到的点云数据
+    GrayTextureFrame texture2D; // 与点云对齐的 2D 灰度纹理（仅 Capture2DAnd3D）
     qint64 elapsedMs = 0;   // 采集耗时，单位毫秒
 
     /* 判断采集是否成功 */
@@ -119,6 +133,7 @@ Q_DECLARE_METATYPE(scan_tracking::mech_eye::CaptureMode)
 Q_DECLARE_METATYPE(scan_tracking::mech_eye::CaptureErrorCode)
 Q_DECLARE_METATYPE(scan_tracking::mech_eye::CameraRuntimeState)
 Q_DECLARE_METATYPE(scan_tracking::mech_eye::CameraInfoSnapshot)
+Q_DECLARE_METATYPE(scan_tracking::mech_eye::GrayTextureFrame)
 Q_DECLARE_METATYPE(scan_tracking::mech_eye::PointCloudFrame)
 Q_DECLARE_METATYPE(scan_tracking::mech_eye::CaptureRequest)
 Q_DECLARE_METATYPE(scan_tracking::mech_eye::CaptureResult)

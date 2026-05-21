@@ -60,6 +60,7 @@ private:
     HikCameraService* m_hikCameraBService = nullptr;
     scan_tracking::common::VisionConfig m_config;
     scan_tracking::common::LbPoseConfig m_lbPoseConfig;
+    scan_tracking::common::LbnPoseConfig m_lbnPoseConfig;
     PendingCaptureContext m_pending;
     quint64 m_nextRequestId = 1;
     bool m_started = false;

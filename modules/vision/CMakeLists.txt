@@ -1,18 +1,49 @@
-add_library(scan_tracking_vision STATIC
+set(SCAN_TRACKING_VISION_SOURCES
     src/hik_camera_service.cpp
     src/hik_camera_c_controller.cpp
     src/hik_smart_camera_tcp_server.cpp
     src/hik_smart_camera_ftp_monitor.cpp
-    src/lb_pose_detection_adapter.cpp
     src/vision_pipeline_service.cpp
     include/scan_tracking/vision/vision_types.h
     include/scan_tracking/vision/hik_camera_service.h
     include/scan_tracking/vision/hik_camera_c_controller.h
     include/scan_tracking/vision/hik_smart_camera_tcp_server.h
     include/scan_tracking/vision/hik_smart_camera_ftp_monitor.h
-    include/scan_tracking/vision/lb_pose_detection_adapter.h
     include/scan_tracking/vision/vision_pipeline_service.h
 )
+
+set(SCAN_TRACKING_VISION_PRIVATE_LIBS
+    HikMvsSdk::MvCameraControl
+)
+
+if(SCAN_TRACKING_ENABLE_LBN_POSE_DETECTION)
+    list(APPEND SCAN_TRACKING_VISION_SOURCES
+        src/lbn_pose_detection_adapter.cpp
+        include/scan_tracking/vision/lbn_pose_detection_adapter.h
+    )
+    list(APPEND SCAN_TRACKING_VISION_PRIVATE_LIBS
+        LbnPose::lbn_pose
+    )
+    list(APPEND SCAN_TRACKING_VISION_SOURCES
+        src/lb_pose_detection_adapter_stub.cpp
+        include/scan_tracking/vision/lb_pose_detection_adapter.h
+    )
+elseif(SCAN_TRACKING_ENABLE_LB_POSE_DETECTION)
+    list(APPEND SCAN_TRACKING_VISION_SOURCES
+        src/lb_pose_detection_adapter.cpp
+        include/scan_tracking/vision/lb_pose_detection_adapter.h
+    )
+    list(APPEND SCAN_TRACKING_VISION_PRIVATE_LIBS
+        LbPoseDetection::lb_pose_detection
+    )
+else()
+    list(APPEND SCAN_TRACKING_VISION_SOURCES
+        src/lb_pose_detection_adapter_stub.cpp
+        include/scan_tracking/vision/lb_pose_detection_adapter.h
+    )
+endif()
+
+add_library(scan_tracking_vision STATIC ${SCAN_TRACKING_VISION_SOURCES})
 
 set_target_properties(scan_tracking_vision PROPERTIES
     AUTOMOC ON
@@ -24,6 +55,13 @@ target_include_directories(scan_tracking_vision
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+if(SCAN_TRACKING_ENABLE_LBN_POSE_DETECTION)
+    target_include_directories(scan_tracking_vision
+        PRIVATE
+            ${CMAKE_SOURCE_DIR}/third_party/LBN
+    )
+endif()
+
 target_link_libraries(scan_tracking_vision
     PUBLIC
         Qt5::Core
@@ -31,8 +69,7 @@ target_link_libraries(scan_tracking_vision
         scan_tracking_common
         scan_tracking_mech_eye
     PRIVATE
-        HikMvsSdk::MvCameraControl
-        LbPoseDetection::lb_pose_detection
+        ${SCAN_TRACKING_VISION_PRIVATE_LIBS}
 )
 
 target_compile_features(scan_tracking_vision PUBLIC cxx_std_17)
@@ -109,4 +146,3 @@ if(SCAN_TRACKING_ENABLE_LANYOU_DETECTION)
         FOLDER "tests"
     )
 endif()
-

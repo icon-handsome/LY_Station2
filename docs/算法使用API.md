@@ -470,8 +470,77 @@ cannot open config/first_config.cfg
 
 ---
 
+## 14. LBN 位姿检测（Mech-Eye 2D + 组织化点云）
+
+**最后更新**: 2026-05-21
+
+### 14.1 代码位置与集成状态
+
+| 层级 | 路径 | 状态 |
+|------|------|------|
+| 算法核心 | `third_party/LBN/`（`lbn_pose_core.*`、`FastGeoHash.*`） | ✅ 已加入 CMake 目标 `lbn_pose` |
+| IPC 适配 | `modules/vision/.../lbn_pose_detection_adapter.*` | ✅ 已实现 |
+| 配置 | `common/.../config_manager` → `[LbnPose]` | ✅ |
+| 视觉流水线 | `vision_pipeline_service.cpp` | ✅ `enabled` 时调用 |
+| 多路径状态机 | `modules/flow_control/.../state_machine.*` | ❌ 未用 `lbnPoseResult` 更新标定矩阵 |
+
+构建开关（根 `CMakeLists.txt`）：
+- `SCAN_TRACKING_ENABLE_LBN_POSE_DETECTION`（默认 ON）
+- 与 LB 互斥：LBN ON 时链接 `LbnPose::lbn_pose`，LB 适配器编译为 stub
+
+OpenCV：复用 `third_party/LB/opencv-3.4.3-vc14_vc15`（见 `third_party/LBN/CMakeLists.txt`）。
+
+### 14.2 配置项（`config.ini` → `[LbnPose]`）
+
+| 键 | 含义 | 默认 |
+|----|------|------|
+| `enabled` | 是否调用 LBN；同时为 true 时 Mech-Eye 使用 `Capture2DAnd3D` | `true` |
+| `dataRoot` | 模板等资源根目录 | 见 `config_manager.cpp` |
+| `templateFile` | GeoHash 模板文件名（相对 `dataRoot`） | — |
+| `minDistance` / `maxDistance` / `cosTolerance` / `minPercent` | 传给 `lbn_pose::Config` | 30 / 650 / 0.015 / 0.5 |
+| `cloudSearchRadiusPx` | 2D 圆心 lifted 到 3D 的搜索半径 | 20 |
+
+### 14.3 对外 API（IPC 侧）
+
+```cpp
+// modules/vision/include/scan_tracking/vision/lbn_pose_detection_adapter.h
+LbnPoseResult runLbnPoseDetection(
+    const scan_tracking::mech_eye::CaptureResult& mechEyeResult,
+    const scan_tracking::common::LbnPoseConfig& config);
+```
+
+`LbnPoseResult`（`vision_types.h`）主要字段：`invoked`、`success`、`message`、`poseMatrix`（4×4 行优先）、`matchedPointCount`。
+
+算法命名空间 `lbn_pose::Estimator::estimate(grayImage, alignedCloud)` 定义见 `third_party/LBN/lbn_pose_core.h`。
+
+### 14.4 调用链（当前）
+
+1. `VisionPipelineService` 加载 `LbnPoseConfig`。
+2. `requestCaptureBundle`：若 `lbnPoseConfig.enabled`，Mech-Eye 请求 `Capture2DAnd3D`。
+3. 采集完成后在后台线程调用 `runLbnPoseDetection`，结果写入 `VisionCaptureBundle::lbnPoseResult`。
+4. **尚未**：状态机根据 `ScanPointConfig::needRotation` 用 `poseMatrix` 更新 `T0`。
+
+### 14.5 Visual Studio 中看不到 `third_party/LBN`？
+
+根目录 `.gitignore` 对 `third_party/*` 默认忽略；**文件夹视图**中放行的目录为：`lanyou_first_detection`、`LBN`、`LB`、`MVS` 及 `CMakeLists.txt`。`eigen-3.4.0` 与 `Mech-Eye SDK-2.5.4` **故意不放行**（体积大、日常不改）。
+
+CMake 中 `SCAN_TRACKING_SHOW_EIGEN_IN_IDE` / `SCAN_TRACKING_SHOW_MECHEYE_SDK_IN_IDE` 默认为 `OFF`，不生成 `scan_tracking_third_party_eigen*` / `scan_tracking_third_party_mecheye*` 等 IDE 浏览目标。若临时需要浏览头文件，可在 CMake 配置里将对应选项设为 `ON` 后重新生成。
+
+若仍看不到其它目录：删除 CMake 缓存并重新配置。
+
+### 14.6 后续建议
+
+1. 在状态机完成 `T0' = Rt × T0` 与路径级矩阵缓存。
+2. `requestCaptureBundle` 增加 per-point `needMechEye2D`，与 `needRotation` 对齐。
+3. 增加 LBN 离线调试可执行文件（类似蓝友 `ply_runner`）。
+4. 现场校验 `templateFile` 与 OpenCV DLL 路径。
+
+---
+
 如后续接口有变化，请优先核对以下文件：
 - `third_party/lanyou_first_detection/include/utils/Params.h`
 - `third_party/lanyou_first_detection/include/detection/first/*.h`
 - `third_party/lanyou_first_detection/include/detection/second/*.h`
 - `modules/vision/include/scan_tracking/vision/lanyou_detection_adapter.h`
+- `third_party/LBN/lbn_pose_core.h`
+- `modules/vision/include/scan_tracking/vision/lbn_pose_detection_adapter.h`

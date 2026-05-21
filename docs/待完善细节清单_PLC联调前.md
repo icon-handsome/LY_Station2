@@ -51,12 +51,13 @@
 | 2 | CDAB 浮点字序验证 | 代码已实现，需与 PLC 实际读取验证 | 高 |
 | 3 | config.ini 中 host/port/unitId 改为现场 PLC 地址 | 当前 127.0.0.1:502 unitId=3 | 联调前改 |
 
-### 2.3 视觉流水线（完成度 ~70%）
+### 2.3 视觉流水线（完成度 ~75%）
 
 | 序号 | 待完善项 | 当前状态 | 优先级 |
 |------|----------|----------|--------|
 | 1 | 海康相机 A/B 真实 4x4 位姿矩阵生成 | 当前返回单位矩阵占位 | 高 |
-| 2 | VisionPipeline 中 LB 位姿检测 | 当前 stub 禁用（`lb_pose_detection_adapter_stub.cpp`） | 中 |
+| 2 | VisionPipeline 中 LB 位姿检测 | 默认启用 LBN 时 LB 走 stub；改 `SCAN_TRACKING_ENABLE_LBN_POSE_DETECTION=OFF` 可恢复 LB 实装 | 中 |
+| 2b | LBN 位姿检测（Mech-Eye） | 适配层与 `lbn_pose` 库已接入；`LbnPoseConfig.enabled` 控制调用；**未**接入多路径标定矩阵更新 | 中 |
 | 3 | 海康相机 C（智能相机）SDK 采图 | 不支持 GigE 数据流输出，只能走 TCP+FTP | 已确认限制 |
 | 4 | MechEye 3D 相机真实点云质量验证 | 框架已通，需现场验证点云完整性 | 中 |
 | 5 | 多相机同步时间戳对齐 | 未实现 | 低 |

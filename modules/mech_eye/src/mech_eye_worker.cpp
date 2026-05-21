@@ -17,6 +17,7 @@
 #include "area_scan_3d_camera/Camera.h"
 #include "area_scan_3d_camera/CameraProperties.h"
 #include "area_scan_3d_camera/CameraProperties.h"
+#include "area_scan_3d_camera/Frame2D.h"
 #include "area_scan_3d_camera/Frame2DAnd3D.h"
 #include "area_scan_3d_camera/Frame3D.h"
 #include "UserSet.h"
@@ -154,6 +155,32 @@ PointCloudFrame ConvertTexturedPointCloudWithNormalsToPcl(
     }
 
     return pointCloud;
+}
+
+GrayTextureFrame ConvertGrayTextureFrame(const mmind::eye::Frame2D& frame2d)
+{
+    GrayTextureFrame texture;
+    const mmind::eye::GrayScale2DImage gray = frame2d.getGrayScaleImage();
+    if (gray.isEmpty()) {
+        return texture;
+    }
+
+    const int width = static_cast<int>(gray.width());
+    const int height = static_cast<int>(gray.height());
+    if (width <= 0 || height <= 0) {
+        return texture;
+    }
+
+    texture.width = width;
+    texture.height = height;
+    texture.pixels = std::make_shared<std::vector<uint8_t>>();
+    texture.pixels->resize(static_cast<std::size_t>(width * height));
+    for (int row = 0; row < height; ++row) {
+        for (int col = 0; col < width; ++col) {
+            (*texture.pixels)[static_cast<std::size_t>(row * width + col)] = gray.at(row, col).gray;
+        }
+    }
+    return texture;
 }
 
 }  // namespace
@@ -365,6 +392,7 @@ void MechEyeWorker::performCapture(const scan_tracking::mech_eye::CaptureRequest
                 static_cast<unsigned int>(normalized.timeoutMs));
             if (status.isOK()) {
                 result.pointCloud = buildPointCloud2DAnd3D(frame2DAnd3D);
+                result.texture2D = ConvertGrayTextureFrame(frame2DAnd3D.frame2D());
                 // 使用 SDK 内置方法保存纹理点云到文件
                 const QString saveDir = QCoreApplication::applicationDirPath() + QStringLiteral("/Mech-Pictures");
                 QDir().mkpath(saveDir);
