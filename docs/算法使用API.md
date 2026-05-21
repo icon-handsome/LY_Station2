@@ -544,12 +544,24 @@ CMake 中 `SCAN_TRACKING_SHOW_EIGEN_IN_IDE` / `SCAN_TRACKING_SHOW_MECHEYE_SDK_IN
 | `config.ini` `[LbnPose]` | `enabled=true`，`templateFile` 指向上述 txt | 配置 | 推荐 |
 | 海康双目图 | Mono8 左右图 | LB 双目 | 测 LB 时需要；**测 LBN 可不要** |
 
+**离线工具 `scan_tracking_lbn_offline_runner`（已实现）**：
+
+可执行文件：`build/win-msvc2019-qtcore-ninja-debug/modules/vision/scan_tracking_lbn_offline_runner.exe`  
+运行前将 `C:\Qt\5.15.2\msvc2019_64\bin` 与 `third_party/LB/.../opencv/build/x64/vc15/bin` 加入 `PATH`。
+
+```text
+scan_tracking_lbn_offline_runner.exe --group testdata/group1
+scan_tracking_lbn_offline_runner.exe -i texture.jpg -p textured.ply
+```
+
+- 纹理图自动缩放到点云网格（如 1707×1280 → 2400×1800）。
+- 退出码：`0` 成功；`5` 表示 LBN 匹配失败但调用链正常。
+
 **建议测试步骤（无相机）**：
 
-1. 确认 Debug 构建：`build/win-msvc2019-qtcore-ninja-debug/app/scan-tracking.exe`。
-2. 若有工厂导出的 **一对** 纹理图 + 对齐点云：写入临时目录，用 HMI `captureBundle` 或后续 offline runner 喂给 adapter（runner 待 §14.6）。
-3. 无点云时：至少用 `third_party/LBN/main.cpp` + 模板验证 GeoHash 能否加载（不覆盖 IPC 适配层）。
-4. 有模拟数据时：PLC/HMI 触发 `Trig_ScanSegment`，`segmentIndex=1`（外圈起点，`needRotation=true`），看日志 `[LBN位姿]`、`LBN calibration updated T0'`。
+1. 构建并运行 `scan_tracking_lbn_offline_runner --group testdata/group1`（读 PLY 约 30s）。
+2. 若 `success=0` 但日志有 `Count of 2D marker centers`，说明加载与 adapter 正常，失败在 GeoHash 匹配。
+3. 有相机后再测 `scan-tracking.exe` + `segmentIndex=1`。
 
 **segmentIndex 与配置对应**（`scan_paths_config.json` 路径 1）：
 

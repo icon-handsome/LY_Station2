@@ -146,3 +146,30 @@ if(SCAN_TRACKING_ENABLE_LANYOU_DETECTION)
         FOLDER "tests"
     )
 endif()
+
+if(SCAN_TRACKING_ENABLE_LBN_POSE_DETECTION)
+    add_executable(scan_tracking_lbn_offline_runner
+        tests/lbn_offline_runner.cpp
+    )
+
+    target_include_directories(scan_tracking_lbn_offline_runner
+        PRIVATE
+            ${CMAKE_SOURCE_DIR}/third_party/LBN
+            ${CMAKE_SOURCE_DIR}/third_party/LB/opencv-3.4.3-vc14_vc15/opencv/build/include
+    )
+
+    target_link_libraries(scan_tracking_lbn_offline_runner
+        PRIVATE
+            Qt5::Core
+            scan_tracking_vision
+            LbnPose::lbn_pose
+    )
+
+    if(MSVC)
+        target_link_options(scan_tracking_lbn_offline_runner PRIVATE /STACK:268435456)
+    endif()
+
+    set_target_properties(scan_tracking_lbn_offline_runner PROPERTIES
+        FOLDER "tests"
+    )
+endif()
