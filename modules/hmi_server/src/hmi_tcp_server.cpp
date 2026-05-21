@@ -173,34 +173,34 @@ void HmiTcpServer::onSessionHeartbeatTimeout()
 void HmiTcpServer::initializeMessageHandlers()
 {
     // 连接管理消息
-    m_messageHandlers[QString::fromLatin1(msg_type::kHmiHello)]       = &HmiTcpServer::handleHmiHello;
-    m_messageHandlers[QString::fromLatin1(msg_type::kHeartbeatPing)]  = &HmiTcpServer::handleHeartbeatPing;
-    m_messageHandlers[QString::fromLatin1(msg_type::kHeartbeatPong)]  = &HmiTcpServer::handleHeartbeatPong;
+    m_messageHandlers[QString::fromLatin1(msg_type::kHmiHello)]       = &HmiTcpServer::handleHmiHello;  // 欢迎消息
+    m_messageHandlers[QString::fromLatin1(msg_type::kHeartbeatPing)]  = &HmiTcpServer::handleHeartbeatPing;  // 心跳请求
+    m_messageHandlers[QString::fromLatin1(msg_type::kHeartbeatPong)]  = &HmiTcpServer::handleHeartbeatPong;  // 心跳响应
     
     // 基础控制命令
-    m_messageHandlers[QString::fromLatin1(msg_type::kCmdStart)]       = &HmiTcpServer::handleCmdStart;
-    m_messageHandlers[QString::fromLatin1(msg_type::kCmdStop)]        = &HmiTcpServer::handleCmdStop;
-    m_messageHandlers[QString::fromLatin1(msg_type::kCmdReset)]       = &HmiTcpServer::handleCmdReset;
-    m_messageHandlers[QString::fromLatin1(msg_type::kCmdClearAlarm)]  = &HmiTcpServer::handleCmdClearAlarm;
-    m_messageHandlers[QString::fromLatin1(msg_type::kCmdGetStatus)]   = &HmiTcpServer::handleCmdGetStatus;
-    m_messageHandlers[QString::fromLatin1(msg_type::kCmdGetConfig)]   = &HmiTcpServer::handleCmdGetConfig;
+    m_messageHandlers[QString::fromLatin1(msg_type::kCmdStart)]       = &HmiTcpServer::handleCmdStart;  // 启动
+    m_messageHandlers[QString::fromLatin1(msg_type::kCmdStop)]        = &HmiTcpServer::handleCmdStop;  // 停止
+    m_messageHandlers[QString::fromLatin1(msg_type::kCmdReset)]       = &HmiTcpServer::handleCmdReset;  // 复位
+    m_messageHandlers[QString::fromLatin1(msg_type::kCmdClearAlarm)]  = &HmiTcpServer::handleCmdClearAlarm;  // 清除报警
+    m_messageHandlers[QString::fromLatin1(msg_type::kCmdGetStatus)]   = &HmiTcpServer::handleCmdGetStatus;  // 获取状态
+    m_messageHandlers[QString::fromLatin1(msg_type::kCmdGetConfig)]   = &HmiTcpServer::handleCmdGetConfig;  // 获取配置
     
     // Modbus 控制命令
-    m_messageHandlers[QString::fromLatin1(msg_type::kCmdModbusConnect)]    = &HmiTcpServer::handleCmdModbusConnect;
-    m_messageHandlers[QString::fromLatin1(msg_type::kCmdModbusDisconnect)] = &HmiTcpServer::handleCmdModbusDisconnect;
+    m_messageHandlers[QString::fromLatin1(msg_type::kCmdModbusConnect)]    = &HmiTcpServer::handleCmdModbusConnect;  // 连接 Modbus
+    m_messageHandlers[QString::fromLatin1(msg_type::kCmdModbusDisconnect)] = &HmiTcpServer::handleCmdModbusDisconnect;  // 断开 Modbus
     
     // 相机控制命令
-    m_messageHandlers[QString::fromLatin1(msg_type::kCmdRefreshCamera)]    = &HmiTcpServer::handleCmdRefreshCamera;
-    m_messageHandlers[QString::fromLatin1(msg_type::kCmdCaptureMechEye)]   = &HmiTcpServer::handleCmdCaptureMechEye;
-    m_messageHandlers[QString::fromLatin1(msg_type::kCmdCaptureBundle)]    = &HmiTcpServer::handleCmdCaptureBundle;
+    m_messageHandlers[QString::fromLatin1(msg_type::kCmdRefreshCamera)]    = &HmiTcpServer::handleCmdRefreshCamera;  // 刷新相机
+    m_messageHandlers[QString::fromLatin1(msg_type::kCmdCaptureMechEye)]   = &HmiTcpServer::handleCmdCaptureMechEye;  // 捕获 MechEye
+    m_messageHandlers[QString::fromLatin1(msg_type::kCmdCaptureBundle)]    = &HmiTcpServer::handleCmdCaptureBundle;  // 捕获 Bundle
     
     // 直接触发命令（占位实现）
-    m_messageHandlers[QString::fromLatin1(msg_type::kCmdTriggerScan)]         = &HmiTcpServer::handleCmdTriggerScan;
-    m_messageHandlers[QString::fromLatin1(msg_type::kCmdTriggerInspection)]   = &HmiTcpServer::handleCmdTriggerInspection;
-    m_messageHandlers[QString::fromLatin1(msg_type::kCmdTriggerSelfCheck)]    = &HmiTcpServer::handleCmdTriggerSelfCheck;
-    m_messageHandlers[QString::fromLatin1(msg_type::kCmdTriggerPoseCheck)]    = &HmiTcpServer::handleCmdTriggerPoseCheck;
-    m_messageHandlers[QString::fromLatin1(msg_type::kCmdTriggerCodeRead)]     = &HmiTcpServer::handleCmdTriggerCodeRead;
-    m_messageHandlers[QString::fromLatin1(msg_type::kCmdTriggerResultReset)]  = &HmiTcpServer::handleCmdTriggerResultReset;
+    m_messageHandlers[QString::fromLatin1(msg_type::kCmdTriggerScan)]         = &HmiTcpServer::handleCmdTriggerScan;  // 触发扫描
+    m_messageHandlers[QString::fromLatin1(msg_type::kCmdTriggerInspection)]   = &HmiTcpServer::handleCmdTriggerInspection;  // 触发综合检测
+    m_messageHandlers[QString::fromLatin1(msg_type::kCmdTriggerSelfCheck)]    = &HmiTcpServer::handleCmdTriggerSelfCheck;  // 触发自检
+    m_messageHandlers[QString::fromLatin1(msg_type::kCmdTriggerPoseCheck)]    = &HmiTcpServer::handleCmdTriggerPoseCheck;  // 触发位姿校验
+    m_messageHandlers[QString::fromLatin1(msg_type::kCmdTriggerCodeRead)]     = &HmiTcpServer::handleCmdTriggerCodeRead;  // 触发条码读取
+    m_messageHandlers[QString::fromLatin1(msg_type::kCmdTriggerResultReset)]  = &HmiTcpServer::handleCmdTriggerResultReset;  // 触发结果复位
 }
 
 // 处理接收到的客户端消息，根据 type 字段分发到不同的处理函数
@@ -211,7 +211,8 @@ void HmiTcpServer::onMessageReceived(const QJsonObject& message)
     const QString msgId = message.value(QLatin1String("msgId")).toString();
     
     // [TCPIP关键打印] 将收到的完整 JSON 序列化为字符串，用于存档和追溯
-    QByteArray rawJson = QJsonDocument(message).toJson(QJsonDocument::Compact);
+    const QString rawJson = frameJsonToLogString(
+        QJsonDocument(message).toJson(QJsonDocument::Compact));
     
     // 区分高频消息和关键消息的日志级别
     if (type == QLatin1String(msg_type::kHeartbeatPing) || type == QLatin1String(msg_type::kHeartbeatPong)) {
@@ -242,7 +243,7 @@ void HmiTcpServer::onStatusPushTimer()
     if (!hasClient()) return;
     pushSystemStatus();
     pushPlcStatus();
-    pushCameraStatus();
+    pushCameraStatus(); 
     pushDeviceStatus();  // 周期性推送设备在线状态字和故障状态字
 }
 
@@ -268,7 +269,7 @@ void HmiTcpServer::handleHeartbeatPing(const QJsonObject& message)
     envelope[QStringLiteral("version")]   = QLatin1String(kProtocolVersion);
     envelope[QStringLiteral("msgId")]     = msgId;
     envelope[QStringLiteral("type")]      = QLatin1String(msg_type::kHeartbeatPong);
-    envelope[QStringLiteral("timestamp")] = QDateTime::currentMSecsSinceEpoch();
+    envelope[QStringLiteral("timestamp")] = QDateTime::currentMSecsSinceEpoch();    
     envelope[QStringLiteral("payload")]   = QJsonObject();
     sendToClient(envelope);
 }
@@ -348,83 +349,83 @@ void HmiTcpServer::handleCmdGetConfig(const QJsonObject& message)
     
     // 1. App 配置
     QJsonObject appObj;
-    appObj[QLatin1String("version")] = cfgMgr->appConfig().version;
-    appObj[QLatin1String("environment")] = cfgMgr->appConfig().environment;
-    configPayload[QLatin1String("app")] = appObj;
+    appObj[QLatin1String("version")] = cfgMgr->appConfig().version; // 版本号
+    appObj[QLatin1String("environment")] = cfgMgr->appConfig().environment; // 环境
+    configPayload[QLatin1String("app")] = appObj; 
     
     // 2. Logger 配置
     QJsonObject loggerObj;
-    loggerObj[QLatin1String("level")] = cfgMgr->loggerConfig().level;
-    loggerObj[QLatin1String("rotateDays")] = cfgMgr->loggerConfig().rotateDays;
+    loggerObj[QLatin1String("level")] = cfgMgr->loggerConfig().level; // 日志级别
+    loggerObj[QLatin1String("rotateDays")] = cfgMgr->loggerConfig().rotateDays; // 日志滚动天数
     configPayload[QLatin1String("logger")] = loggerObj;
     
     // 3. Modbus 配置
     QJsonObject modbusObj;
-    modbusObj[QLatin1String("host")] = cfgMgr->modbusConfig().host;
-    modbusObj[QLatin1String("port")] = cfgMgr->modbusConfig().port;
-    modbusObj[QLatin1String("unitId")] = cfgMgr->modbusConfig().unitId;
-    modbusObj[QLatin1String("timeoutMs")] = cfgMgr->modbusConfig().timeoutMs;
-    modbusObj[QLatin1String("reconnectIntervalMs")] = cfgMgr->modbusConfig().reconnectIntervalMs;
+    modbusObj[QLatin1String("host")] = cfgMgr->modbusConfig().host; // 主机
+    modbusObj[QLatin1String("port")] = cfgMgr->modbusConfig().port; // 端口
+    modbusObj[QLatin1String("unitId")] = cfgMgr->modbusConfig().unitId; // 单元 ID
+    modbusObj[QLatin1String("timeoutMs")] = cfgMgr->modbusConfig().timeoutMs; // 超时时间
+    modbusObj[QLatin1String("reconnectIntervalMs")] = cfgMgr->modbusConfig().reconnectIntervalMs; // 重连间隔
     configPayload[QLatin1String("modbus")] = modbusObj;
     
     // 4. Camera 配置
     QJsonObject cameraObj;
-    cameraObj[QLatin1String("defaultCamera")] = cfgMgr->cameraConfig().defaultCamera;
-    cameraObj[QLatin1String("scanTimeoutMs")] = cfgMgr->cameraConfig().scanTimeoutMs;
+    cameraObj[QLatin1String("defaultCamera")] = cfgMgr->cameraConfig().defaultCamera; // 默认相机
+    cameraObj[QLatin1String("scanTimeoutMs")] = cfgMgr->cameraConfig().scanTimeoutMs; // 扫描超时时间
     configPayload[QLatin1String("camera")] = cameraObj;
     
     // 5. Vision 配置
     QJsonObject visionObj;
-    visionObj[QLatin1String("mechEyeCameraKey")] = cfgMgr->visionConfig().mechEyeCameraKey;
-    visionObj[QLatin1String("mechCaptureTimeoutMs")] = cfgMgr->visionConfig().mechCaptureTimeoutMs;
-    visionObj[QLatin1String("hikConnectTimeoutMs")] = cfgMgr->visionConfig().hikConnectTimeoutMs;
-    visionObj[QLatin1String("hikCaptureTimeoutMs")] = cfgMgr->visionConfig().hikCaptureTimeoutMs;
-    visionObj[QLatin1String("hikSdkRoot")] = cfgMgr->visionConfig().hikSdkRoot;
-    
+    visionObj[QLatin1String("mechEyeCameraKey")] = cfgMgr->visionConfig().mechEyeCameraKey; // MechEye 相机键
+    visionObj[QLatin1String("mechCaptureTimeoutMs")] = cfgMgr->visionConfig().mechCaptureTimeoutMs; // MechEye 捕获超时时间
+    visionObj[QLatin1String("hikConnectTimeoutMs")] = cfgMgr->visionConfig().hikConnectTimeoutMs; // Hik 连接超时时间
+    visionObj[QLatin1String("hikCaptureTimeoutMs")] = cfgMgr->visionConfig().hikCaptureTimeoutMs; // Hik 捕获超时时间
+    visionObj[QLatin1String("hikSdkRoot")] = cfgMgr->visionConfig().hikSdkRoot; // Hik SDK 根目录
+
     QJsonObject hikAObj;
-    hikAObj[QLatin1String("logicalName")] = cfgMgr->visionConfig().hikCameraA.logicalName;
-    hikAObj[QLatin1String("cameraKey")] = cfgMgr->visionConfig().hikCameraA.cameraKey;
-    hikAObj[QLatin1String("ipAddress")] = cfgMgr->visionConfig().hikCameraA.ipAddress;
-    hikAObj[QLatin1String("serialNumber")] = cfgMgr->visionConfig().hikCameraA.serialNumber;
+    hikAObj[QLatin1String("logicalName")] = cfgMgr->visionConfig().hikCameraA.logicalName; // 逻辑名称
+    hikAObj[QLatin1String("cameraKey")] = cfgMgr->visionConfig().hikCameraA.cameraKey; // 相机键
+    hikAObj[QLatin1String("ipAddress")] = cfgMgr->visionConfig().hikCameraA.ipAddress; // IP 地址
+    hikAObj[QLatin1String("serialNumber")] = cfgMgr->visionConfig().hikCameraA.serialNumber; // 序列号
     visionObj[QLatin1String("hikCameraA")] = hikAObj;
     
     QJsonObject hikBObj;
-    hikBObj[QLatin1String("logicalName")] = cfgMgr->visionConfig().hikCameraB.logicalName;
-    hikBObj[QLatin1String("cameraKey")] = cfgMgr->visionConfig().hikCameraB.cameraKey;
-    hikBObj[QLatin1String("ipAddress")] = cfgMgr->visionConfig().hikCameraB.ipAddress;
-    hikBObj[QLatin1String("serialNumber")] = cfgMgr->visionConfig().hikCameraB.serialNumber;
+    hikBObj[QLatin1String("logicalName")] = cfgMgr->visionConfig().hikCameraB.logicalName; // 逻辑名称
+    hikBObj[QLatin1String("cameraKey")] = cfgMgr->visionConfig().hikCameraB.cameraKey; // 相机键
+    hikBObj[QLatin1String("ipAddress")] = cfgMgr->visionConfig().hikCameraB.ipAddress; // IP 地址
+    hikBObj[QLatin1String("serialNumber")] = cfgMgr->visionConfig().hikCameraB.serialNumber; // 序列号
     visionObj[QLatin1String("hikCameraB")] = hikBObj;
     
     configPayload[QLatin1String("vision")] = visionObj;
     
     // 6. FlowControl 配置
     QJsonObject flowControlObj;
-    flowControlObj[QLatin1String("pollIntervalMs")] = cfgMgr->flowControlConfig().pollIntervalMs;
-    flowControlObj[QLatin1String("heartbeatIntervalMs")] = cfgMgr->flowControlConfig().heartbeatIntervalMs;
-    flowControlObj[QLatin1String("simulatedProcessingMs")] = cfgMgr->flowControlConfig().simulatedProcessingMs;
+    flowControlObj[QLatin1String("pollIntervalMs")] = cfgMgr->flowControlConfig().pollIntervalMs; // 轮询间隔
+    flowControlObj[QLatin1String("heartbeatIntervalMs")] = cfgMgr->flowControlConfig().heartbeatIntervalMs; // 心跳间隔
+    flowControlObj[QLatin1String("simulatedProcessingMs")] = cfgMgr->flowControlConfig().simulatedProcessingMs; // 模拟处理间隔
     configPayload[QLatin1String("flowControl")] = flowControlObj;
     
     // 7. Tracking 配置
     QJsonObject trackingObj;
-    trackingObj[QLatin1String("firstStationOuterSegmentIndex")] = cfgMgr->trackingConfig().firstStationOuterSegmentIndex;
-    trackingObj[QLatin1String("firstStationInnerSegmentIndex")] = cfgMgr->trackingConfig().firstStationInnerSegmentIndex;
-    trackingObj[QLatin1String("firstStationHoleSegmentIndex")] = cfgMgr->trackingConfig().firstStationHoleSegmentIndex;
+    trackingObj[QLatin1String("firstStationOuterSegmentIndex")] = cfgMgr->trackingConfig().firstStationOuterSegmentIndex; // 外表面段号
+    trackingObj[QLatin1String("firstStationInnerSegmentIndex")] = cfgMgr->trackingConfig().firstStationInnerSegmentIndex; // 内表面段号
+    trackingObj[QLatin1String("firstStationHoleSegmentIndex")] = cfgMgr->trackingConfig().firstStationHoleSegmentIndex; // 开孔段号
     configPayload[QLatin1String("tracking")] = trackingObj;
     
     // 8. LbPose 配置
     QJsonObject lbPoseObj;
-    lbPoseObj[QLatin1String("dataRoot")] = cfgMgr->lbPoseConfig().dataRoot;
-    lbPoseObj[QLatin1String("leftPattern")] = cfgMgr->lbPoseConfig().leftPattern;
-    lbPoseObj[QLatin1String("rightPattern")] = cfgMgr->lbPoseConfig().rightPattern;
-    lbPoseObj[QLatin1String("templateFile")] = cfgMgr->lbPoseConfig().templateFile;
-    lbPoseObj[QLatin1String("minDistance")] = static_cast<double>(cfgMgr->lbPoseConfig().minDistance);
-    lbPoseObj[QLatin1String("maxDistance")] = static_cast<double>(cfgMgr->lbPoseConfig().maxDistance);
-    lbPoseObj[QLatin1String("cosTolerance")] = static_cast<double>(cfgMgr->lbPoseConfig().cosTolerance);
-    lbPoseObj[QLatin1String("minPercent")] = static_cast<double>(cfgMgr->lbPoseConfig().minPercent);
+    lbPoseObj[QLatin1String("dataRoot")] = cfgMgr->lbPoseConfig().dataRoot; // 数据根目录
+    lbPoseObj[QLatin1String("leftPattern")] = cfgMgr->lbPoseConfig().leftPattern; // 左模板文件
+    lbPoseObj[QLatin1String("rightPattern")] = cfgMgr->lbPoseConfig().rightPattern; // 右模板文件
+    lbPoseObj[QLatin1String("templateFile")] = cfgMgr->lbPoseConfig().templateFile; // 模板文件
+    lbPoseObj[QLatin1String("minDistance")] = static_cast<double>(cfgMgr->lbPoseConfig().minDistance); // 最小距离
+    lbPoseObj[QLatin1String("maxDistance")] = static_cast<double>(cfgMgr->lbPoseConfig().maxDistance); // 最大距离
+    lbPoseObj[QLatin1String("cosTolerance")] = static_cast<double>(cfgMgr->lbPoseConfig().cosTolerance); // 余弦误差
+    lbPoseObj[QLatin1String("minPercent")] = static_cast<double>(cfgMgr->lbPoseConfig().minPercent); // 最小百分比
     configPayload[QLatin1String("lbPose")] = lbPoseObj;
     
     // 构建响应
-    QJsonObject payload = buildResponsePayload(true, QStringLiteral("配置已获取"));
+    QJsonObject payload = buildResponsePayload(true, QStringLiteral("配置已获取")); // 构建响应Payload
     payload[QLatin1String("config")] = configPayload;
     
     QJsonObject envelope;
@@ -939,7 +940,11 @@ void HmiTcpServer::installLogForwarder()
     
     // 拦截全局 Qt 日志输出，并保存原有处理器以支持链式调用
     s_previousHandler = qInstallMessageHandler([](QtMsgType type, const QMessageLogContext& context, const QString& msg) {
-        if (s_instance && s_instance->hasClient()) {
+        const QString category = QString::fromLatin1(context.category ? context.category : "default");
+        // 会话层协议错误仅记录本地日志，不转发到显控，避免干扰排查且减少断连时的日志风暴
+        const bool skipRemoteForward = (category == QLatin1String("hmi.session"));
+
+        if (s_instance && s_instance->hasClient() && !skipRemoteForward) {
             QJsonObject payload;
             int severity = 0;
             switch (type) {
@@ -950,7 +955,7 @@ void HmiTcpServer::installLogForwarder()
             case QtFatalMsg: severity = 4; break;
             }
             payload[QLatin1String("severity")] = severity;
-            payload[QLatin1String("category")] = QString::fromLatin1(context.category ? context.category : "default");
+            payload[QLatin1String("category")] = category;
             payload[QLatin1String("message")] = msg;
             payload[QLatin1String("file")] = QString::fromLatin1(context.file ? context.file : "");
             payload[QLatin1String("line")] = context.line;
@@ -981,7 +986,8 @@ void HmiTcpServer::sendToClient(const QJsonObject& envelope)
 {
     if (m_session) {
         // [TCPIP关键打印] 将发送的完整 JSON 序列化为单行字符串，用于存档
-        QByteArray rawJson = QJsonDocument(envelope).toJson(QJsonDocument::Compact);
+        const QString rawJson = frameJsonToLogString(
+            QJsonDocument(envelope).toJson(QJsonDocument::Compact));
         QString type = envelope.value(QLatin1String("type")).toString();
         
         // 区分高频消息和关键消息：

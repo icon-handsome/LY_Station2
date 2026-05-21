@@ -106,5 +106,10 @@ QJsonObject buildResponsePayload(bool success, const QString& message);
  */
 QByteArray serializeFrame(const QJsonObject& envelope);
 
+/**
+ * @brief 将协议 JSON 的 UTF-8 字节转为可安全写入日志的 QString（避免 QDebug 把 QByteArray 当 Latin-1 显示乱码）
+ */
+QString frameJsonToLogString(const QByteArray& jsonUtf8);
+
 }  // namespace hmi_server
 }  // namespace scan_tracking

@@ -133,10 +133,13 @@ void Logger::log(QtMsgType type, const QMessageLogContext& context, const QStrin
         stream.flush();
     }
 
+    const QByteArray utf8Line = formatted_message.toUtf8() + '\n';
     if (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg) {
-        std::cerr << formatted_message.toStdString() << std::endl;
+        std::cerr.write(utf8Line.constData(), utf8Line.size());
+        std::cerr.flush();
     } else {
-        std::cout << formatted_message.toStdString() << std::endl;
+        std::cout.write(utf8Line.constData(), utf8Line.size());
+        std::cout.flush();
     }
 }
 

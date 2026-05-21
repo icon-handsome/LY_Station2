@@ -7,9 +7,12 @@
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
+#include <QtCore/QFileInfo>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <iomanip>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -18,6 +21,8 @@ namespace {
 
 struct OrganizedCloudLoadResult {
     scan_tracking::mech_eye::PointCloudFrame frame;
+    scan_tracking::mech_eye::GrayTextureFrame texture;
+    bool textureFromPly = false;
     int validPoints = 0;
     int nanPoints = 0;
     QString error;
@@ -54,7 +59,37 @@ bool parseOrganizedDimensions(int vertexCount, int& width, int& height)
     return false;
 }
 
-OrganizedCloudLoadResult loadOrganizedAsciiPly(const QString& plyPath, int forcedWidth, int forcedHeight)
+bool plyHeaderHasVertexColor(const QString& plyPath)
+{
+    QFile file(plyPath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return false;
+    }
+
+    while (!file.atEnd()) {
+        const QString line = QString::fromUtf8(file.readLine()).trimmed().toLower();
+        if (line == QStringLiteral("end_header")) {
+            break;
+        }
+        if (line.contains(QStringLiteral("property uchar red")) ||
+            line.contains(QStringLiteral("property uchar green"))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+uint8_t rgbToGray(int red, int green, int blue)
+{
+    const int gray = (299 * red + 587 * green + 114 * blue + 500) / 1000;
+    return static_cast<uint8_t>(std::max(0, std::min(gray, 255)));
+}
+
+OrganizedCloudLoadResult loadOrganizedAsciiPly(
+    const QString& plyPath,
+    int forcedWidth,
+    int forcedHeight,
+    bool extractGrayTexture)
 {
     OrganizedCloudLoadResult result;
     QFile file(plyPath);
@@ -95,7 +130,18 @@ OrganizedCloudLoadResult loadOrganizedAsciiPly(const QString& plyPath, int force
         return result;
     }
 
+    if (extractGrayTexture && !plyHeaderHasVertexColor(plyPath)) {
+        result.error = QStringLiteral("PLY 无顶点颜色属性，无法 --texture-from-ply");
+        return result;
+    }
+
     auto points = std::make_shared<std::vector<float>>(static_cast<std::size_t>(vertexCount) * 3U, 0.0f);
+    std::shared_ptr<std::vector<uint8_t>> grayPixels;
+    if (extractGrayTexture) {
+        grayPixels = std::make_shared<std::vector<uint8_t>>(static_cast<std::size_t>(vertexCount), 0U);
+        result.textureFromPly = true;
+    }
+
     int index = 0;
     while (!file.atEnd() && index < vertexCount) {
         const QString line = QString::fromUtf8(file.readLine()).trimmed();
@@ -130,6 +176,18 @@ OrganizedCloudLoadResult loadOrganizedAsciiPly(const QString& plyPath, int force
             ++result.nanPoints;
         }
 
+        if (grayPixels && parts.size() >= 6) {
+            bool okR = false;
+            bool okG = false;
+            bool okB = false;
+            const int red = parts[3].toInt(&okR);
+            const int green = parts[4].toInt(&okG);
+            const int blue = parts[5].toInt(&okB);
+            if (okR && okG && okB) {
+                (*grayPixels)[static_cast<std::size_t>(index)] = rgbToGray(red, green, blue);
+            }
+        }
+
         ++index;
         if (index % 500000 == 0) {
             std::cout << "  PLY 已读取 " << index << " / " << vertexCount << " 点\n";
@@ -146,6 +204,16 @@ OrganizedCloudLoadResult loadOrganizedAsciiPly(const QString& plyPath, int force
     result.frame.height = height;
     result.frame.pointCount = vertexCount;
     result.frame.frameId = 1;
+
+    if (grayPixels) {
+        result.texture.width = width;
+        result.texture.height = height;
+        result.texture.pixels = std::move(grayPixels);
+        if (!result.texture.isValid()) {
+            result.error = QStringLiteral("PLY 顶点灰度纹理无效");
+        }
+    }
+
     return result;
 }
 
@@ -200,13 +268,30 @@ bool loadGrayTextureResized(
     return texture.isValid();
 }
 
+QString repoRootFromCwd()
+{
+    QDir dir(QDir::currentPath());
+    for (int depth = 0; depth < 6; ++depth) {
+        if (QFileInfo::exists(dir.filePath(QStringLiteral("CMakeLists.txt"))) &&
+            QDir(dir.filePath(QStringLiteral("third_party/LBN/data"))).exists()) {
+            return dir.absolutePath();
+        }
+        if (!dir.cdUp()) {
+            break;
+        }
+    }
+    return QDir::currentPath();
+}
+
 scan_tracking::common::LbnPoseConfig defaultLbnConfig()
 {
+    const QString root = repoRootFromCwd();
+    const QString dataRoot = QDir(root).filePath(QStringLiteral("third_party/LBN/data"));
+
     scan_tracking::common::LbnPoseConfig config;
     config.enabled = true;
-    config.dataRoot = QStringLiteral("D:/work/LY/IPC-192.168.110.173_track-main/third_party/LBN/data");
-    config.templateFile =
-        QStringLiteral("D:/work/LY/IPC-192.168.110.173_track-main/third_party/LBN/data/template-3D-ALL-Shift-Cut-Cut.txt");
+    config.dataRoot = dataRoot;
+    config.templateFile = QDir(dataRoot).filePath(QStringLiteral("template-3D-ALL-Shift-Cut-Cut.txt"));
     config.minDistance = 30.0f;
     config.maxDistance = 650.0f;
     config.cosTolerance = 0.015f;
@@ -215,7 +300,12 @@ scan_tracking::common::LbnPoseConfig defaultLbnConfig()
     return config;
 }
 
-bool resolveGroupFiles(const QString& groupDir, QString& imagePath, QString& plyPath, QString& error)
+bool resolveGroupFiles(
+    const QString& groupDir,
+    QString& imagePath,
+    QString& plyPath,
+    bool textureFromPly,
+    QString& error)
 {
     QDir dir(groupDir);
     if (!dir.exists()) {
@@ -223,14 +313,12 @@ bool resolveGroupFiles(const QString& groupDir, QString& imagePath, QString& ply
         return false;
     }
 
-    const auto jpgs = dir.entryList(QStringList() << "*.jpg" << "*.jpeg" << "*.png", QDir::Files);
     const auto plys = dir.entryList(QStringList() << "*.ply", QDir::Files);
-    if (jpgs.isEmpty() || plys.isEmpty()) {
-        error = QStringLiteral("目录内需要 1 张图像和 1 个 PLY: %1").arg(groupDir);
+    if (plys.isEmpty()) {
+        error = QStringLiteral("目录内需要 1 个 PLY: %1").arg(groupDir);
         return false;
     }
 
-    imagePath = dir.filePath(jpgs.front());
     QString texturedPly;
     for (const QString& name : plys) {
         if (name.contains(QStringLiteral("textured"), Qt::CaseInsensitive)) {
@@ -239,6 +327,19 @@ bool resolveGroupFiles(const QString& groupDir, QString& imagePath, QString& ply
         }
     }
     plyPath = texturedPly.isEmpty() ? dir.filePath(plys.front()) : texturedPly;
+
+    if (textureFromPly) {
+        imagePath.clear();
+        return true;
+    }
+
+    const auto jpgs = dir.entryList(QStringList() << "*.jpg" << "*.jpeg" << "*.png", QDir::Files);
+    if (jpgs.isEmpty()) {
+        error = QStringLiteral("目录内需要 1 张图像和 1 个 PLY（或使用 --texture-from-ply）: %1").arg(groupDir);
+        return false;
+    }
+
+    imagePath = dir.filePath(jpgs.front());
     return true;
 }
 
@@ -253,6 +354,24 @@ void printPoseMatrix(const scan_tracking::vision::PoseMatrix4x4& pose)
     }
 }
 
+void printMarkerDebug(const scan_tracking::vision::LbnPoseMarkerDebug& debug)
+{
+    std::cout << std::fixed << std::setprecision(2);
+    std::cout << "2D 圆心数量: " << debug.centers2dCount << '\n';
+    const int count2d = std::min(debug.centers2dCount, 32);
+    for (int i = 0; i < count2d; ++i) {
+        std::cout << "  2D[" << i << "] u=" << debug.centers2dU[i] << " v=" << debug.centers2dV[i] << '\n';
+    }
+
+    std::cout << "3D 提升数量: " << debug.centers3dCount << '\n';
+    const int count3d = std::min(debug.centers3dCount, 32);
+    for (int i = 0; i < count3d; ++i) {
+        std::cout << "  3D[" << i << "] x=" << debug.centers3dX[i] << " y=" << debug.centers3dY[i]
+                  << " z=" << debug.centers3dZ[i] << '\n';
+    }
+    std::cout.unsetf(std::ios::floatfield);
+}
+
 }  // namespace
 
 int main(int argc, char* argv[])
@@ -261,7 +380,8 @@ int main(int argc, char* argv[])
     QCoreApplication::setApplicationName(QStringLiteral("scan_tracking_lbn_offline_runner"));
 
     QCommandLineParser parser;
-    parser.setApplicationDescription(QStringLiteral("离线加载 Mech-Eye 纹理图 + 组织化 PLY，调用 LBN 位姿检测"));
+    parser.setApplicationDescription(
+        QStringLiteral("离线加载 Mech-Eye 纹理图 + 组织化 PLY，调用 LBN 位姿检测"));
     parser.addHelpOption();
 
     QCommandLineOption groupOption(
@@ -288,6 +408,9 @@ int main(int argc, char* argv[])
                       << "template",
         QStringLiteral("GeoHash 模板文件"),
         QStringLiteral("path"));
+    QCommandLineOption textureFromPlyOption(
+        QStringList() << "texture-from-ply",
+        QStringLiteral("从 PLY 顶点 RGB 生成与点云同网格的灰度纹理（推荐，避免 jpg 缩放错位）"));
 
     parser.addOption(groupOption);
     parser.addOption(imageOption);
@@ -295,16 +418,19 @@ int main(int argc, char* argv[])
     parser.addOption(cloudWidthOption);
     parser.addOption(cloudHeightOption);
     parser.addOption(templateOption);
+    parser.addOption(textureFromPlyOption);
     parser.addPositionalArgument(
         QStringLiteral("files"),
         QStringLiteral("可选: <image> <ply>（未使用 --group 时）"));
     parser.process(app);
 
+    const bool textureFromPly = parser.isSet(textureFromPlyOption);
+
     QString imagePath = parser.value(imageOption);
     QString plyPath = parser.value(plyOption);
     if (parser.isSet(groupOption)) {
         QString error;
-        if (!resolveGroupFiles(parser.value(groupOption), imagePath, plyPath, error)) {
+        if (!resolveGroupFiles(parser.value(groupOption), imagePath, plyPath, textureFromPly, error)) {
             std::cerr << error.toStdString() << '\n';
             return 2;
         }
@@ -318,20 +444,29 @@ int main(int argc, char* argv[])
         }
     }
 
-    if (imagePath.isEmpty() || plyPath.isEmpty()) {
+    if (plyPath.isEmpty()) {
         std::cerr << "用法:\n"
-                  << "  scan_tracking_lbn_offline_runner --group testdata/group1\n"
-                  << "  scan_tracking_lbn_offline_runner -i texture.jpg -p cloud.ply\n";
+                  << "  scan_tracking_lbn_offline_runner --group testdata/group1 --texture-from-ply\n"
+                  << "  scan_tracking_lbn_offline_runner -i texture.jpg -p cloud.ply\n"
+                  << "  scan_tracking_lbn_offline_runner -p cloud.ply --texture-from-ply\n";
+        return 2;
+    }
+
+    if (!textureFromPly && imagePath.isEmpty()) {
+        std::cerr << "请指定 -i 图像，或使用 --texture-from-ply 从 PLY 生成纹理\n";
         return 2;
     }
 
     const int forcedWidth = parser.value(cloudWidthOption).toInt();
     const int forcedHeight = parser.value(cloudHeightOption).toInt();
 
-    std::cout << "图像: " << imagePath.toStdString() << '\n';
+    if (!imagePath.isEmpty()) {
+        std::cout << "图像: " << imagePath.toStdString() << '\n';
+    }
     std::cout << "点云: " << plyPath.toStdString() << '\n';
+    std::cout << "纹理来源: " << (textureFromPly ? "PLY RGB→灰度" : "外部图像") << '\n';
 
-    const auto cloudLoad = loadOrganizedAsciiPly(plyPath, forcedWidth, forcedHeight);
+    const auto cloudLoad = loadOrganizedAsciiPly(plyPath, forcedWidth, forcedHeight, textureFromPly);
     if (!cloudLoad.error.isEmpty()) {
         std::cerr << cloudLoad.error.toStdString() << '\n';
         return 3;
@@ -342,12 +477,17 @@ int main(int argc, char* argv[])
 
     scan_tracking::mech_eye::GrayTextureFrame texture;
     QString textureMessage;
-    if (!loadGrayTextureResized(
-            imagePath,
-            cloudLoad.frame.width,
-            cloudLoad.frame.height,
-            texture,
-            textureMessage)) {
+    if (textureFromPly) {
+        texture = cloudLoad.texture;
+        textureMessage = QStringLiteral("纹理由 PLY 顶点 RGB 转灰度 %1x%2（与点云同网格）")
+                             .arg(texture.width)
+                             .arg(texture.height);
+    } else if (!loadGrayTextureResized(
+                   imagePath,
+                   cloudLoad.frame.width,
+                   cloudLoad.frame.height,
+                   texture,
+                   textureMessage)) {
         std::cerr << textureMessage.toStdString() << '\n';
         return 4;
     }
@@ -368,7 +508,11 @@ int main(int argc, char* argv[])
     std::cout << "LBN 模板: " << lbnConfig.templateFile.toStdString() << '\n';
     std::cout << "调用 runLbnPoseDetection...\n";
 
-    const auto lbnResult = scan_tracking::vision::runLbnPoseDetection(capture, lbnConfig);
+    scan_tracking::vision::LbnPoseMarkerDebug markerDebug;
+    const auto lbnResult =
+        scan_tracking::vision::runLbnPoseDetection(capture, lbnConfig, &markerDebug);
+
+    printMarkerDebug(markerDebug);
 
     std::cout << "invoked=" << lbnResult.invoked << '\n';
     std::cout << "success=" << lbnResult.success << '\n';

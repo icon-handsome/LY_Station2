@@ -4,6 +4,7 @@
 #include <QtCore/QDir>
 #include <QtCore/QFileInfo>
 
+#include <algorithm>
 #include <cstring>
 
 #include <opencv2/opencv.hpp>
@@ -133,11 +134,38 @@ lbn_pose::Config toCoreConfig(const scan_tracking::common::LbnPoseConfig& config
     return coreConfig;
 }
 
+void fillMarkerDebug(const lbn_pose::Result& coreResult, LbnPoseMarkerDebug& debug)
+{
+    debug.centers2dCount = static_cast<int>(coreResult.centers2d.size());
+    debug.centers3dCount = static_cast<int>(coreResult.centers3d.size());
+
+    const int count2d = std::min(debug.centers2dCount, 32);
+    for (int i = 0; i < count2d; ++i) {
+        debug.centers2dU[i] = coreResult.centers2d[static_cast<std::size_t>(i)].x;
+        debug.centers2dV[i] = coreResult.centers2d[static_cast<std::size_t>(i)].y;
+    }
+
+    const int count3d = std::min(debug.centers3dCount, 32);
+    for (int i = 0; i < count3d; ++i) {
+        debug.centers3dX[i] = coreResult.centers3d[static_cast<std::size_t>(i)].x;
+        debug.centers3dY[i] = coreResult.centers3d[static_cast<std::size_t>(i)].y;
+        debug.centers3dZ[i] = coreResult.centers3d[static_cast<std::size_t>(i)].z;
+    }
+}
+
 }  // namespace
 
 LbnPoseResult runLbnPoseDetection(
     const scan_tracking::mech_eye::CaptureResult& mechEyeResult,
     const scan_tracking::common::LbnPoseConfig& config)
+{
+    return runLbnPoseDetection(mechEyeResult, config, nullptr);
+}
+
+LbnPoseResult runLbnPoseDetection(
+    const scan_tracking::mech_eye::CaptureResult& mechEyeResult,
+    const scan_tracking::common::LbnPoseConfig& config,
+    LbnPoseMarkerDebug* markerDebug)
 {
     LbnPoseResult result;
     result.invoked = true;
@@ -182,6 +210,10 @@ LbnPoseResult runLbnPoseDetection(
     try {
         lbn_pose::Estimator estimator(toCoreConfig(config));
         const lbn_pose::Result coreResult = estimator.estimate(grayImage, alignedCloud);
+        if (markerDebug != nullptr) {
+            fillMarkerDebug(coreResult, *markerDebug);
+        }
+
         if (!coreResult.success) {
             return makeFailure(
                 QString::fromStdString(coreResult.message.empty() ? "LBN pose estimation failed."

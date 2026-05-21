@@ -550,11 +550,15 @@ CMake 中 `SCAN_TRACKING_SHOW_EIGEN_IN_IDE` / `SCAN_TRACKING_SHOW_MECHEYE_SDK_IN
 运行前将 `C:\Qt\5.15.2\msvc2019_64\bin` 与 `third_party/LB/.../opencv/build/x64/vc15/bin` 加入 `PATH`。
 
 ```text
+scan_tracking_lbn_offline_runner.exe --group testdata/group1 --texture-from-ply
 scan_tracking_lbn_offline_runner.exe --group testdata/group1
 scan_tracking_lbn_offline_runner.exe -i texture.jpg -p textured.ply
+scan_tracking_lbn_offline_runner.exe -p textured.ply --texture-from-ply
 ```
 
-- 纹理图自动缩放到点云网格（如 1707×1280 → 2400×1800）。
+- **`--texture-from-ply`（推荐）**：单次读取 PLY，从顶点 RGB 生成与点云同网格的灰度纹理，避免 jpg 缩放错位。
+- 未加该选项时：纹理图自动缩放到点云网格（如 1707×1280 → 2400×1800）。
+- 失败时会打印 **2D 圆心** 与 **3D 提升坐标**（最多 32 个），便于区分检测问题与 GeoHash 匹配问题。
 - 退出码：`0` 成功；`5` 表示 LBN 匹配失败但调用链正常。
 
 **建议测试步骤（无相机）**：

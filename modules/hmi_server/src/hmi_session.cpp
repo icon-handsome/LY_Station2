@@ -10,15 +10,32 @@
 #include "scan_tracking/hmi_server/hmi_protocol.h"
 
 #include <QtCore/QJsonDocument>
+#include <QtCore/QJsonParseError>
 #include <QtCore/QLoggingCategory>
+#include <QtCore/QString>
 #include <QtNetwork/QTcpSocket>
 #include <QtEndian>
-#include<qtcpserver.h>
+#include <qtcpserver.h>
 
 namespace scan_tracking {
 namespace hmi_server {
 
 Q_LOGGING_CATEGORY(LOG_SESSION, "hmi.session")
+
+namespace {
+
+QString formatBufferHeadHex(const QByteArray& buffer, int maxBytes = 16)
+{
+    const int n = qMin(maxBytes, buffer.size());
+    QString hex;
+    hex.reserve(n * 3);
+    for (int i = 0; i < n; ++i) {
+        hex.append(QStringLiteral("%1 ").arg(static_cast<quint8>(buffer.at(i)), 2, 16, QLatin1Char('0')));
+    }
+    return hex.trimmed();
+}
+
+}  // namespace
 
 HmiSession::HmiSession(QTcpSocket* socket, QObject* parent)
     : QObject(parent)
@@ -97,9 +114,16 @@ void HmiSession::onReadyRead()
             reinterpret_cast<const uchar*>(m_buffer.constData()));
 
         // 安全检查：帧大小不超过最大限制
-        if (jsonLength > kMaxFrameSize) {
-            qWarning(LOG_SESSION) << "收到异常帧，长度=" << jsonLength
-                                  << "超过最大限制，断开连接";
+        if (jsonLength == 0 || jsonLength > kMaxFrameSize) {
+            const bool looksLikeRawJson = !m_buffer.isEmpty() && m_buffer.at(0) == '{';
+            qWarning(LOG_SESSION)
+                << "收到异常帧，声明长度=" << jsonLength
+                << "（允许 1~" << kMaxFrameSize << "），缓冲区前 16 字节(hex):"
+                << formatBufferHeadHex(m_buffer)
+                << (looksLikeRawJson
+                        ? QStringLiteral("；疑似客户端未加 4 字节大端长度头、直接发送裸 JSON")
+                        : QStringLiteral("；疑似帧边界错位或字节序/粘包处理与协议不一致"));
+            m_buffer.clear();
             disconnect();
             return;
         }
@@ -110,17 +134,21 @@ void HmiSession::onReadyRead()
             break;
         }
 
-        // 提取 JSON 正文并从缓冲区中移除已消费的数据
+        // 先解析，成功后再从缓冲区移除（避免解析失败仍丢弃数据导致后续永久错位）
         const QByteArray jsonBytes = m_buffer.mid(4, static_cast<int>(jsonLength));
-        m_buffer.remove(0, totalFrameSize);
-
-        // 解析 JSON
         QJsonParseError parseError;
         const QJsonDocument doc = QJsonDocument::fromJson(jsonBytes, &parseError);
         if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-            qWarning(LOG_SESSION) << "JSON 解析失败:" << parseError.errorString();
-            continue;
+            qWarning(LOG_SESSION)
+                << "JSON 解析失败:" << parseError.errorString()
+                << "，声明长度=" << jsonLength
+                << "，正文前 64 字节(hex):" << formatBufferHeadHex(jsonBytes, 64);
+            m_buffer.clear();
+            disconnect();
+            return;
         }
+
+        m_buffer.remove(0, totalFrameSize);
 
         // 收到有效消息，重置心跳计时器
         resetHeartbeatTimer();

@@ -44,5 +44,10 @@ QByteArray serializeFrame(const QJsonObject& envelope)
     return frame;
 }
 
+QString frameJsonToLogString(const QByteArray& jsonUtf8)
+{
+    return QString::fromUtf8(jsonUtf8);
+}
+
 }  // namespace hmi_server
 }  // namespace scan_tracking
