@@ -1160,6 +1160,7 @@ void StateMachine::executeInspectionTask()
         summary.resultCode, summary.ngReasonWord0, summary.ngReasonWord1,
         summary.measureItemCount, summary.offsetXmm, summary.offsetYmm, summary.offsetZmm,
         trackingResult.stableOffsetXmm, trackingResult.stableOffsetYmm, trackingResult.stableOffsetZmm,
+        trackingResult.measurement,
         trackingResult.outlinerErrorLog, trackingResult.inlinerErrorLog,
         trackingResult.message);
     resetScanSegmentCache();  // 检测完成，清空扫描缓存释放内存

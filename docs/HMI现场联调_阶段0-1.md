@@ -1,0 +1,97 @@
+# HMI 现场联调 — 阶段 0 + 1 + 3.1
+
+**目标**：麒麟 Qt 显控（TCP Client）能稳定连接本仓库 IPC Core（TCP Server），解析 `status.*`、`event.*` 及检测测量字段。
+
+> **本仓库仅 Server**。总览见 **[HMI开发交接说明.md](./HMI开发交接说明.md)**。
+
+---
+
+## 1. Core 侧（本仓库）
+
+- HMI TCP 监听 **`config.ini [Hmi] tcpPort`**（默认 **9900**）。
+- 客户端连接后：`core.hello` + 四类 `status.*` 全量推送。
+- 周期：**500ms** 状态（变更去重）、**2s** 心跳 `heartbeat.ping`。
+- 业务事件由状态机/相机/Modbus 触发上报。
+
+---
+
+## 2. 阶段 0 验收（传输 + 握手）
+
+| 步骤 | 操作 | 预期 |
+|------|------|------|
+| 1 | 运行 Core | 日志：`HMI TCP 服务端已在端口 <tcpPort> 启动` |
+| 2 | Qt 显控连接 Core | `QTcpSocket` 连 `<Core_IP>:<tcpPort>` |
+| 3 | 帧格式 | **4 字节大端长度 + JSON**，禁止裸 JSON |
+| 4 | 握手 | 收到 `core.hello`；发 `hmi.hello` 收 success |
+| 5 | 心跳 | 收到 `heartbeat.ping` 后回 `heartbeat.pong`（`msgId` 与 ping 一致） |
+| 6 | 拉状态 | 发 `cmd.get_status` 或等待周期 `status.*` |
+
+帧发送可参考 Server 侧 `hmi_protocol.cpp` 的 `serializeFrame` / `buildEnvelope`。
+
+---
+
+## 3. 阶段 1 验收（status / event）
+
+Qt 显控应能解析并展示：
+
+- `status.system` — ipcState / appState / alarmLevel / progress
+- `status.plc` — modbusConnected / workMode / scanSegmentIndex
+- `status.camera` — mechEye / hikA / hikB
+- `status.device` — onlineWord0 / faultWord0（位定义见协议 §2.4）
+
+触发 PLC 流程后应收到：
+
+- `event.scan.started` / `event.scan.finished`
+- `event.bundle.captured`
+- `event.inspection.finished`
+- `event.alarm`（异常时）
+
+---
+
+## 4. Qt 显控集成（独立仓库）
+
+1. 在麒麟 Qt 工程实现 TCP Client，按 [`封头检测工位_TCP_IP显控通信协议_v1.0.md`](./封头检测工位_TCP_IP显控通信协议_v1.0.md) 解帧。
+2. 可按 `type` 分发：`status.*`、`event.*`、`cmd.*` 响应。
+3. 连接成功后建议先发 `hmi.hello`，再 `cmd.get_status`。
+4. **不要**在 UI 调用 `cmd.trigger_scan` 等（Core 会返回失败）。
+
+协议常量与组包可参考本仓库（仅作引用，不编入 Core 工程）：
+
+- `modules/hmi_server/include/scan_tracking/hmi_server/hmi_protocol.h`
+- `modules/hmi_server/src/hmi_protocol.cpp`
+
+---
+
+## 5. 常见故障
+
+| 现象 | 原因 | 处理 |
+|------|------|------|
+| 立刻断连 | 未加 4 字节长度头 | 对齐 `serializeFrame` |
+| 只有心跳无 status | 未解析 `type` | 处理 `status.system` 等 |
+| modbusConnected 一直 false | PLC 未连 | 先确认 Modbus；status 仍会推 |
+
+---
+
+## 6. 阶段 3.1 验收（检测测量字段）
+
+`Trig_Inspection` 成功后，`event.inspection.finished` 应含：
+
+`head_angle_tol`、`straight_height_tol`、`straight_slope_tol`、`inner_diameter`、`blunt_height_tol`、`inner_diameter_tol`、`hole_diameter_tol`、`head_depth_tol` 及偏移量字段。
+
+数据链路（Core 内）：`FirstPoseDetectionParams` → `InspectionMeasurement` → `inspectionFinished` → HMI TCP。
+
+---
+
+## 7. Qt 解析示例（检测完成）
+
+```cpp
+void onJsonEnvelope(const QJsonObject& envelope) {
+    const QString type = envelope.value(QStringLiteral("type")).toString();
+    if (type != QStringLiteral("event.inspection.finished")) {
+        return;
+    }
+    const QJsonObject payload = envelope.value(QStringLiteral("payload")).toObject();
+    const double headAngle = payload.value(QStringLiteral("head_angle_tol")).toDouble();
+    // 绑定 UI ...
+}
+```

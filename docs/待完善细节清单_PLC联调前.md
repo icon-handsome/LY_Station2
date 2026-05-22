@@ -110,6 +110,8 @@
 - `hole_diameter_tol` — 开孔直径
 - `outliner_error_log` / `inliner_error_log` — 错误日志
 
+**HMI TCP（已实现）**：上述测量项（除 `cylinder_axis`）及偏移量、日志，在检测完成时经 `event.inspection.finished` 结构化上报显控，见 `docs/HMI现场联调_阶段0-1.md` §7。
+
 **LB 位姿检测（Trig_PoseCheck 后调用）：**
 - `rt[16]` — 4x4 位姿变换矩阵
 - `poseDeviationMm` — 位姿偏差（mm）

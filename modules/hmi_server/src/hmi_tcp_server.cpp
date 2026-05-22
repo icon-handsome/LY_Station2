@@ -13,7 +13,7 @@
 #include "scan_tracking/mech_eye/mech_eye_service.h"
 #include "scan_tracking/vision/vision_pipeline_service.h"
 #include "scan_tracking/vision/hik_camera_service.h"
-#include "scan_tracking/tracking/tracking_service.h"
+#include "scan_tracking/tracking/tracking_service.h"  // InspectionMeasurement, appendInspectionMeasurementFields
 #include "scan_tracking/common/config_manager.h"
 
 #include <QtNetwork/QTcpServer>
@@ -164,6 +164,7 @@ void HmiTcpServer::bindServiceSignals()
     connectModbusSignals();
     connectMechEyeSignals();
     connectVisionPipelineSignals();
+    connectStatusRefreshSignals();
     m_serviceSignalsBound = true;
 }
 
@@ -481,6 +482,11 @@ void HmiTcpServer::handleCmdGetConfig(const QJsonObject& message)
     trackingObj[QLatin1String("firstStationInnerSegmentIndex")] = cfgMgr->trackingConfig().firstStationInnerSegmentIndex; // 内表面段号
     trackingObj[QLatin1String("firstStationHoleSegmentIndex")] = cfgMgr->trackingConfig().firstStationHoleSegmentIndex; // 开孔段号
     configPayload[QLatin1String("tracking")] = trackingObj;
+
+    QJsonObject hmiObj;
+    hmiObj[QLatin1String("enabled")] = cfgMgr->hmiConfig().enabled;
+    hmiObj[QLatin1String("tcpPort")] = cfgMgr->hmiConfig().tcpPort;
+    configPayload[QLatin1String("hmi")] = hmiObj;
     
     // 8. LbPose 配置
     QJsonObject lbPoseObj;
@@ -728,7 +734,6 @@ QJsonObject HmiTcpServer::buildSystemStatusPayload() const
 
 void HmiTcpServer::pushPlcStatus()
 {
-    if (!m_modbusService) return;
     const QJsonObject payload = buildPlcStatusPayload();
     pushStatusIfChanged(QLatin1String(msg_type::kStatusPlc), payload, m_plcStatusCache);
 }
@@ -736,9 +741,10 @@ void HmiTcpServer::pushPlcStatus()
 QJsonObject HmiTcpServer::buildPlcStatusPayload() const
 {
     QJsonObject payload;
-    if (!m_modbusService) return payload;
-
-    payload[QLatin1String("modbusConnected")] = m_modbusService->isConnected();
+    payload[QLatin1String("modbusConnected")] = m_modbusService && m_modbusService->isConnected();
+    if (!m_modbusService) {
+        return payload;
+    }
 
     if (m_stateMachine) {
         namespace regs = flow_control::protocol::registers;
@@ -814,32 +820,78 @@ void HmiTcpServer::pushDeviceStatus()
 
 QJsonObject HmiTcpServer::buildDeviceStatusPayload() const
 {
+    // onlineWord0 / faultWord0 位定义与 docs/封头检测工位_TCP_IP显控通信协议_v1.0.md §2.4 一致
+    constexpr int kBitIpcCore = 0;
+    constexpr int kBitHmiClient = 1;
+    constexpr int kBitMechEye = 2;
+    constexpr int kBitVisionPipeline = 3;
+    constexpr int kBitHik2d = 4;
+    constexpr int kBitTracking = 5;
+    constexpr int kBitModbus = 6;
+    constexpr int kBitAlarmWarn = 7;
+
     quint16 onlineWord0 = 0;
     quint16 faultWord0 = 0;
-    
-    onlineWord0 |= (1 << 0);
-    
+
+    onlineWord0 |= (1u << kBitIpcCore);
+
     if (hasClient()) {
-        onlineWord0 |= (1 << 1);
+        onlineWord0 |= (1u << kBitHmiClient);
     }
-    
-    if (m_mechEyeService && m_mechEyeService->state() != mech_eye::CameraRuntimeState::Idle 
-        && m_mechEyeService->state() != mech_eye::CameraRuntimeState::Error) {
-        onlineWord0 |= (1 << 2);
+
+    const bool mechEyeOnline = m_mechEyeService
+        && m_mechEyeService->state() != mech_eye::CameraRuntimeState::Idle
+        && m_mechEyeService->state() != mech_eye::CameraRuntimeState::Error;
+    if (mechEyeOnline) {
+        onlineWord0 |= (1u << kBitMechEye);
     }
-    
-    // 任意一台 2D 相机在线即视为 Bit4 在线
-    if ((m_hikCameraA && m_hikCameraA->isConnected()) || 
-        (m_hikCameraB && m_hikCameraB->isConnected())) {
-        onlineWord0 |= (1 << 4);
+    if (m_mechEyeService && m_mechEyeService->state() == mech_eye::CameraRuntimeState::Error) {
+        faultWord0 |= (1u << kBitMechEye);
     }
-    
+
+    if (m_visionPipeline && m_visionPipeline->state() == vision::VisionPipelineState::Ready) {
+        onlineWord0 |= (1u << kBitVisionPipeline);
+    }
+    if (m_visionPipeline && m_visionPipeline->state() == vision::VisionPipelineState::Error) {
+        faultWord0 |= (1u << kBitVisionPipeline);
+    }
+
+    const bool hikAOnline = m_hikCameraA && m_hikCameraA->isConnected();
+    const bool hikBOnline = m_hikCameraB && m_hikCameraB->isConnected();
+    if (hikAOnline || hikBOnline) {
+        onlineWord0 |= (1u << kBitHik2d);
+    }
+    if ((m_hikCameraA || m_hikCameraB) && !hikAOnline && !hikBOnline) {
+        faultWord0 |= (1u << kBitHik2d);
+    }
+
     if (m_trackingService) {
-        onlineWord0 |= (1 << 5);
+        onlineWord0 |= (1u << kBitTracking);
     }
-    
-    if (m_modbusService && m_modbusService->isConnected()) {
-        onlineWord0 |= (1 << 6);
+
+    const bool modbusOnline = m_modbusService && m_modbusService->isConnected();
+    if (modbusOnline) {
+        onlineWord0 |= (1u << kBitModbus);
+    }
+    if (m_modbusService && !modbusOnline) {
+        faultWord0 |= (1u << kBitModbus);
+    }
+
+    if (m_stateMachine) {
+        const auto ipcState = m_stateMachine->ipcState();
+        const auto appState = m_stateMachine->currentState();
+        const quint16 alarmLevel = m_stateMachine->alarmLevel();
+
+        if (ipcState == flow_control::protocol::IpcState::Fault
+            || appState == flow_control::AppState::Error) {
+            faultWord0 |= (1u << kBitIpcCore);
+        }
+        if (alarmLevel >= 3) {
+            faultWord0 |= (1u << kBitIpcCore);
+        }
+        if (alarmLevel >= 2) {
+            faultWord0 |= (1u << kBitAlarmWarn);
+        }
     }
 
     QJsonObject payload;
@@ -897,6 +949,7 @@ void HmiTcpServer::connectStateMachineSignals()
         [this](quint16 resultCode, quint16 ngReasonWord0, quint16 ngReasonWord1,
                quint16 measureItemCount, float offsetXmm, float offsetYmm, float offsetZmm,
                float stableOffsetXmm, float stableOffsetYmm, float stableOffsetZmm,
+               const tracking::InspectionMeasurement& measurement,
                const QString& outlinerErrorLog, const QString& inlinerErrorLog,
                const QString& message) {
         QJsonObject payload;
@@ -910,6 +963,7 @@ void HmiTcpServer::connectStateMachineSignals()
         payload[QLatin1String("stableOffsetXmm")] = static_cast<double>(stableOffsetXmm); // 平滑滤波后的偏移量
         payload[QLatin1String("stableOffsetYmm")] = static_cast<double>(stableOffsetYmm);
         payload[QLatin1String("stableOffsetZmm")] = static_cast<double>(stableOffsetZmm);
+        tracking::appendInspectionMeasurementFields(payload, measurement);
         payload[QLatin1String("outlinerErrorLog")] = outlinerErrorLog; // 外部轮廓瑕疵诊断日志
         payload[QLatin1String("inlinerErrorLog")] = inlinerErrorLog;   // 内部孔径瑕疵诊断日志
         payload[QLatin1String("message")] = message;
@@ -1040,7 +1094,86 @@ void HmiTcpServer::connectMechEyeSignals()
         payload[QLatin1String("level")] = 3;
         payload[QLatin1String("code")] = static_cast<int>(code);
         sendToClient(buildEnvelope(QLatin1String(msg_type::kEventAlarm), nextEventId(), payload));
+        m_deviceStatusCache.isValid = false;
+        if (hasClient()) {
+            pushDeviceStatus();
+        }
     });
+}
+
+void HmiTcpServer::connectStatusRefreshSignals()
+{
+    if (m_stateMachine) {
+        connect(m_stateMachine, &flow_control::StateMachine::stateChanged, this, [this]() {
+            m_systemStatusCache.isValid = false;
+            m_deviceStatusCache.isValid = false;
+            if (hasClient()) {
+                pushSystemStatus();
+                pushDeviceStatus();
+            }
+        }, Qt::UniqueConnection);
+    }
+
+    auto refreshDeviceStatus = [this]() {
+        m_deviceStatusCache.isValid = false;
+        if (hasClient()) {
+            pushDeviceStatus();
+        }
+    };
+
+    if (m_modbusService) {
+        connect(m_modbusService, &modbus::ModbusService::connected, this, [this]() {
+            m_plcStatusCache.isValid = false;
+            m_deviceStatusCache.isValid = false;
+            if (hasClient()) {
+                pushPlcStatus();
+                pushDeviceStatus();
+            }
+        }, Qt::UniqueConnection);
+        connect(m_modbusService, &modbus::ModbusService::disconnected, this, [this]() {
+            m_plcStatusCache.isValid = false;
+            m_deviceStatusCache.isValid = false;
+            if (hasClient()) {
+                pushPlcStatus();
+                pushDeviceStatus();
+            }
+        }, Qt::UniqueConnection);
+    }
+
+    if (m_mechEyeService) {
+        connect(m_mechEyeService, &mech_eye::MechEyeService::stateChanged, this,
+                [this](mech_eye::CameraRuntimeState, QString) {
+            m_cameraStatusCache.isValid = false;
+            m_deviceStatusCache.isValid = false;
+            if (hasClient()) {
+                pushCameraStatus();
+                pushDeviceStatus();
+            }
+        }, Qt::UniqueConnection);
+    }
+
+    if (m_visionPipeline) {
+        connect(m_visionPipeline, &vision::VisionPipelineService::stateChanged, this,
+                [this, refreshDeviceStatus](vision::VisionPipelineState, QString) {
+                    refreshDeviceStatus();
+                },
+                Qt::UniqueConnection);
+    }
+
+    auto refreshCameraOnHik = [this](QString, QString, QString) {
+        m_cameraStatusCache.isValid = false;
+        m_deviceStatusCache.isValid = false;
+        if (hasClient()) {
+            pushCameraStatus();
+            pushDeviceStatus();
+        }
+    };
+    if (m_hikCameraA) {
+        connect(m_hikCameraA, &vision::HikCameraService::stateChanged, this, refreshCameraOnHik, Qt::UniqueConnection);
+    }
+    if (m_hikCameraB) {
+        connect(m_hikCameraB, &vision::HikCameraService::stateChanged, this, refreshCameraOnHik, Qt::UniqueConnection);
+    }
 }
 
 void HmiTcpServer::connectVisionPipelineSignals()

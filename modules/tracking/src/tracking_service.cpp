@@ -12,6 +12,8 @@
 #include <cmath>
 #include <vector>
 
+#include <QtCore/QJsonObject>
+
 #include "scan_tracking/common/application_info.h"
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/tracking/lb_pose_check.h"
@@ -20,6 +22,25 @@
 namespace scan_tracking::tracking {
 
 namespace {
+
+double measurementJsonValue(float value)
+{
+    return std::isfinite(value) ? static_cast<double>(value) : 0.0;
+}
+
+InspectionMeasurement measurementFromParams(const FirstPoseDetectionParams& params)
+{
+    InspectionMeasurement measurement;
+    measurement.headAngleTol = params.head_angle_tol;
+    measurement.straightHeightTol = params.straight_height_tol;
+    measurement.straightSlopeTol = params.straight_slope_tol;
+    measurement.innerDiameter = params.inner_diameter;
+    measurement.bluntHeightTol = params.blunt_height_tol;
+    measurement.innerDiameterTol = params.inner_diameter_tol;
+    measurement.holeDiameterTol = params.hole_diameter_tol;
+    measurement.headDepthTol = params.head_depth_tol;
+    return measurement;
+}
 
 /// 有效分段条目结构体
 struct ValidSegmentEntry {
@@ -144,6 +165,18 @@ QString composeNgReasonText(const QString& label, const QString& errorLog)
 
 }  // namespace
 
+void appendInspectionMeasurementFields(QJsonObject& payload, const InspectionMeasurement& measurement)
+{
+    payload[QStringLiteral("head_angle_tol")] = measurementJsonValue(measurement.headAngleTol);
+    payload[QStringLiteral("straight_height_tol")] = measurementJsonValue(measurement.straightHeightTol);
+    payload[QStringLiteral("straight_slope_tol")] = measurementJsonValue(measurement.straightSlopeTol);
+    payload[QStringLiteral("inner_diameter")] = measurementJsonValue(measurement.innerDiameter);
+    payload[QStringLiteral("blunt_height_tol")] = measurementJsonValue(measurement.bluntHeightTol);
+    payload[QStringLiteral("inner_diameter_tol")] = measurementJsonValue(measurement.innerDiameterTol);
+    payload[QStringLiteral("hole_diameter_tol")] = measurementJsonValue(measurement.holeDiameterTol);
+    payload[QStringLiteral("head_depth_tol")] = measurementJsonValue(measurement.headDepthTol);
+}
+
 /// 获取跟踪服务状态文本
 // @return 应用名称和状态描述
 std::string TrackingService::statusText() const
@@ -253,6 +286,7 @@ InspectionResult TrackingService::inspectSegments(
     result.stableOffsetXmm = detection.stableOffsetXmm;
     result.stableOffsetYmm = detection.stableOffsetYmm;
     result.stableOffsetZmm = detection.stableOffsetZmm;
+    result.measurement = measurementFromParams(detection.params);
     result.outlinerErrorLog = detection.outlinerErrorLog;
     result.inlinerErrorLog = detection.inlinerErrorLog;
     result.message = QStringLiteral(

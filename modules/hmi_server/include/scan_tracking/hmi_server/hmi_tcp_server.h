@@ -216,6 +216,9 @@ private:
     
     /// 绑定视觉流水线抛出的多相机 Bundle 采集完成信号
     void connectVisionPipelineSignals();
+
+    /// 状态/设备变化时立即刷新 status.*（阶段 1 显控监视）
+    void connectStatusRefreshSignals();
     
     // TODO(hmi): 远程 event.log 默认未启用（hmi_tcp_server.cpp 中 kForwardQtLogsToHmi=false）。
     /// 安装全局 Qt 日志拦截器，将非 HMI 模块的 Warning+ 转发为 event.log（显控有日志页时再开）

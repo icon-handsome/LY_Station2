@@ -72,6 +72,12 @@ struct TrackingConfig {
     int scanSegmentTotal;  // 扫描段总数（从 config.ini 获取，PLC不下发）
 };
 
+/// HMI 显控 TCP 服务配置（[Hmi]）
+struct HmiConfig {
+    bool enabled = true;       ///< 是否启动 HMI TCP 服务端
+    quint16 tcpPort = 9900;    ///< 监听端口
+};
+
 struct LbPoseConfig {
     QString dataRoot;
     QString leftPattern;
@@ -166,6 +172,7 @@ public:
     const VisionConfig& visionConfig() const;
     const FlowControlConfig& flowControlConfig() const;
     const TrackingConfig& trackingConfig() const;
+    const HmiConfig& hmiConfig() const;
     const LbPoseConfig& lbPoseConfig() const;
     const LbnPoseConfig& lbnPoseConfig() const;
     const ScanPathsConfig& scanPathsConfig() const;  // 新增：获取扫描路径配置
@@ -195,6 +202,7 @@ private:
     VisionConfig m_visionConfig;
     FlowControlConfig m_flowControlConfig;
     TrackingConfig m_trackingConfig;
+    HmiConfig m_hmiConfig;
     LbPoseConfig m_lbPoseConfig;
     LbnPoseConfig m_lbnPoseConfig;
     ScanPathsConfig m_scanPathsConfig;  // 新增：扫描路径配置

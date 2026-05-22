@@ -248,18 +248,24 @@ void ConsoleRuntime::initModules()
         &application_);
 
     // HMI：先注入依赖并绑定信号，再 listen / 启动状态机，避免 start() 内重复 connect 或漏接早期事件
-    hmiTcpServer_ = std::make_unique<scan_tracking::hmi_server::HmiTcpServer>(9900, &application_);
-    hmiTcpServer_->setStateMachine(stateMachine_.get());
-    hmiTcpServer_->setModbusService(modbusService_.get());
-    hmiTcpServer_->setMechEyeService(mechEyeService_.get());
-    hmiTcpServer_->setVisionPipelineService(visionPipelineService_.get());
-    hmiTcpServer_->setTrackingService(trackingService_.get());
-    hmiTcpServer_->setHikCameraServices(hikCameraAService_.get(), hikCameraBService_.get());
-    hmiTcpServer_->bindServiceSignals();
-    if (!hmiTcpServer_->start()) {
-        qWarning(appLog) << "HMI TCP 服务器在端口 9900 启动失败。";
+    const auto& hmiConfig = scan_tracking::common::ConfigManager::instance()->hmiConfig();
+    if (hmiConfig.enabled) {
+        hmiTcpServer_ = std::make_unique<scan_tracking::hmi_server::HmiTcpServer>(
+            static_cast<int>(hmiConfig.tcpPort), &application_);
+        hmiTcpServer_->setStateMachine(stateMachine_.get());
+        hmiTcpServer_->setModbusService(modbusService_.get());
+        hmiTcpServer_->setMechEyeService(mechEyeService_.get());
+        hmiTcpServer_->setVisionPipelineService(visionPipelineService_.get());
+        hmiTcpServer_->setTrackingService(trackingService_.get());
+        hmiTcpServer_->setHikCameraServices(hikCameraAService_.get(), hikCameraBService_.get());
+        hmiTcpServer_->bindServiceSignals();
+        if (!hmiTcpServer_->start()) {
+            qWarning(appLog) << "HMI TCP 服务器在端口" << hmiConfig.tcpPort << "启动失败。";
+        } else {
+            qInfo(appLog) << "HMI TCP 服务器已在端口" << hmiConfig.tcpPort << "启动。";
+        }
     } else {
-        qInfo(appLog) << "HMI TCP 服务器已在端口 9900 启动。";
+        qInfo(appLog) << "HMI TCP 服务已在 config.ini [Hmi] enabled=false 下禁用。";
     }
 
     stateMachine_->start();

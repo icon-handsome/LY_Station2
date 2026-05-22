@@ -11,6 +11,7 @@
 #include <array>
 #include <string>
 
+#include <QtCore/QJsonObject>
 #include <QtCore/QMap>
 #include <QtCore/QString>
 #include <QtCore/QtGlobal>
@@ -18,7 +19,22 @@
 #include "scan_tracking/mech_eye/mech_eye_types.h"
 
 namespace scan_tracking {
-namespace tracking {    
+namespace tracking {
+
+/// 第一工位算法测量项（对应 HMI event.inspection.finished 协议字段）
+struct InspectionMeasurement {
+    float headAngleTol = 0.0f;        ///< head_angle_tol 坡口角
+    float straightHeightTol = 0.0f;   ///< straight_height_tol 直边高度
+    float straightSlopeTol = 0.0f;    ///< straight_slope_tol 直边斜度
+    float innerDiameter = 0.0f;       ///< inner_diameter 内径
+    float bluntHeightTol = 0.0f;      ///< blunt_height_tol 钝边高度
+    float innerDiameterTol = 0.0f;    ///< inner_diameter_tol 内径圆度
+    float holeDiameterTol = 0.0f;     ///< hole_diameter_tol 开孔直径
+    float headDepthTol = 0.0f;        ///< head_depth_tol 封头深度
+};
+
+/// 将测量项写入 JSON payload（协议 snake_case 字段名）
+void appendInspectionMeasurementFields(QJsonObject& payload, const InspectionMeasurement& measurement);
 
 /// 检测结果结构体，封装第一工位综合检测的完整输出
 struct InspectionResult {
@@ -34,6 +50,7 @@ struct InspectionResult {
     float stableOffsetXmm = 0.0f;     ///< 稳定后 X 方向偏移量（mm）
     float stableOffsetYmm = 0.0f;     ///< 稳定后 Y 方向偏移量（mm）
     float stableOffsetZmm = 0.0f;     ///< 稳定后 Z 方向偏移量（mm）
+    InspectionMeasurement measurement; ///< 算法测量项（HMI 结构化上报）
     QString outlinerErrorLog;         ///< 外表面错误日志
     QString inlinerErrorLog;          ///< 内表面错误日志
     QString message;                  ///< 结果描述信息

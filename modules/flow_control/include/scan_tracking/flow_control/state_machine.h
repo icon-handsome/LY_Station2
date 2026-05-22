@@ -98,6 +98,7 @@ signals:
     void inspectionFinished(quint16 resultCode, quint16 ngReasonWord0, quint16 ngReasonWord1,
                             quint16 measureItemCount, float offsetXmm, float offsetYmm, float offsetZmm,
                             float stableOffsetXmm, float stableOffsetYmm, float stableOffsetZmm,
+                            const tracking::InspectionMeasurement& measurement,
                             const QString& outlinerErrorLog, const QString& inlinerErrorLog,
                             const QString& message);
 

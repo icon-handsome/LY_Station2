@@ -82,6 +82,25 @@ Windows 当前依赖：
 - 这个结构体是第一检测位的统一结果载体。
 - 同一轮检测中，内外表面算法一般写入同一个结果对象。
 
+**HMI 显控上报（`event.inspection.finished`，阶段 3.1 已实现）**
+
+综合检测成功后，下列字段经 `InspectionResult.measurement` 结构化写入 TCP JSON（见 `docs/封头检测工位_TCP_IP显控通信协议_v1.0.md` §2.6）：
+
+| 协议字段 | 算法来源（`FirstPoseDetectionParams`） |
+|----------|----------------------------------------|
+| `offsetXmm` / `offsetYmm` / `offsetZmm` | `cylinder_center` |
+| `head_angle_tol` | `head_angle_tol` |
+| `straight_height_tol` | `straight_height_tol` |
+| `straight_slope_tol` | `straight_slope_tol` |
+| `inner_diameter` | `inner_diameter` |
+| `blunt_height_tol` | `blunt_height_tol` |
+| `inner_diameter_tol` | `inner_diameter_tol` |
+| `hole_diameter_tol` | `hole_diameter_tol` |
+| `head_depth_tol` | `head_depth_tol` |
+| `outlinerErrorLog` / `inlinerErrorLog` | 适配层错误日志 |
+
+实现位置：`tracking_service.cpp` → `state_machine.cpp` → `hmi_tcp_server.cpp`。
+
 ### 3.2 `SecondPoseDetectionParams`
 
 定义位置：

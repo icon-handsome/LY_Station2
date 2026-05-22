@@ -97,6 +97,7 @@ const CameraConfig& ConfigManager::cameraConfig() const { return m_cameraConfig;
 const VisionConfig& ConfigManager::visionConfig() const { return m_visionConfig; }
 const FlowControlConfig& ConfigManager::flowControlConfig() const { return m_flowControlConfig; }
 const TrackingConfig& ConfigManager::trackingConfig() const { return m_trackingConfig; }
+const HmiConfig& ConfigManager::hmiConfig() const { return m_hmiConfig; }
 const LbPoseConfig& ConfigManager::lbPoseConfig() const { return m_lbPoseConfig; }
 const LbnPoseConfig& ConfigManager::lbnPoseConfig() const { return m_lbnPoseConfig; }
 const ScanPathsConfig& ConfigManager::scanPathsConfig() const { return m_scanPathsConfig; }
@@ -187,6 +188,11 @@ void ConfigManager::writeDefaults(QSettings& settings)
     settings.setValue("firstStationOuterSegmentIndex", 1);
     settings.setValue("firstStationInnerSegmentIndex", 2);
     settings.setValue("firstStationHoleSegmentIndex", 3);
+    settings.endGroup();
+
+    settings.beginGroup("Hmi");
+    settings.setValue("enabled", true);
+    settings.setValue("tcpPort", 9900);
     settings.endGroup();
 
     settings.sync();
@@ -298,6 +304,15 @@ void ConfigManager::load(const QString& filePath)
     m_trackingConfig.firstStationInnerSegmentIndex = settings.value("firstStationInnerSegmentIndex", 2).toInt();
     m_trackingConfig.firstStationHoleSegmentIndex = settings.value("firstStationHoleSegmentIndex", 3).toInt();
     m_trackingConfig.scanSegmentTotal = settings.value("scanSegmentTotal", 3).toInt();
+    settings.endGroup();
+
+    settings.beginGroup("Hmi");
+    m_hmiConfig.enabled = settings.value("enabled", true).toBool();
+    {
+        const int port = settings.value("tcpPort", 9900).toInt();
+        m_hmiConfig.tcpPort = static_cast<quint16>(
+            qBound(1, port, 65535));
+    }
     settings.endGroup();
 
     QtMsgType minType = QtDebugMsg;

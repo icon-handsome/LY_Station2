@@ -56,6 +56,19 @@ cmd /c tools\scan_tracking_dev.cmd run-debug
 
 日志会输出到运行目录下的 `logs` 文件夹。
 
+## HMI / 显控 TCP
+
+IPC 作为 **TCP Server** 与麒麟 OS **Qt 显控**通信（协议 v1.0）。端口在 `config.ini` 的 **`[Hmi] tcpPort`**（默认 **9900**），`enabled=false` 可关闭服务。
+
+| 用途 | 说明 |
+|------|------|
+| 必读交接 | [`docs/HMI开发交接说明.md`](docs/HMI开发交接说明.md)（模块地图、已实现/待办、代码入口） |
+| 现场联调 | [`docs/HMI现场联调_阶段0-1.md`](docs/HMI现场联调_阶段0-1.md)（阶段 0/1/3.1 验收步骤） |
+| 协议定义 | [`docs/封头检测工位_TCP_IP显控通信协议_v1.0.md`](docs/封头检测工位_TCP_IP显控通信协议_v1.0.md) |
+
+**本仓库仅含 Core 服务端**：`modules/hmi_server`（`HmiTcpServer`、`HmiSession`、`hmi_protocol`）。  
+**显控 TCP 客户端**在麒麟 OS **独立 Qt 工程**中实现，按协议文档对接即可。
+
 ## 说明
 
 - `LB` 算法已接入。
