@@ -122,29 +122,29 @@ bool HmiTcpServer::start()
 void HmiTcpServer::stop()
 {
     if (kForwardQtLogsToHmi) {
-        uninstallLogForwarder();
+        uninstallLogForwarder(); // 卸载日志转发器
     }
 
-    disconnectServiceSignals();
+    disconnectServiceSignals(); // 断开业务模块信号连接
 
-    m_statusPushTimer->stop();
-    m_heartbeatTimer->stop();
+    m_statusPushTimer->stop(); // 停止状态推送定时器
+    m_heartbeatTimer->stop(); // 停止心跳定时器
 
     if (m_session) {
-        m_session->disconnect();
+        m_session->disconnect(); // 断开客户端连接
         m_session->deleteLater();
-        m_session = nullptr;
+        m_session = nullptr; // 释放客户端会话指针
     }
 
     if (m_tcpServer->isListening()) {
-        m_tcpServer->close();
+        m_tcpServer->close(); // 关闭 TCP 服务器
         qInfo(LOG_HMI_SERVER) << "HMI TCP 服务端已停止";
     }
 }
 
 bool HmiTcpServer::isListening() const
 {
-    return m_tcpServer->isListening();
+    return m_tcpServer->isListening(); // 检查 TCP 服务器是否正在监听
 }
 
 bool HmiTcpServer::hasClient() const
