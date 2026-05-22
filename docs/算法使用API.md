@@ -556,8 +556,11 @@ scan_tracking_lbn_offline_runner.exe -i texture.jpg -p textured.ply
 scan_tracking_lbn_offline_runner.exe -p textured.ply --texture-from-ply
 ```
 
-- **`--texture-from-ply`（推荐）**：单次读取 PLY，从顶点 RGB 生成与点云同网格的灰度纹理，避免 jpg 缩放错位。
-- 未加该选项时：纹理图自动缩放到点云网格（如 1707×1280 → 2400×1800）。
+- **默认（对齐 `third_party/LBN/main.cpp`）**：PLY 无效点 `quiet_NaN`；纹理优先 `*texture_aligned*`，**必须与点云同宽高**（不缩放）；`lbn_pose_core` 插值/提升与 `main.cpp` 相同。
+- **`--allow-resize-texture`（扩展）**：允许 jpg 缩放到点云网格（旧 testdata 缩略图，非 main 默认）。
+- **`--texture-from-ply`（扩展）**：从顶点 RGB 生成灰度（main 联机不用此路径）。
+- **默认**：PLY 无效顶点存 **quiet_NaN**（与 Mech-Eye SDK / `main.cpp` 一致）；`lbn_pose_core` 会拒绝近零伪 3D 点。
+- **`--legacy-zero-nan`（旧行为，仅对比）**：无效点写 `(0,0,0)`，可能产生假 3D，勿用于正式验证。
 - 失败时会打印 **2D 圆心** 与 **3D 提升坐标**（最多 32 个），便于区分检测问题与 GeoHash 匹配问题。
 - 退出码：`0` 成功；`5` 表示 LBN 匹配失败但调用链正常。
 

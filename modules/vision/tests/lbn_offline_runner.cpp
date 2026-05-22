@@ -1,5 +1,7 @@
 #include "scan_tracking/vision/lbn_pose_detection_adapter.h"
 
+#include "lbn_pose_core.h"
+
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
@@ -8,14 +10,30 @@
 #include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
+#include <QtCore/QTextStream>
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
+
+// -----------------------------------------------------------------------------
+// 离线 LBN runner ↔ third_party/LBN/main.cpp 对照（旧选项均保留，勿删）
+//
+// 【默认 = main.cpp 离线等价】（未加下列“旧/扩展”开关时）
+//   1) PLY 无效点 → quiet_NaN（同 SDK / main isFinitePoint）
+//   2) 纹理：优先 *texture_aligned*.bmp，尺寸须与点云网格一致，不缩放（同 frame2dToCvMat）
+//   3) 2D：MarkPointDetector::ProcessFrame → 3D：queryPointInterpolated(radius=20) → 成功才 push
+//   4) FastGeoHash(650,30) + Get_Track_Pose（由 lbn_pose_core / adapter 执行）
+//
+// 【扩展】--texture-from-ply：用 PLY 顶点 RGB 作灰度（main 联机不用此路径）
+// 【扩展】--allow-resize-texture：允许 jpg 缩放到点云网格（旧 testdata 缩略图）
+// 【旧行为】--legacy-zero-nan：无效点写 0（历史离线 bug，仅对比）
+// -----------------------------------------------------------------------------
 
 namespace {
 
@@ -89,7 +107,8 @@ OrganizedCloudLoadResult loadOrganizedAsciiPly(
     const QString& plyPath,
     int forcedWidth,
     int forcedHeight,
-    bool extractGrayTexture)
+    bool extractGrayTexture,
+    bool legacyZeroNaN)
 {
     OrganizedCloudLoadResult result;
     QFile file(plyPath);
@@ -135,7 +154,11 @@ OrganizedCloudLoadResult loadOrganizedAsciiPly(
         return result;
     }
 
-    auto points = std::make_shared<std::vector<float>>(static_cast<std::size_t>(vertexCount) * 3U, 0.0f);
+    const float nanValue = std::numeric_limits<float>::quiet_NaN();
+    const float invalidFill = legacyZeroNaN ? 0.0f : nanValue;
+    auto points = std::make_shared<std::vector<float>>(
+        static_cast<std::size_t>(vertexCount) * 3U,
+        invalidFill);
     std::shared_ptr<std::vector<uint8_t>> grayPixels;
     if (extractGrayTexture) {
         grayPixels = std::make_shared<std::vector<uint8_t>>(static_cast<std::size_t>(vertexCount), 0U);
@@ -170,9 +193,10 @@ OrganizedCloudLoadResult loadOrganizedAsciiPly(
             (*points)[offset + 2] = z;
             ++result.validPoints;
         } else {
-            (*points)[offset + 0] = 0.0f;
-            (*points)[offset + 1] = 0.0f;
-            (*points)[offset + 2] = 0.0f;
+            // 旧版离线曾写 0,0,0（见 --legacy-zero-nan）；默认写 NaN，与 SDK / main.cpp 一致
+            (*points)[offset + 0] = invalidFill;
+            (*points)[offset + 1] = invalidFill;
+            (*points)[offset + 2] = invalidFill;
             ++result.nanPoints;
         }
 
@@ -217,6 +241,70 @@ OrganizedCloudLoadResult loadOrganizedAsciiPly(
     return result;
 }
 
+bool decodeImageToGray(const cv::Mat& loaded, cv::Mat& gray, QString& message)
+{
+    if (loaded.empty()) {
+        message = QStringLiteral("图像为空");
+        return false;
+    }
+    if (loaded.channels() == 1) {
+        gray = loaded;
+    } else if (loaded.channels() == 3 || loaded.channels() == 4) {
+        cv::cvtColor(loaded, gray, loaded.channels() == 4 ? cv::COLOR_BGRA2GRAY : cv::COLOR_BGR2GRAY);
+    } else {
+        message = QStringLiteral("不支持的图像通道数: %1").arg(loaded.channels());
+        return false;
+    }
+    return true;
+}
+
+// main.cpp：frame2dToCvMat / textureGray 与点云同宽高，不做 resize
+bool loadGrayTextureMainCppStyle(
+    const QString& imagePath,
+    int targetWidth,
+    int targetHeight,
+    scan_tracking::mech_eye::GrayTextureFrame& texture,
+    QString& message)
+{
+    const cv::Mat loaded = cv::imread(imagePath.toStdString(), cv::IMREAD_UNCHANGED);
+    if (loaded.empty()) {
+        message = QStringLiteral("无法读取图像: %1").arg(imagePath);
+        return false;
+    }
+
+    cv::Mat gray;
+    if (!decodeImageToGray(loaded, gray, message)) {
+        message = QStringLiteral("%1: %2").arg(imagePath, message);
+        return false;
+    }
+
+    if (gray.cols != targetWidth || gray.rows != targetHeight) {
+        message = QStringLiteral(
+                       "纹理 %1x%2 与点云 %3x%4 不一致（main.cpp 要求对齐）。请使用 main 导出的 "
+                       "*texture_aligned.bmp，或加 --allow-resize-texture / --texture-from-ply")
+                       .arg(gray.cols)
+                       .arg(gray.rows)
+                       .arg(targetWidth)
+                       .arg(targetHeight);
+        return false;
+    }
+
+    if (!gray.isContinuous()) {
+        gray = gray.clone();
+    }
+
+    texture.width = targetWidth;
+    texture.height = targetHeight;
+    texture.pixels = std::make_shared<std::vector<uint8_t>>(
+        static_cast<std::size_t>(targetWidth * targetHeight));
+    std::memcpy(texture.pixels->data(), gray.data, texture.pixels->size());
+    message = QStringLiteral("纹理 %1x%2 与点云同网格（main.cpp 对齐模式）")
+                  .arg(targetWidth)
+                  .arg(targetHeight);
+    return texture.isValid();
+}
+
+// 旧 testdata：jpg 缩略图缩放到点云网格（非 main 默认路径）
 bool loadGrayTextureResized(
     const QString& imagePath,
     int targetWidth,
@@ -231,19 +319,14 @@ bool loadGrayTextureResized(
     }
 
     cv::Mat gray;
-    if (loaded.channels() == 1) {
-        gray = loaded;
-    } else if (loaded.channels() == 3 || loaded.channels() == 4) {
-        cv::cvtColor(loaded, gray, loaded.channels() == 4 ? cv::COLOR_BGRA2GRAY : cv::COLOR_BGR2GRAY);
-    } else {
-        message = QStringLiteral("不支持的图像通道数: %1").arg(loaded.channels());
+    if (!decodeImageToGray(loaded, gray, message)) {
         return false;
     }
 
     cv::Mat resized;
     if (gray.cols != targetWidth || gray.rows != targetHeight) {
         cv::resize(gray, resized, cv::Size(targetWidth, targetHeight), 0, 0, cv::INTER_LINEAR);
-        message = QStringLiteral("纹理由 %1x%2 缩放到 %3x%4")
+        message = QStringLiteral("纹理由 %1x%2 缩放到 %3x%4（--allow-resize-texture）")
                       .arg(gray.cols)
                       .arg(gray.rows)
                       .arg(targetWidth)
@@ -261,10 +344,7 @@ bool loadGrayTextureResized(
     texture.height = targetHeight;
     texture.pixels = std::make_shared<std::vector<uint8_t>>(
         static_cast<std::size_t>(targetWidth * targetHeight));
-    std::memcpy(
-        texture.pixels->data(),
-        resized.data,
-        texture.pixels->size());
+    std::memcpy(texture.pixels->data(), resized.data, texture.pixels->size());
     return texture.isValid();
 }
 
@@ -292,12 +372,88 @@ scan_tracking::common::LbnPoseConfig defaultLbnConfig()
     config.enabled = true;
     config.dataRoot = dataRoot;
     config.templateFile = QDir(dataRoot).filePath(QStringLiteral("template-3D-ALL-Shift-Cut-Cut.txt"));
-    config.minDistance = 30.0f;
+    // 下列为 testdata/test scan_150200 离线验收参数，已同步 config.ini 仅供联调参考。
+    // 生产 scan-tracking.exe 读 config.ini：容差偏松时 success 率升但误匹配风险升，勿未验证即上线。
+    config.minDistance = 20.0f;
     config.maxDistance = 650.0f;
-    config.cosTolerance = 0.015f;
-    config.minPercent = 0.5f;
+    config.cosTolerance = 0.05f;
+    config.minPercent = 0.2f;
     config.cloudSearchRadiusPx = 20;
+    config.markerMinArea = 200;
+    config.markerMaxArea = 30000;
+    config.markerIntensityThreshold = 40;
+    config.markerDebscanDistPx = 120.0f;
     return config;
+}
+
+lbn_pose::Config toLbnCoreConfig(const scan_tracking::common::LbnPoseConfig& config)
+{
+    lbn_pose::Config core;
+    core.maxDistance = config.maxDistance;
+    core.minDistance = config.minDistance;
+    core.cosTolerance = config.cosTolerance;
+    core.minPercent = config.minPercent;
+    core.cloudSearchRadiusPx = config.cloudSearchRadiusPx;
+    core.markerMinArea = config.markerMinArea;
+    core.markerMaxArea = config.markerMaxArea;
+    core.markerIntensityThreshold = config.markerIntensityThreshold;
+    core.markerDebscanDistPx = config.markerDebscanDistPx;
+    core.templateFilePath = config.templateFile.toStdString();
+    return core;
+}
+
+bool writeCenters3dTemplate(const QString& path, const scan_tracking::vision::LbnPoseMarkerDebug& debug)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        return false;
+    }
+    QTextStream out(&file);
+    out.setRealNumberNotation(QTextStream::FixedNotation);
+    out.setRealNumberPrecision(8);
+    const int count = std::min(debug.centers3dCount, 32);
+    for (int i = 0; i < count; ++i) {
+        out << debug.centers3dX[i] << ' ' << debug.centers3dY[i] << ' ' << debug.centers3dZ[i] << '\n';
+    }
+    return count >= 3;
+}
+
+std::vector<cv::Point3f> markerDebugToPoints3d(const scan_tracking::vision::LbnPoseMarkerDebug& debug)
+{
+    std::vector<cv::Point3f> points;
+    const int count = std::min(debug.centers3dCount, 32);
+    points.reserve(static_cast<std::size_t>(count));
+    for (int i = 0; i < count; ++i) {
+        points.emplace_back(debug.centers3dX[i], debug.centers3dY[i], debug.centers3dZ[i]);
+    }
+    return points;
+}
+
+bool saveMarkerDebugImage(
+    const QString& imagePath,
+    const QString& outputPath,
+    const scan_tracking::vision::LbnPoseMarkerDebug& debug)
+{
+    cv::Mat bgr = cv::imread(imagePath.toStdString(), cv::IMREAD_COLOR);
+    if (bgr.empty()) {
+        return false;
+    }
+    const int count = std::min(debug.centers2dCount, 32);
+    for (int i = 0; i < count; ++i) {
+        const cv::Point center(
+            static_cast<int>(std::round(debug.centers2dU[i])),
+            static_cast<int>(std::round(debug.centers2dV[i])));
+        cv::circle(bgr, center, 14, cv::Scalar(0, 0, 255), 2);
+        cv::putText(
+            bgr,
+            std::to_string(i),
+            center + cv::Point(16, -8),
+            cv::FONT_HERSHEY_SIMPLEX,
+            0.8,
+            cv::Scalar(0, 255, 0),
+            2);
+    }
+    return cv::imwrite(outputPath.toStdString(), bgr);
 }
 
 bool resolveGroupFiles(
@@ -333,13 +489,28 @@ bool resolveGroupFiles(
         return true;
     }
 
-    const auto jpgs = dir.entryList(QStringList() << "*.jpg" << "*.jpeg" << "*.png", QDir::Files);
-    if (jpgs.isEmpty()) {
+    // 与 LBN main.cpp 导出对齐：优先 texture_aligned.bmp，避免误用缩略 jpg
+    const auto images = dir.entryList(
+        QStringList() << "*.bmp" << "*.png" << "*.jpg" << "*.jpeg",
+        QDir::Files);
+    if (images.isEmpty()) {
         error = QStringLiteral("目录内需要 1 张图像和 1 个 PLY（或使用 --texture-from-ply）: %1").arg(groupDir);
         return false;
     }
 
-    imagePath = dir.filePath(jpgs.front());
+    QString alignedImage;
+    QString fallbackImage;
+    for (const QString& name : images) {
+        if (name.contains(QStringLiteral("texture_aligned"), Qt::CaseInsensitive)) {
+            alignedImage = dir.filePath(name);
+            break;
+        }
+        if (fallbackImage.isEmpty()) {
+            fallbackImage = dir.filePath(name);
+        }
+    }
+
+    imagePath = alignedImage.isEmpty() ? fallbackImage : alignedImage;
     return true;
 }
 
@@ -411,6 +582,38 @@ int main(int argc, char* argv[])
     QCommandLineOption textureFromPlyOption(
         QStringList() << "texture-from-ply",
         QStringLiteral("从 PLY 顶点 RGB 生成与点云同网格的灰度纹理（推荐，避免 jpg 缩放错位）"));
+    QCommandLineOption legacyZeroNaNOption(
+        QStringList() << "legacy-zero-nan",
+        QStringLiteral("【旧行为】PLY 无效点写 0 而非 NaN，仅用于对比历史离线结果"));
+    QCommandLineOption allowResizeTextureOption(
+        QStringList() << "allow-resize-texture",
+        QStringLiteral("【扩展】允许纹理缩放到点云网格（非 main.cpp 默认）"));
+    QCommandLineOption minDistanceOption(
+        QStringList() << "min-distance", QStringLiteral("GeoHash 最小边长(mm)"), QStringLiteral("mm"));
+    QCommandLineOption maxDistanceOption(
+        QStringList() << "max-distance", QStringLiteral("GeoHash 最大边长(mm)"), QStringLiteral("mm"));
+    QCommandLineOption cosToleranceOption(
+        QStringList() << "cos-tolerance", QStringLiteral("角度余弦容差"), QStringLiteral("val"));
+    QCommandLineOption minPercentOption(
+        QStringList() << "min-percent", QStringLiteral("投票占比阈值"), QStringLiteral("val"));
+    QCommandLineOption cloudRadiusOption(
+        QStringList() << "cloud-radius", QStringLiteral("2D→3D 插值搜索半径(px)"), QStringLiteral("px"));
+    QCommandLineOption markerMinAreaOption(
+        QStringList() << "marker-min-area", QStringLiteral("标记点最小面积"), QStringLiteral("px"));
+    QCommandLineOption markerMaxAreaOption(
+        QStringList() << "marker-max-area", QStringLiteral("标记点最大面积"), QStringLiteral("px"));
+    QCommandLineOption markerIntensityOption(
+        QStringList() << "marker-intensity", QStringLiteral("标记点亮度上限"), QStringLiteral("0-255"));
+    QCommandLineOption debscanDistOption(
+        QStringList() << "debscan-dist", QStringLiteral("DBSCAN 去重像素距离"), QStringLiteral("px"));
+    QCommandLineOption bootstrapTemplateOption(
+        QStringList() << "bootstrap-template",
+        QStringLiteral("用本次检测 3D 点生成临时模板并二次匹配（验证链路）"),
+        QStringLiteral("path"));
+    QCommandLineOption saveDebugImageOption(
+        QStringList() << "save-debug-image",
+        QStringLiteral("保存标注 2D 圆心的调试图"),
+        QStringLiteral("path"));
 
     parser.addOption(groupOption);
     parser.addOption(imageOption);
@@ -419,12 +622,27 @@ int main(int argc, char* argv[])
     parser.addOption(cloudHeightOption);
     parser.addOption(templateOption);
     parser.addOption(textureFromPlyOption);
+    parser.addOption(legacyZeroNaNOption);
+    parser.addOption(allowResizeTextureOption);
+    parser.addOption(minDistanceOption);
+    parser.addOption(maxDistanceOption);
+    parser.addOption(cosToleranceOption);
+    parser.addOption(minPercentOption);
+    parser.addOption(cloudRadiusOption);
+    parser.addOption(markerMinAreaOption);
+    parser.addOption(markerMaxAreaOption);
+    parser.addOption(markerIntensityOption);
+    parser.addOption(debscanDistOption);
+    parser.addOption(bootstrapTemplateOption);
+    parser.addOption(saveDebugImageOption);
     parser.addPositionalArgument(
         QStringLiteral("files"),
         QStringLiteral("可选: <image> <ply>（未使用 --group 时）"));
     parser.process(app);
 
     const bool textureFromPly = parser.isSet(textureFromPlyOption);
+    const bool legacyZeroNaN = parser.isSet(legacyZeroNaNOption);
+    const bool allowResizeTexture = parser.isSet(allowResizeTextureOption);
 
     QString imagePath = parser.value(imageOption);
     QString plyPath = parser.value(plyOption);
@@ -446,9 +664,10 @@ int main(int argc, char* argv[])
 
     if (plyPath.isEmpty()) {
         std::cerr << "用法:\n"
-                  << "  scan_tracking_lbn_offline_runner --group testdata/group1 --texture-from-ply\n"
-                  << "  scan_tracking_lbn_offline_runner -i texture.jpg -p cloud.ply\n"
-                  << "  scan_tracking_lbn_offline_runner -p cloud.ply --texture-from-ply\n";
+                  << "  scan_tracking_lbn_offline_runner --group testdata/group1\n"
+                  << "    （默认 main.cpp：texture_aligned.bmp + 同尺寸 PLY）\n"
+                  << "  scan_tracking_lbn_offline_runner --group testdata/group1 --allow-resize-texture\n"
+                  << "  scan_tracking_lbn_offline_runner --group testdata/group1 --texture-from-ply\n";
         return 2;
     }
 
@@ -464,9 +683,12 @@ int main(int argc, char* argv[])
         std::cout << "图像: " << imagePath.toStdString() << '\n';
     }
     std::cout << "点云: " << plyPath.toStdString() << '\n';
-    std::cout << "纹理来源: " << (textureFromPly ? "PLY RGB→灰度" : "外部图像") << '\n';
+    std::cout << "流程: " << (textureFromPly ? "扩展/PLY纹理" : (allowResizeTexture ? "扩展/缩放纹理" : "main.cpp 对齐纹理"))
+              << '\n';
+    std::cout << "PLY 无效点: " << (legacyZeroNaN ? "legacy 写 0,0,0" : "quiet_NaN（与 SDK/main 一致）") << '\n';
 
-    const auto cloudLoad = loadOrganizedAsciiPly(plyPath, forcedWidth, forcedHeight, textureFromPly);
+    const auto cloudLoad =
+        loadOrganizedAsciiPly(plyPath, forcedWidth, forcedHeight, textureFromPly, legacyZeroNaN);
     if (!cloudLoad.error.isEmpty()) {
         std::cerr << cloudLoad.error.toStdString() << '\n';
         return 3;
@@ -482,14 +704,24 @@ int main(int argc, char* argv[])
         textureMessage = QStringLiteral("纹理由 PLY 顶点 RGB 转灰度 %1x%2（与点云同网格）")
                              .arg(texture.width)
                              .arg(texture.height);
-    } else if (!loadGrayTextureResized(
-                   imagePath,
-                   cloudLoad.frame.width,
-                   cloudLoad.frame.height,
-                   texture,
-                   textureMessage)) {
-        std::cerr << textureMessage.toStdString() << '\n';
-        return 4;
+    } else {
+        const bool textureOk = allowResizeTexture
+            ? loadGrayTextureResized(
+                  imagePath,
+                  cloudLoad.frame.width,
+                  cloudLoad.frame.height,
+                  texture,
+                  textureMessage)
+            : loadGrayTextureMainCppStyle(
+                  imagePath,
+                  cloudLoad.frame.width,
+                  cloudLoad.frame.height,
+                  texture,
+                  textureMessage);
+        if (!textureOk) {
+            std::cerr << textureMessage.toStdString() << '\n';
+            return 4;
+        }
     }
     std::cout << textureMessage.toStdString() << '\n';
 
@@ -504,7 +736,40 @@ int main(int argc, char* argv[])
     if (parser.isSet(templateOption)) {
         lbnConfig.templateFile = parser.value(templateOption);
     }
+    if (parser.isSet(minDistanceOption)) {
+        lbnConfig.minDistance = parser.value(minDistanceOption).toFloat();
+    }
+    if (parser.isSet(maxDistanceOption)) {
+        lbnConfig.maxDistance = parser.value(maxDistanceOption).toFloat();
+    }
+    if (parser.isSet(cosToleranceOption)) {
+        lbnConfig.cosTolerance = parser.value(cosToleranceOption).toFloat();
+    }
+    if (parser.isSet(minPercentOption)) {
+        lbnConfig.minPercent = parser.value(minPercentOption).toFloat();
+    }
+    if (parser.isSet(cloudRadiusOption)) {
+        lbnConfig.cloudSearchRadiusPx = parser.value(cloudRadiusOption).toInt();
+    }
+    if (parser.isSet(markerMinAreaOption)) {
+        lbnConfig.markerMinArea = parser.value(markerMinAreaOption).toInt();
+    }
+    if (parser.isSet(markerMaxAreaOption)) {
+        lbnConfig.markerMaxArea = parser.value(markerMaxAreaOption).toInt();
+    }
+    if (parser.isSet(markerIntensityOption)) {
+        lbnConfig.markerIntensityThreshold = parser.value(markerIntensityOption).toInt();
+    }
+    if (parser.isSet(debscanDistOption)) {
+        lbnConfig.markerDebscanDistPx = parser.value(debscanDistOption).toFloat();
+    }
 
+    std::cout << "LBN 参数: minDist=" << lbnConfig.minDistance << " maxDist=" << lbnConfig.maxDistance
+              << " cosTol=" << lbnConfig.cosTolerance << " minPct=" << lbnConfig.minPercent
+              << " cloudR=" << lbnConfig.cloudSearchRadiusPx << " markerArea=["
+              << lbnConfig.markerMinArea << "," << lbnConfig.markerMaxArea << "] intensity<="
+              << lbnConfig.markerIntensityThreshold << " debscan=" << lbnConfig.markerDebscanDistPx
+              << '\n';
     std::cout << "LBN 模板: " << lbnConfig.templateFile.toStdString() << '\n';
     std::cout << "调用 runLbnPoseDetection...\n";
 
@@ -514,6 +779,15 @@ int main(int argc, char* argv[])
 
     printMarkerDebug(markerDebug);
 
+    if (parser.isSet(saveDebugImageOption) && !imagePath.isEmpty()) {
+        const QString debugPath = parser.value(saveDebugImageOption);
+        if (saveMarkerDebugImage(imagePath, debugPath, markerDebug)) {
+            std::cout << "已保存调试图: " << debugPath.toStdString() << '\n';
+        } else {
+            std::cerr << "保存调试图失败: " << debugPath.toStdString() << '\n';
+        }
+    }
+
     std::cout << "invoked=" << lbnResult.invoked << '\n';
     std::cout << "success=" << lbnResult.success << '\n';
     std::cout << "message=" << lbnResult.message.toStdString() << '\n';
@@ -522,6 +796,44 @@ int main(int argc, char* argv[])
     if (lbnResult.poseMatrix.isValid()) {
         std::cout << "Rt 4x4:\n";
         printPoseMatrix(lbnResult.poseMatrix);
+    }
+
+    const bool wantBootstrap = parser.isSet(bootstrapTemplateOption);
+    if (!lbnResult.success && wantBootstrap && markerDebug.centers3dCount >= 3) {
+        QString bootstrapPath = parser.value(bootstrapTemplateOption);
+        if (bootstrapPath.isEmpty()) {
+            bootstrapPath = QDir(QFileInfo(plyPath).absolutePath())
+                                .filePath(QStringLiteral("detected_template_bootstrap.txt"));
+        }
+        if (!writeCenters3dTemplate(bootstrapPath, markerDebug)) {
+            std::cerr << "无法写入 bootstrap 模板: " << bootstrapPath.toStdString() << '\n';
+            return 5;
+        }
+        std::cout << "主模板匹配失败，使用检测 3D 点 bootstrap 模板: "
+                  << bootstrapPath.toStdString() << '\n';
+
+        auto bootstrapConfig = lbnConfig;
+        bootstrapConfig.templateFile = bootstrapPath;
+        lbn_pose::Estimator bootstrapEstimator(toLbnCoreConfig(bootstrapConfig));
+        const auto bootstrapResult =
+            bootstrapEstimator.estimateFrom3d(markerDebugToPoints3d(markerDebug));
+
+        std::cout << "bootstrap success=" << (bootstrapResult.success ? 1 : 0) << '\n';
+        std::cout << "bootstrap message=" << bootstrapResult.message << '\n';
+        std::cout << "bootstrap matchedPointCount=" << bootstrapResult.matchedPointCount << '\n';
+        if (bootstrapResult.success && !bootstrapResult.rtGlobal.empty()) {
+            scan_tracking::vision::PoseMatrix4x4 pose;
+            float values[16] = {};
+            if (lbn_pose::rtGlobalToRowMajor16(bootstrapResult.rtGlobal, values)) {
+                for (int i = 0; i < 16; ++i) {
+                    pose.values[static_cast<std::size_t>(i)] = values[i];
+                }
+                pose.valid = true;
+                std::cout << "bootstrap Rt 4x4:\n";
+                printPoseMatrix(pose);
+            }
+            return 0;
+        }
     }
 
     return lbnResult.success ? 0 : 5;

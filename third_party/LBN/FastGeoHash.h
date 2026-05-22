@@ -29,6 +29,8 @@ public:
 		int   max_area;                          // 识别标记点的最小面积
 		int   ROI_w;                             // 局部搜索ROI
 		int   ROI_h;
+		int   intensityThreshold;                // 暗斑亮度上限；增大→检出更多，生产注意假圆心
+		float debscanFilterDistPx;               // DBSCAN 去重像素距；减小→保留更密圆心，见 [LbnPose] 配置
 
 		Config()                                 // 显式写出构造函数进行初始化  
 		{
@@ -37,6 +39,8 @@ public:
 			max_area          = 30000;            // 识别标记点的最大面积 7000 5000
 			ROI_w             = 800;
 			ROI_h             = 800;
+			intensityThreshold = 50;
+			debscanFilterDistPx = DEBSCAN_FILTER_DIST_MAX;
 		}
 	} config;
 

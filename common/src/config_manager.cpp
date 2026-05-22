@@ -161,15 +161,20 @@ void ConfigManager::writeDefaults(QSettings& settings)
     settings.setValue("minPercent", 0.5);
     settings.endGroup();
 
+    // 首次生成 config.ini 时的 [LbnPose] 默认（与 150200 离线验收一致，生产宜再标定）
     settings.beginGroup("LbnPose");
     settings.setValue("enabled", true);
     settings.setValue("dataRoot", "D:/work/LY/IPC-192.168.110.173_track-main/third_party/LBN/data");
     settings.setValue("templateFile", "D:/work/LY/IPC-192.168.110.173_track-main/third_party/LBN/data/template-3D-ALL-Shift-Cut-Cut.txt");
-    settings.setValue("minDistance", 30.0);
+    settings.setValue("minDistance", 20.0);
     settings.setValue("maxDistance", 650.0);
-    settings.setValue("cosTolerance", 0.015);
-    settings.setValue("minPercent", 0.5);
+    settings.setValue("cosTolerance", 0.05);
+    settings.setValue("minPercent", 0.2);
     settings.setValue("cloudSearchRadiusPx", 20);
+    settings.setValue("markerMinArea", 200);
+    settings.setValue("markerMaxArea", 30000);
+    settings.setValue("markerIntensityThreshold", 40);
+    settings.setValue("markerDebscanDistPx", 120.0);
     settings.endGroup();
 
     settings.beginGroup("FlowControl");
@@ -259,6 +264,7 @@ void ConfigManager::load(const QString& filePath)
     m_lbPoseConfig.minPercent = settings.value("minPercent", 0.5).toFloat();
     settings.endGroup();
 
+    // [LbnPose] 默认值与 testdata/test 150200 离线调通一致；上线前请多扫描验证，见 docs/LBN离线调通交接说明.md
     settings.beginGroup("LbnPose");
     m_lbnPoseConfig.enabled = settings.value("enabled", true).toBool();
     m_lbnPoseConfig.dataRoot = settings.value(
@@ -269,11 +275,16 @@ void ConfigManager::load(const QString& filePath)
         "templateFile",
         QStringLiteral("D:/work/LY/IPC-192.168.110.173_track-main/third_party/LBN/data/template-3D-ALL-Shift-Cut-Cut.txt"))
         .toString();
-    m_lbnPoseConfig.minDistance = settings.value("minDistance", 30.0).toFloat();
+    m_lbnPoseConfig.minDistance = settings.value("minDistance", 20.0).toFloat();
     m_lbnPoseConfig.maxDistance = settings.value("maxDistance", 650.0).toFloat();
-    m_lbnPoseConfig.cosTolerance = settings.value("cosTolerance", 0.015).toFloat();
-    m_lbnPoseConfig.minPercent = settings.value("minPercent", 0.5).toFloat();
+    m_lbnPoseConfig.cosTolerance = settings.value("cosTolerance", 0.05).toFloat();
+    m_lbnPoseConfig.minPercent = settings.value("minPercent", 0.2).toFloat();
     m_lbnPoseConfig.cloudSearchRadiusPx = settings.value("cloudSearchRadiusPx", 20).toInt();
+    m_lbnPoseConfig.markerMinArea = settings.value("markerMinArea", 200).toInt();
+    m_lbnPoseConfig.markerMaxArea = settings.value("markerMaxArea", 30000).toInt();
+    m_lbnPoseConfig.markerIntensityThreshold = settings.value("markerIntensityThreshold", 40).toInt();
+    m_lbnPoseConfig.markerDebscanDistPx =
+        settings.value("markerDebscanDistPx", 120.0).toFloat();
     settings.endGroup();
 
     settings.beginGroup("FlowControl");

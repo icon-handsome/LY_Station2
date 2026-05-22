@@ -1,4 +1,5 @@
 #include "FastGeoHash.h"
+#include <algorithm>
 #include <numeric>
 #include <random>
 
@@ -162,7 +163,7 @@ bool MarkPointDetector::GlobalSearch(const cv::Mat&            img_in,
 					y_f = floorf(high_res_pos.y);
 					y_c = ceilf(high_res_pos.y);
 
-					int intensity_c = 50;
+					const int intensity_c = config.intensityThreshold;
 					if ((int)img_in.at<uchar>(y_f, x_f) < intensity_c ||
 						(int)img_in.at<uchar>(y_c, x_f) < intensity_c ||
 						(int)img_in.at<uchar>(y_f, x_c) < intensity_c ||
@@ -238,17 +239,12 @@ bool MarkPointDetector::GlobalSearch(const cv::Mat&            img_in,
 
 	is_initialized = !circle_centers.empty();
 
-	// 注意要做离群点统计滤波
-	//std::vector<cv::Point2f> results_2;
-	//filterOutliers(circle_centers, results, 2.0);
-	//filterOutliers(results, results_2, 2.0);
-	//results.clear();
-	//filterOutliers(results_2, results, 2.0);
+	std::cout << "Raw marker candidates before DBSCAN: " << circle_centers.size() << std::endl;
 
-	// TODO: 优化耗时,优化判断依据
+	// 注意要做离群点统计滤波
 	 filterOutlies_Debscan(circle_centers,
 		                  results,
-						  DEBSCAN_FILTER_DIST_MAX,               // 聚类半径 100, 400
+						  config.debscanFilterDistPx,
 		                  5);
 
 	if (results.size() < 4)
@@ -934,6 +930,21 @@ int FastGeoHash::addVote(const cv::Point3f& sA,
 	return 0;
 }
 
+// -----------------------------------------------------------------------------
+// getResult：从三角形投票箱中判定「当前帧 3D 点对应哪个模板点 ID」
+//
+// 历史问题（已修复）：
+//   曾有一版实现要求 maxV>=6 且 secondV 倍率>1.5，且完全忽略入参 minPercent，
+//   导致帧内仅 7~10 个 3D 点时永远无法通过 query()，Get_Track_Pose 恒为 code=500。
+//
+// 当前策略（相对文件内上方注释掉的旧版）：
+//   1) 主路径：恢复 minPercent 占比 + 最低票数 voteThreshold=max(3, minPercent*count)
+//   2) 次显著性：maxV 须不低于 secondV 的 1.25 倍（旧活跃版为 1.5 且须 maxV>=6）
+//   3) 兜底：点数较多时沿用「maxV>4 && count>4 && maxV>minPercent*count」
+//
+// 生产注意：门槛低于「maxV>=6」版，点少/噪声时更易 success，但也更易误匹配；
+//   上线前请多工况验证 Rt；若误匹增多可收紧 voteThreshold 或倍率（见 docs/LBN离线调通交接说明.md）
+// -----------------------------------------------------------------------------
 //// count - 总票数
 //// minPercent - 选中id的最小占比
 //int FastGeoHash::getResult(int count, float minPercent)
@@ -994,15 +1005,28 @@ int FastGeoHash::getResult(int count, float minPercent)
 		}
 	}
 
-	// 1. 绝对票数够大 (比如 5 票以上)
-	// 2. 显著性：比第二名高出一定比例 (Ratio Test)
-	if (maxV >= 6)
+	if (bestId < 0 || count < 1 || maxV < 1)
 	{
-		if (secondV == 0 || (float)maxV / secondV > 1.5f)
+		return -1;
+	}
+
+	// 主路径：minPercent 必须参与判定（query() 传入，与 config.ini [LbnPose] 一致）
+	const int voteThreshold = std::max(3, static_cast<int>(minPercent * static_cast<float>(count)));
+	if (maxV >= voteThreshold && count >= 3)
+	{
+		// 无第二名或第一名显著领先，避免多模板 ID 争抢时误选
+		if (secondV == 0 || static_cast<float>(maxV) >= static_cast<float>(secondV) * 1.25f)
 		{
 			return bestId;
 		}
 	}
+
+	// 兜底：与上方注释掉的原始逻辑一致，帧内有效三角形投票较多时启用
+	if (maxV > 4 && count > 4 && maxV > static_cast<int>(minPercent * static_cast<float>(count)))
+	{
+		return bestId;
+	}
+
 	return -1;
 }
 

@@ -83,15 +83,20 @@ struct LbPoseConfig {
     float minPercent;
 };
 
+/** LBN 位姿检测配置。生产环境请多工况标定，勿仅按单帧离线 success 放大容差。 */
 struct LbnPoseConfig {
     bool enabled = true;
     QString dataRoot;
     QString templateFile;
-    float minDistance = 30.0f;
+    float minDistance = 30.0f;   // mm，过小易纳入杂点三角形
     float maxDistance = 650.0f;
-    float cosTolerance = 0.015f;
-    float minPercent = 0.5f;
+    float cosTolerance = 0.015f; // 过大易误匹配模板点
+    float minPercent = 0.5f;     // 与 FastGeoHash::getResult 联动
     int cloudSearchRadiusPx = 20;
+    int markerMinArea = 400;
+    int markerMaxArea = 30000;
+    int markerIntensityThreshold = 50;
+    float markerDebscanDistPx = 300.0f;
 };
 
 /**

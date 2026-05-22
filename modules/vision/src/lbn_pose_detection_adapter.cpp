@@ -27,16 +27,15 @@ LbnPoseResult makeFailure(const QString& message)
 
 cv::Mat grayTextureToMat(const scan_tracking::mech_eye::GrayTextureFrame& texture)
 {
+    cv::Mat gray;
     if (!texture.isValid()) {
-        return {};
+        return gray;
     }
-
-    cv::Mat gray(texture.height, texture.width, CV_8UC1);
-    for (int row = 0; row < texture.height; ++row) {
-        uint8_t* dst = gray.ptr<uint8_t>(row);
-        const uint8_t* src = texture.pixels->data() + static_cast<std::size_t>(row * texture.width);
-        std::memcpy(dst, src, static_cast<std::size_t>(texture.width));
-    }
+    lbn_pose::grayImageToCvMat(
+        texture.pixels->data(),
+        texture.width,
+        texture.height,
+        gray);
     return gray;
 }
 
@@ -122,6 +121,7 @@ QString buildTemplatePath(const scan_tracking::common::LbnPoseConfig& config)
     return QDir(candidateRoots.at(1)).filePath(templateName);
 }
 
+// 将 IPC 配置映射到 lbn_pose::Config（含检测/投票参数，影响生产匹配松紧）
 lbn_pose::Config toCoreConfig(const scan_tracking::common::LbnPoseConfig& config)
 {
     lbn_pose::Config coreConfig;
@@ -130,6 +130,10 @@ lbn_pose::Config toCoreConfig(const scan_tracking::common::LbnPoseConfig& config
     coreConfig.cosTolerance = config.cosTolerance;
     coreConfig.minPercent = config.minPercent;
     coreConfig.cloudSearchRadiusPx = config.cloudSearchRadiusPx;
+    coreConfig.markerMinArea = config.markerMinArea;
+    coreConfig.markerMaxArea = config.markerMaxArea;
+    coreConfig.markerIntensityThreshold = config.markerIntensityThreshold;
+    coreConfig.markerDebscanDistPx = config.markerDebscanDistPx;
     coreConfig.templateFilePath = buildTemplatePath(config).toStdString();
     return coreConfig;
 }
