@@ -30,13 +30,14 @@ namespace tracking { class TrackingService; }
 namespace flow_control { class StateMachine; }
 namespace vision {
 class HikCameraService;
+class HikCameraCController;
 class VisionPipelineService;
 }
 namespace hmi_server {
 
 class HmiSession;
 
-/// 单路 status.* 去重缓存（payload + 是否已建立，避免与空 QJsonObject 混淆）
+/// 单路 status.* 去重缓存（按 payload 相等抑制重复下发，避免空 QJsonObject 与“未缓存”混淆）
 struct HmiStatusPushCache {
     QJsonObject payload;
     bool isValid = false;
@@ -75,7 +76,9 @@ public:
     void setMechEyeService(mech_eye::MechEyeService* svc);
     void setVisionPipelineService(vision::VisionPipelineService* svc);
     void setTrackingService(tracking::TrackingService* svc);
-    void setHikCameraServices(vision::HikCameraService* hikA, vision::HikCameraService* hikB);
+    void setHikCameraServices(vision::HikCameraService* hikA, vision::HikCameraService* hikB,
+                              vision::HikCameraService* hikC = nullptr);
+    void setHikCameraCController(vision::HikCameraCController* controller);
 
 private slots:
     /// 处理新的客户端连接
@@ -181,19 +184,23 @@ private:
     void pushCameraStatus();
 
     QJsonObject buildCameraStatusPayload() const;
+
+    /// 海康 C：SDK 已连接或智能相机 TCP 已接入视为在线（与 A/B 的 isConnected 语义对齐显控）
+    bool hikCameraCConnected() const;
     
     /// 向 Qt 端周期性推送设备在线状态字和故障状态字（对应协议 status.device）
     void pushDeviceStatus();
 
     QJsonObject buildDeviceStatusPayload() const;
 
-    /// slot.isValid 为 false 或 payload 变化时才发送 status.* 事件
-    bool pushStatusIfChanged(const QString& type, const QJsonObject& payload, HmiStatusPushCache& slot);
+    /// payload 与缓存一致则不下发；forcePush 用于新客户端接入后的全量同步
+    bool pushStatusIfChanged(const QString& type, const QJsonObject& payload, HmiStatusPushCache& slot,
+                             bool forcePush = false);
 
-    /// 使状态去重缓存失效（新连接 / 断开后调用，勿用空 QJsonObject 充当“未缓存”）
+    /// 清空去重缓存（仅在新连接 / 断开时调用）
     void invalidateStatusPushCache();
 
-    /// 缓存失效后向当前客户端全量推送四类 status.*
+    /// 向当前客户端全量推送四类 status.*（强制下发，不受去重影响）
     void pushAllStatusToClient();
 
     /// 用当前构建结果刷新去重缓存（cmd.getStatus 等已主动下发状态后调用）
@@ -266,6 +273,8 @@ private:
     tracking::TrackingService* m_trackingService = nullptr;
     vision::HikCameraService* m_hikCameraA = nullptr;
     vision::HikCameraService* m_hikCameraB = nullptr;
+    vision::HikCameraService* m_hikCameraC = nullptr;
+    vision::HikCameraCController* m_hikCameraCController = nullptr;
     
     /// 消息类型到处理函数的映射表（用于快速分发消息）
     QHash<QString, MessageHandler> m_messageHandlers;

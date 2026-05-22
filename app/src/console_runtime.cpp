@@ -257,7 +257,9 @@ void ConsoleRuntime::initModules()
         hmiTcpServer_->setMechEyeService(mechEyeService_.get());
         hmiTcpServer_->setVisionPipelineService(visionPipelineService_.get());
         hmiTcpServer_->setTrackingService(trackingService_.get());
-        hmiTcpServer_->setHikCameraServices(hikCameraAService_.get(), hikCameraBService_.get());
+        hmiTcpServer_->setHikCameraServices(
+            hikCameraAService_.get(), hikCameraBService_.get(), hikCameraCService_.get());
+        hmiTcpServer_->setHikCameraCController(hikCameraCController_.get());
         hmiTcpServer_->bindServiceSignals();
         if (!hmiTcpServer_->start()) {
             qWarning(appLog) << "HMI TCP 服务器在端口" << hmiConfig.tcpPort << "启动失败。";

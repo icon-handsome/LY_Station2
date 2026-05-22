@@ -13,6 +13,7 @@
 #include "scan_tracking/mech_eye/mech_eye_service.h"
 #include "scan_tracking/vision/vision_pipeline_service.h"
 #include "scan_tracking/vision/hik_camera_service.h"
+#include "scan_tracking/vision/hik_camera_c_controller.h"
 #include "scan_tracking/tracking/tracking_service.h"  // InspectionMeasurement, appendInspectionMeasurementFields
 #include "scan_tracking/common/config_manager.h"
 
@@ -51,6 +52,44 @@ bool isHighFrequencyTcpType(const QString& type)
         || type == QLatin1String(kHeartbeatPing)
         || type == QLatin1String(kHeartbeatPong)
         || type == QLatin1String(kEventLog);
+}
+
+/// status.camera 单行摘要（仅在实际下发时打印，与显控 payload 变更去重一致）
+QString summarizeCameraStatusPayload(const QJsonObject& payload)
+{
+    QStringList parts;
+
+    const QJsonObject mechEye = payload.value(QLatin1String("mechEye")).toObject();
+    if (!mechEye.isEmpty()) {
+        parts << QStringLiteral("mechEye(state=%1,connected=%2)")
+                     .arg(mechEye.value(QLatin1String("state")).toInt(-1))
+                     .arg(mechEye.value(QLatin1String("connected")).toBool() ? 1 : 0);
+    }
+
+    const QJsonObject hikA = payload.value(QLatin1String("hikA")).toObject();
+    if (!hikA.isEmpty()) {
+        parts << QStringLiteral("hikA(connected=%1)")
+                     .arg(hikA.value(QLatin1String("connected")).toBool() ? 1 : 0);
+    }
+
+    const QJsonObject hikB = payload.value(QLatin1String("hikB")).toObject();
+    if (!hikB.isEmpty()) {
+        parts << QStringLiteral("hikB(connected=%1)")
+                     .arg(hikB.value(QLatin1String("connected")).toBool() ? 1 : 0);
+    }
+
+    const QJsonObject hikC = payload.value(QLatin1String("hikC")).toObject();
+    if (!hikC.isEmpty()) {
+        parts << QStringLiteral("hikC(connected=%1)")
+                     .arg(hikC.value(QLatin1String("connected")).toBool() ? 1 : 0);
+    }
+
+    const QJsonObject pipeline = payload.value(QLatin1String("pipeline")).toObject();
+    if (!pipeline.isEmpty()) {
+        parts << QStringLiteral("pipeline(state=%1)")
+                     .arg(pipeline.value(QLatin1String("state")).toInt(-1));
+    }
+    return parts.isEmpty() ? QStringLiteral("(empty)") : parts.join(QLatin1String(" "));
 }
 
 // TODO(hmi): 远程 event.log 转发默认关闭，优先保证 TCP 简洁与主业务打通。
@@ -190,9 +229,15 @@ void HmiTcpServer::disconnectServiceSignals()
 void HmiTcpServer::setMechEyeService(mech_eye::MechEyeService* svc) { m_mechEyeService = svc; }
 void HmiTcpServer::setVisionPipelineService(vision::VisionPipelineService* svc) { m_visionPipeline = svc; }
 void HmiTcpServer::setTrackingService(tracking::TrackingService* svc) { m_trackingService = svc; }
-void HmiTcpServer::setHikCameraServices(vision::HikCameraService* hikA, vision::HikCameraService* hikB) {
+void HmiTcpServer::setHikCameraServices(vision::HikCameraService* hikA, vision::HikCameraService* hikB,
+                                        vision::HikCameraService* hikC) {
     m_hikCameraA = hikA;
     m_hikCameraB = hikB;
+    m_hikCameraC = hikC;
+}
+
+void HmiTcpServer::setHikCameraCController(vision::HikCameraCController* controller) {
+    m_hikCameraCController = controller;
 }
 
 void HmiTcpServer::onNewConnection()
@@ -466,6 +511,14 @@ void HmiTcpServer::handleCmdGetConfig(const QJsonObject& message)
     hikBObj[QLatin1String("ipAddress")] = cfgMgr->visionConfig().hikCameraB.ipAddress; // IP 地址
     hikBObj[QLatin1String("serialNumber")] = cfgMgr->visionConfig().hikCameraB.serialNumber; // 序列号
     visionObj[QLatin1String("hikCameraB")] = hikBObj;
+
+    QJsonObject hikCObj;
+    hikCObj[QLatin1String("logicalName")] = cfgMgr->visionConfig().hikCameraC.logicalName;
+    hikCObj[QLatin1String("cameraKey")] = cfgMgr->visionConfig().hikCameraC.cameraKey;
+    hikCObj[QLatin1String("ipAddress")] = cfgMgr->visionConfig().hikCameraC.ipAddress;
+    hikCObj[QLatin1String("serialNumber")] = cfgMgr->visionConfig().hikCameraC.serialNumber;
+    hikCObj[QLatin1String("accessMode")] = cfgMgr->visionConfig().hikCameraC.accessMode;
+    visionObj[QLatin1String("hikCameraC")] = hikCObj;
     
     configPayload[QLatin1String("vision")] = visionObj;
     
@@ -655,21 +708,25 @@ void HmiTcpServer::handleCmdCaptureBundle(const QJsonObject& message)
 
 void HmiTcpServer::invalidateStatusPushCache()
 {
-    m_systemStatusCache.isValid = false;
-    m_plcStatusCache.isValid = false;
-    m_cameraStatusCache.isValid = false;
-    m_deviceStatusCache.isValid = false;
+    m_systemStatusCache = {};
+    m_plcStatusCache = {};
+    m_cameraStatusCache = {};
+    m_deviceStatusCache = {};
 }
 
 bool HmiTcpServer::pushStatusIfChanged(const QString& type, const QJsonObject& payload,
-                                       HmiStatusPushCache& slot)
+                                       HmiStatusPushCache& slot, bool forcePush)
 {
-    if (slot.isValid && payload == slot.payload) {
+    if (!forcePush && slot.isValid && payload == slot.payload) {
         return false;
     }
     slot.payload = payload;
     slot.isValid = true;
     sendToClient(buildEnvelope(type, nextEventId(), payload));
+    if (hasClient() && type == QLatin1String(msg_type::kStatusCamera)) {
+        qInfo(LOG_HMI_SERVER).noquote()
+            << "[TCPIP] status.camera TX |" << summarizeCameraStatusPayload(payload);
+    }
     return true;
 }
 
@@ -678,10 +735,14 @@ void HmiTcpServer::pushAllStatusToClient()
     if (!hasClient()) {
         return;
     }
-    pushSystemStatus();
-    pushPlcStatus();
-    pushCameraStatus();
-    pushDeviceStatus();
+    pushStatusIfChanged(QLatin1String(msg_type::kStatusSystem), buildSystemStatusPayload(),
+                        m_systemStatusCache, true);
+    pushStatusIfChanged(QLatin1String(msg_type::kStatusPlc), buildPlcStatusPayload(),
+                        m_plcStatusCache, true);
+    pushStatusIfChanged(QLatin1String(msg_type::kStatusCamera), buildCameraStatusPayload(),
+                        m_cameraStatusCache, true);
+    pushStatusIfChanged(QLatin1String(msg_type::kStatusDevice), buildDeviceStatusPayload(),
+                        m_deviceStatusCache, true);
 }
 
 void HmiTcpServer::syncStatusPushCacheFromCurrent()
@@ -803,6 +864,13 @@ QJsonObject HmiTcpServer::buildCameraStatusPayload() const
         hikBObj[QLatin1String("connected")] = m_hikCameraB->isConnected();
         payload[QLatin1String("hikB")] = hikBObj;
     }
+
+    if (m_hikCameraC) {
+        QJsonObject hikCObj;
+        hikCObj[QLatin1String("roleName")] = m_hikCameraC->roleName();
+        hikCObj[QLatin1String("connected")] = hikCameraCConnected();
+        payload[QLatin1String("hikC")] = hikCObj;
+    }
     
     if (m_visionPipeline) {
         QJsonObject pipelineObj;
@@ -810,6 +878,16 @@ QJsonObject HmiTcpServer::buildCameraStatusPayload() const
         payload[QLatin1String("pipeline")] = pipelineObj;
     }
     return payload;
+}
+
+bool HmiTcpServer::hikCameraCConnected() const
+{
+    if (m_hikCameraCController && m_hikCameraCController->isStarted()) {
+        if (m_hikCameraCController->isCameraConnectedToTcp()) {
+            return true;
+        }
+    }
+    return m_hikCameraC && m_hikCameraC->isConnected();
 }
 
 void HmiTcpServer::pushDeviceStatus()
@@ -858,10 +936,12 @@ QJsonObject HmiTcpServer::buildDeviceStatusPayload() const
 
     const bool hikAOnline = m_hikCameraA && m_hikCameraA->isConnected();
     const bool hikBOnline = m_hikCameraB && m_hikCameraB->isConnected();
-    if (hikAOnline || hikBOnline) {
+    const bool hikCOnline = hikCameraCConnected();
+    const bool hasAnyHikService = m_hikCameraA || m_hikCameraB || m_hikCameraC;
+    if (hikAOnline || hikBOnline || hikCOnline) {
         onlineWord0 |= (1u << kBitHik2d);
     }
-    if ((m_hikCameraA || m_hikCameraB) && !hikAOnline && !hikBOnline) {
+    if (hasAnyHikService && !hikAOnline && !hikBOnline && !hikCOnline) {
         faultWord0 |= (1u << kBitHik2d);
     }
 
@@ -1094,7 +1174,6 @@ void HmiTcpServer::connectMechEyeSignals()
         payload[QLatin1String("level")] = 3;
         payload[QLatin1String("code")] = static_cast<int>(code);
         sendToClient(buildEnvelope(QLatin1String(msg_type::kEventAlarm), nextEventId(), payload));
-        m_deviceStatusCache.isValid = false;
         if (hasClient()) {
             pushDeviceStatus();
         }
@@ -1105,8 +1184,6 @@ void HmiTcpServer::connectStatusRefreshSignals()
 {
     if (m_stateMachine) {
         connect(m_stateMachine, &flow_control::StateMachine::stateChanged, this, [this]() {
-            m_systemStatusCache.isValid = false;
-            m_deviceStatusCache.isValid = false;
             if (hasClient()) {
                 pushSystemStatus();
                 pushDeviceStatus();
@@ -1114,25 +1191,14 @@ void HmiTcpServer::connectStatusRefreshSignals()
         }, Qt::UniqueConnection);
     }
 
-    auto refreshDeviceStatus = [this]() {
-        m_deviceStatusCache.isValid = false;
-        if (hasClient()) {
-            pushDeviceStatus();
-        }
-    };
-
     if (m_modbusService) {
         connect(m_modbusService, &modbus::ModbusService::connected, this, [this]() {
-            m_plcStatusCache.isValid = false;
-            m_deviceStatusCache.isValid = false;
             if (hasClient()) {
                 pushPlcStatus();
                 pushDeviceStatus();
             }
         }, Qt::UniqueConnection);
         connect(m_modbusService, &modbus::ModbusService::disconnected, this, [this]() {
-            m_plcStatusCache.isValid = false;
-            m_deviceStatusCache.isValid = false;
             if (hasClient()) {
                 pushPlcStatus();
                 pushDeviceStatus();
@@ -1143,8 +1209,6 @@ void HmiTcpServer::connectStatusRefreshSignals()
     if (m_mechEyeService) {
         connect(m_mechEyeService, &mech_eye::MechEyeService::stateChanged, this,
                 [this](mech_eye::CameraRuntimeState, QString) {
-            m_cameraStatusCache.isValid = false;
-            m_deviceStatusCache.isValid = false;
             if (hasClient()) {
                 pushCameraStatus();
                 pushDeviceStatus();
@@ -1154,15 +1218,15 @@ void HmiTcpServer::connectStatusRefreshSignals()
 
     if (m_visionPipeline) {
         connect(m_visionPipeline, &vision::VisionPipelineService::stateChanged, this,
-                [this, refreshDeviceStatus](vision::VisionPipelineState, QString) {
-                    refreshDeviceStatus();
-                },
-                Qt::UniqueConnection);
+                [this](vision::VisionPipelineState, const QString&) {
+            if (hasClient()) {
+                pushCameraStatus();
+                pushDeviceStatus();
+            }
+        }, Qt::UniqueConnection);
     }
 
     auto refreshCameraOnHik = [this](QString, QString, QString) {
-        m_cameraStatusCache.isValid = false;
-        m_deviceStatusCache.isValid = false;
         if (hasClient()) {
             pushCameraStatus();
             pushDeviceStatus();
@@ -1173,6 +1237,19 @@ void HmiTcpServer::connectStatusRefreshSignals()
     }
     if (m_hikCameraB) {
         connect(m_hikCameraB, &vision::HikCameraService::stateChanged, this, refreshCameraOnHik, Qt::UniqueConnection);
+    }
+    if (m_hikCameraC) {
+        connect(m_hikCameraC, &vision::HikCameraService::stateChanged, this, refreshCameraOnHik, Qt::UniqueConnection);
+    }
+
+    if (m_hikCameraCController) {
+        connect(m_hikCameraCController, &vision::HikCameraCController::stateChanged, this,
+                [this](vision::HikCameraCState, const QString&) {
+            if (hasClient()) {
+                pushCameraStatus();
+                pushDeviceStatus();
+            }
+        }, Qt::UniqueConnection);
     }
 }
 

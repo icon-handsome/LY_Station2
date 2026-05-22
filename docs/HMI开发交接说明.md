@@ -49,7 +49,7 @@
 - [x] 单客户端；新连接踢旧连接
 - [x] `core.hello` / `hmi.hello`
 - [x] 心跳：Core 2s `heartbeat.ping`；客户端任意消息重置 6s 超时
-- [x] 连接后全量 `status.*` + 周期 500ms 推送（变更去重）
+- [x] 连接后全量 `status.*` + 周期 500ms 轮询（payload 变更去重，稳态不刷 `status.camera`）
 
 ### 3.2 监视面（阶段 1）
 

@@ -10,7 +10,8 @@
 
 - HMI TCP 监听 **`config.ini [Hmi] tcpPort`**（默认 **9900**）。
 - 客户端连接后：`core.hello` + 四类 `status.*` 全量推送。
-- 周期：**500ms** 状态（变更去重）、**2s** 心跳 `heartbeat.ping`。
+- 周期：**500ms** 状态轮询（**payload 不变则不下发**，稳态不会刷 `status.camera`）、**2s** 心跳 `heartbeat.ping`。
+- Core 控制台：仅在实际下发 `status.camera` 时打印一行 `[TCPIP] status.camera TX | ...`（与显控同频，默认 `[Logger] level=1` 可见）。
 - 业务事件由状态机/相机/Modbus 触发上报。
 
 ---
@@ -36,7 +37,7 @@ Qt 显控应能解析并展示：
 
 - `status.system` — ipcState / appState / alarmLevel / progress
 - `status.plc` — modbusConnected / workMode / scanSegmentIndex
-- `status.camera` — mechEye / hikA / hikB
+- `status.camera` — mechEye / hikA / hikB / hikC
 - `status.device` — onlineWord0 / faultWord0（位定义见协议 §2.4）
 
 触发 PLC 流程后应收到：
@@ -69,6 +70,8 @@ Qt 显控应能解析并展示：
 | 立刻断连 | 未加 4 字节长度头 | 对齐 `serializeFrame` |
 | 只有心跳无 status | 未解析 `type` | 处理 `status.system` 等 |
 | modbusConnected 一直 false | PLC 未连 | 先确认 Modbus；status 仍会推 |
+| `status.camera` 刷屏 | 旧版 Core 在海康 `stateChanged` 时误强制重发 | 升级 Core；显控侧仍建议按 `type`+payload 去重显示 |
+| 长时间无 `status.camera` | 相机状态未变（正常） | 发 `cmd.get_status` 或拔插相机验证变更推送 |
 
 ---
 
