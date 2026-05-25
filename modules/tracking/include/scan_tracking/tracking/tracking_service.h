@@ -9,9 +9,11 @@
 #pragma once
 
 #include <array>
+#include <functional>
 #include <string>
 
 #include <QtCore/QJsonObject>
+#include <QtCore/QMetaType>
 #include <QtCore/QMap>
 #include <QtCore/QString>
 #include <QtCore/QtGlobal>
@@ -32,6 +34,8 @@ struct InspectionMeasurement {
     float holeDiameterTol = 0.0f;     ///< hole_diameter_tol 开孔直径
     float headDepthTol = 0.0f;        ///< head_depth_tol 封头深度
 };
+
+Q_DECLARE_METATYPE(scan_tracking::tracking::InspectionMeasurement)
 
 /// 将测量项写入 JSON payload（协议 snake_case 字段名）
 void appendInspectionMeasurementFields(QJsonObject& payload, const InspectionMeasurement& measurement);
@@ -76,6 +80,9 @@ struct PoseCheckResult {
     bool hasPoseMatrix() const { return success && resultCode == 1; }
 };
 
+/// 蓝友/第一工位检测结果就绪回调（供 HMI 演示推送等场景注入，避免 tracking 反向依赖 hmi_server）
+using InspectionResultNotifier = std::function<void(const InspectionResult&)>;
+
 /// 跟踪服务类，负责管理检测和位姿校验的核心业务逻辑
 class TrackingService {
 public:
@@ -83,15 +90,26 @@ public:
     // @return 服务状态描述字符串
     std::string statusText() const;
 
+    /// 注册综合检测结果回调：inspectSegments 返回前必定触发（含蓝友失败/缺段等）
+    void setInspectionResultNotifier(InspectionResultNotifier notifier);
+
     /// 执行分段点云的综合检测（第一工位）
     // @param segmentCaptureResults 分段采集结果映射表（分段索引 -> 采集结果）
+    // @param notifyListener 是否触发 InspectionResultNotifier（调试命令应传 false，由 HMI 统一推送一次）
     // @return 检测结果结构体
     InspectionResult inspectSegments(
-        const QMap<int, scan_tracking::mech_eye::CaptureResult>& segmentCaptureResults) const;
+        const QMap<int, scan_tracking::mech_eye::CaptureResult>& segmentCaptureResults,
+        bool notifyListener = true) const;
 
     /// 执行位姿校验（LB位姿检测）
     // @return 位姿校验结果结构体
     PoseCheckResult checkPose() const;
+
+private:
+    /// 统一出口：触发回调后再把结果返回给状态机
+    InspectionResult deliverInspectionResult(InspectionResult result, bool notifyListener) const;
+
+    InspectionResultNotifier m_inspectionResultNotifier;
 };
 
 }  // namespace tracking

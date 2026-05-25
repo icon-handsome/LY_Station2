@@ -19,6 +19,8 @@
 #include <QtCore/QString>
 #include <QtCore/QJsonObject>
 
+#include "scan_tracking/tracking/tracking_service.h"
+
 QT_BEGIN_NAMESPACE
 class QTcpServer;
 QT_END_NAMESPACE
@@ -69,6 +71,16 @@ public:
 
     /// 检查是否有客户端已连接
     bool hasClient() const;
+
+    /**
+     * @brief 主动推送第一工位/蓝友综合检测结果到 Qt 显控（演示初版入口）
+     *
+     * 发送 `event.inspection.finished`，成功与失败均推送，便于客户演示即时看到结果。
+     * TODO(hmi-demo): 无客户端时不缓存，演示后若需要可补最后一帧缓存
+     * TODO(hmi-demo): 与 status.system 联动刷新 progress/alarmLevel
+     * TODO(hmi-demo): 多路径/第二工位结果需扩展 payload 或新增 event 类型
+     */
+    void publishInspectionResult(const tracking::InspectionResult& result);
 
     // --- 设置服务依赖（在 start() 之前调用） ---
     void setStateMachine(flow_control::StateMachine* sm);
@@ -160,6 +172,9 @@ private:
     
     /// 处理触发结果复位指令 (安全限制：拦截 Qt 端触发，须由 PLC 触发)
     void handleCmdTriggerResultReset(const QJsonObject& message);
+
+    /// 调试用：用状态机缓存点云触发蓝友检测并推送显控（需 config.ini 开关）
+    void handleCmdDebugTriggerInspection(const QJsonObject& message);
     
     /// 处理单独通过 Mech-Eye 进行采图的指令（多用于独立标定或调试测试）
     void handleCmdCaptureMechEye(const QJsonObject& message);
@@ -250,6 +265,9 @@ private:
     
     /// 生成递增的唯一事件 ID (如: evt-1, evt-2)，用于 Core 主动上报的 event
     QString nextEventId();
+
+    /// 由 InspectionResult 组装 event.inspection.finished 的 payload
+    static QJsonObject buildInspectionFinishedPayload(const tracking::InspectionResult& result);
 
     QTcpServer* m_tcpServer = nullptr;      ///< Qt TCP 服务器
     HmiSession* m_session = nullptr;        ///< 当前客户端会话（单客户端模式）

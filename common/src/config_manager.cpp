@@ -313,6 +313,8 @@ void ConfigManager::load(const QString& filePath)
         m_hmiConfig.tcpPort = static_cast<quint16>(
             qBound(1, port, 65535));
     }
+    m_hmiConfig.allowDebugTriggerInspection =
+        settings.value("allowDebugTriggerInspection", false).toBool();
     settings.endGroup();
 
     QtMsgType minType = QtDebugMsg;

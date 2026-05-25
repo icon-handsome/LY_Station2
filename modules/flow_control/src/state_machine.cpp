@@ -16,6 +16,7 @@
 #include <QtCore/QTextStream>
 #include <cmath>
 #include <cstring>
+#include <algorithm>
 #include <thread>
 #include <qdebug.h>
 namespace scan_tracking::flow_control {
@@ -1113,6 +1114,45 @@ void StateMachine::executeCodeReadTask()
  * 4. 根据检测结果决定任务成功或失败
  * 5. 清空点云缓存（检测完成后不再需要原始点云）
  */
+void StateMachine::setInspectionResultPublisher(
+    std::function<void(const tracking::InspectionResult&)> publisher)
+{
+    m_inspectionResultPublisher = std::move(publisher);
+}
+
+QVector<int> StateMachine::cachedScanSegmentIndices() const
+{
+    QVector<int> indices;
+    indices.reserve(m_segmentCaptureResults.size());
+    for (auto it = m_segmentCaptureResults.cbegin(); it != m_segmentCaptureResults.cend(); ++it) {
+        indices.push_back(it.key());
+    }
+    std::sort(indices.begin(), indices.end());
+    return indices;
+}
+
+tracking::InspectionResult StateMachine::runDebugInspectionOnCachedSegments() const
+{
+    tracking::InspectionResult failure;
+    failure.resultCode = 2;
+
+    if (m_tracking == nullptr) {
+        failure.ngReasonWord0 = (1u << 4);
+        failure.message = QStringLiteral("调试综合检测失败：Tracking 服务不可用。");
+        return failure;
+    }
+
+    if (m_segmentCaptureResults.isEmpty()) {
+        failure.ngReasonWord0 = (1u << 4);
+        failure.message = QStringLiteral("调试综合检测失败：点云缓存为空，请先完成扫描分段采集。");
+        return failure;
+    }
+
+    // TODO(multipath): 真实业务有多条路径、每路径多个点位；当前仍把整表缓存交给 inspectSegments，
+    // 蓝友侧仅按 config.ini [Tracking] 三个段位索引取外/内/孔点云，未做多路径融合。
+    return m_tracking->inspectSegments(m_segmentCaptureResults, false);
+}
+
 void StateMachine::executeInspectionTask()
 {
     // 检查跟踪服务是否可用
@@ -1120,6 +1160,16 @@ void StateMachine::executeInspectionTask()
         qWarning(LOG_FLOW) << "Tracking service unavailable for inspection.";
         // 写入默认的检测失败结果
         writeInspectionResult({2, 1u << 4, 0, 0});
+
+        // 演示：tracking 不可用时也向显控推送失败结果（与蓝友出口字段一致）
+        if (m_inspectionResultPublisher) {
+            tracking::InspectionResult failure;
+            failure.resultCode = 2;
+            failure.ngReasonWord0 = (1u << 4);
+            failure.message = QStringLiteral("综合检测失败：Tracking 服务不可用。");
+            m_inspectionResultPublisher(failure);
+        }
+
         // 完成任务，标记为失败，数据无效
         completeActiveTask(7, protocol::AckState::Failed, false);
         resetPointCloudCache();  // 清空点云缓存

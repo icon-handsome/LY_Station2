@@ -7,6 +7,8 @@
 #include <QtCore/QVector>
 #include <QtCore/QtGlobal>
 
+#include <functional>
+
 #include "scan_tracking/flow_control/plc_protocol.h"
 #include "scan_tracking/mech_eye/mech_eye_types.h"
 #include "scan_tracking/modbus/modbus_service.h"
@@ -70,6 +72,20 @@ public:
 
     /// 获取最近一次 PLC 命令块快照（供 HMI 状态推送使用）
     const QVector<quint16>& lastCommandBlock() const { return m_lastCommandBlock; }
+
+    /// 注册综合检测结果推送回调（tracking 不可用等路径由状态机补发）
+    void setInspectionResultPublisher(std::function<void(const tracking::InspectionResult&)> publisher);
+
+    /// 当前点云缓存中已有的扫描分段索引（升序，供 HMI 调试命令展示）
+    QVector<int> cachedScanSegmentIndices() const;
+
+    /**
+     * @brief HMI 调试：用缓存点云跑蓝友综合检测
+     *
+     * 不写 PLC、不清缓存、不占用 PLC 任务槽；结果由调用方推送显控。
+     * TODO(multipath): 多路径多点位时须按 pathId 筛选/融合缓存，再调用蓝友 detectMultiPath
+     */
+    tracking::InspectionResult runDebugInspectionOnCachedSegments() const;
 
     // 设置报警
     // @param level 报警级别
@@ -416,6 +432,8 @@ private:
     std::array<float, 16> m_currentCalibrationMatrix{};    // 当前 T0' / T0''（转动点由 LBN 链式更新）
     QMap<int, std::array<float, 16>> m_segmentCalibrationMatrices;  // 每段扫描结束时的标定矩阵快照
 
+    /// 综合检测结果推送（与 TrackingService::InspectionResultNotifier 共用同一回调）
+    std::function<void(const tracking::InspectionResult&)> m_inspectionResultPublisher;
 
     static constexpr int kMaxPointCloudCacheSize = 20;    // 允许的最大点云缓存条目数，防止内存无限增长
 };

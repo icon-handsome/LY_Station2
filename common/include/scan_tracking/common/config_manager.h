@@ -76,6 +76,8 @@ struct TrackingConfig {
 struct HmiConfig {
     bool enabled = true;       ///< 是否启动 HMI TCP 服务端
     quint16 tcpPort = 9900;    ///< 监听端口
+    /// 是否允许显控发送 cmd.debug_trigger_inspection（用缓存点云跑蓝友并推送，不写 PLC）
+    bool allowDebugTriggerInspection = false;
 };
 
 struct LbPoseConfig {

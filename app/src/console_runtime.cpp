@@ -261,6 +261,17 @@ void ConsoleRuntime::initModules()
             hikCameraAService_.get(), hikCameraBService_.get(), hikCameraCService_.get());
         hmiTcpServer_->setHikCameraCController(hikCameraCController_.get());
         hmiTcpServer_->bindServiceSignals();
+
+        // 演示初版：蓝友 inspectSegments 返回后立即经 HMI TCP 推送 event.inspection.finished（含失败）
+        const auto publishInspectionToHmi =
+            [this](const scan_tracking::tracking::InspectionResult& inspectionResult) {
+                if (hmiTcpServer_) {
+                    hmiTcpServer_->publishInspectionResult(inspectionResult);
+                }
+            };
+        trackingService_->setInspectionResultNotifier(publishInspectionToHmi);
+        stateMachine_->setInspectionResultPublisher(publishInspectionToHmi);
+
         if (!hmiTcpServer_->start()) {
             qWarning(appLog) << "HMI TCP 服务器在端口" << hmiConfig.tcpPort << "启动失败。";
         } else {

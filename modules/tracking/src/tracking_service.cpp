@@ -13,6 +13,7 @@
 #include <vector>
 
 #include <QtCore/QJsonObject>
+#include <QtCore/QMetaType>
 
 #include "scan_tracking/common/application_info.h"
 #include "scan_tracking/common/config_manager.h"
@@ -22,6 +23,16 @@
 namespace scan_tracking::tracking {
 
 namespace {
+
+void ensureInspectionMeasurementMetaTypeRegistered()
+{
+    static const bool registered = []() {
+        qRegisterMetaType<InspectionMeasurement>(
+            "scan_tracking::tracking::InspectionMeasurement");
+        return true;
+    }();
+    Q_UNUSED(registered);
+}
 
 double measurementJsonValue(float value)
 {
@@ -184,6 +195,20 @@ std::string TrackingService::statusText() const
     return scan_tracking::common::ApplicationInfo::name() + " core is ready.";
 }
 
+void TrackingService::setInspectionResultNotifier(InspectionResultNotifier notifier)
+{
+    m_inspectionResultNotifier = std::move(notifier);
+}
+
+InspectionResult TrackingService::deliverInspectionResult(InspectionResult result, bool notifyListener) const
+{
+    // 蓝友 runFirstStationDetection 完成后，经本出口立即通知显控（演示初版：失败也推送）
+    if (notifyListener && m_inspectionResultNotifier) {
+        m_inspectionResultNotifier(result);
+    }
+    return result;
+}
+
 /// 执行分段点云的综合检测（第一工位）
 //
 // 该函数接收多个分段的采集结果，根据配置的映射关系提取外表面、内表面和内孔点云，
@@ -192,8 +217,11 @@ std::string TrackingService::statusText() const
 // @param segmentCaptureResults 分段采集结果映射表
 // @return 检测结果结构体，包含结果码、NG原因、偏移量和测量参数
 InspectionResult TrackingService::inspectSegments(
-    const QMap<int, scan_tracking::mech_eye::CaptureResult>& segmentCaptureResults) const
+    const QMap<int, scan_tracking::mech_eye::CaptureResult>& segmentCaptureResults,
+    bool notifyListener) const
 {
+    ensureInspectionMeasurementMetaTypeRegistered();
+
     InspectionResult result;
     result.segmentCount = segmentCaptureResults.size();
     result.measureItemCount = 0;
@@ -206,10 +234,12 @@ InspectionResult TrackingService::inspectSegments(
         result.resultCode = 2;
         result.ngReasonWord0 = (1u << 4);
         result.message = QStringLiteral("综合检测没有可用点云。");
-        return result;
+        return deliverInspectionResult(result, notifyListener);
     }
 
     // 加载第一工位分段映射配置
+    // TODO(multipath): 多路径时 segmentIndex 与 pathId/pointIndex 的映射需从 scan_paths_config.json 解析，
+    // 不能仅依赖 [Tracking] 三个固定段位；蓝友侧待 detectMultiPath 融合后再改此处取点逻辑。
     const auto segmentMapping = loadFirstStationSegmentMapping();
 
     // 查找所需的三个分段：外表面、内表面、内孔
@@ -224,7 +254,7 @@ InspectionResult TrackingService::inspectSegments(
         result.message = QStringLiteral(
             "第一工位检测缺少必需分段，当前配置段位为 %1。")
                              .arg(selectedSegmentText(segmentMapping));
-        return result;
+        return deliverInspectionResult(result, notifyListener);
     }
 
     // 构建帧集合，调用蓝优第一工位检测算法
@@ -234,6 +264,7 @@ InspectionResult TrackingService::inspectSegments(
     frameSet.innerHoleFrame = innerHoleResult->pointCloud;
 
     const auto detection = scan_tracking::vision::lanyou::runFirstStationDetection(frameSet);
+    // TODO(hmi-demo): 此处可追加蓝友原始 params 的调试字段；当前仅通过 deliverInspectionResult 推送协议化结果
 
     // 检查算法是否真正启动
     if (!detection.invoked) {
@@ -244,7 +275,7 @@ InspectionResult TrackingService::inspectSegments(
         result.message = QStringLiteral(
             "第一工位算法适配层未真正启动，段位为 %1,详情：%2")
                              .arg(selectedSegmentText(segmentMapping), detection.message);
-        return result;
+        return deliverInspectionResult(result, notifyListener);
     }
 
     // 检查外表面检测结果
@@ -259,7 +290,7 @@ InspectionResult TrackingService::inspectSegments(
                                      QStringLiteral("第一工位外表面算法失败"),
                                      detection.outlinerErrorLog.isEmpty() ? detection.message : detection.outlinerErrorLog),
                                  selectedSegmentText(segmentMapping));
-        return result;
+        return deliverInspectionResult(result, notifyListener);
     }
 
     // 检查内表面检测结果
@@ -274,7 +305,7 @@ InspectionResult TrackingService::inspectSegments(
                                      QStringLiteral("第一工位内表面算法失败"),
                                      detection.inlinerErrorLog.isEmpty() ? detection.message : detection.inlinerErrorLog),
                                  selectedSegmentText(segmentMapping));
-        return result;
+        return deliverInspectionResult(result, notifyListener);
     }
 
     // 检测成功，填充结果
@@ -299,7 +330,7 @@ InspectionResult TrackingService::inspectSegments(
                          .arg(detection.params.straight_height_tol, 0, 'f', 3)
                          .arg(detection.params.straight_slope_tol, 0, 'f', 3)
                          .arg(detection.params.inner_diameter, 0, 'f', 3);
-    return result;
+    return deliverInspectionResult(result, notifyListener);
 }
 
 /// 执行位姿校验（LB位姿检测）

@@ -119,12 +119,17 @@ endif()
 file(GLOB_RECURSE SCAN_TRACKING_THIRD_PARTY_MISC_FILES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/MVS/*"
 )
-scan_tracking_add_ide_resource_target(
-    scan_tracking_third_party_misc_resources
-    "${CMAKE_CURRENT_SOURCE_DIR}"
-    "third_party"
-    ${SCAN_TRACKING_THIRD_PARTY_MISC_FILES}
-)
+# 排除 SDK 自带的 C#/VB/C++ 示例工程，否则 VS 会把 .csproj 纳入生成并触发 MSB3644（.NET Framework 4.0）
+list(FILTER SCAN_TRACKING_THIRD_PARTY_MISC_FILES EXCLUDE REGEX
+    "\\.(csproj|vbproj|vcxproj|vcproj|sln|cs|vb|fsproj|resx)$")
+if(SCAN_TRACKING_THIRD_PARTY_MISC_FILES)
+    scan_tracking_add_ide_resource_target(
+        scan_tracking_third_party_misc_resources
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "third_party"
+        ${SCAN_TRACKING_THIRD_PARTY_MISC_FILES}
+    )
+endif()
 
 if(SCAN_TRACKING_ENABLE_LB_POSE_DETECTION)
     add_subdirectory(LB)

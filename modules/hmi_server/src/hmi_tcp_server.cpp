@@ -321,6 +321,10 @@ void HmiTcpServer::initializeMessageHandlers()
     m_messageHandlers[QString::fromLatin1(msg_type::kCmdTriggerPoseCheck)]    = &HmiTcpServer::handleCmdTriggerPoseCheck;  // 触发位姿校验
     m_messageHandlers[QString::fromLatin1(msg_type::kCmdTriggerCodeRead)]     = &HmiTcpServer::handleCmdTriggerCodeRead;  // 触发条码读取
     m_messageHandlers[QString::fromLatin1(msg_type::kCmdTriggerResultReset)]  = &HmiTcpServer::handleCmdTriggerResultReset;  // 触发结果复位
+
+    // 调试命令（需 config.ini [Hmi] allowDebugTriggerInspection=true）
+    m_messageHandlers[QString::fromLatin1(msg_type::kCmdDebugTriggerInspection)] =
+        &HmiTcpServer::handleCmdDebugTriggerInspection;
 }
 
 // 处理接收到的客户端消息，根据 type 字段分发到不同的处理函数
@@ -539,6 +543,7 @@ void HmiTcpServer::handleCmdGetConfig(const QJsonObject& message)
     QJsonObject hmiObj;
     hmiObj[QLatin1String("enabled")] = cfgMgr->hmiConfig().enabled;
     hmiObj[QLatin1String("tcpPort")] = cfgMgr->hmiConfig().tcpPort;
+    hmiObj[QLatin1String("allowDebugTriggerInspection")] = cfgMgr->hmiConfig().allowDebugTriggerInspection;
     configPayload[QLatin1String("hmi")] = hmiObj;
     
     // 8. LbPose 配置
@@ -637,6 +642,73 @@ void HmiTcpServer::handleCmdTriggerResultReset(const QJsonObject& message)
 {
     const QString msgId = message.value(QLatin1String("msgId")).toString();
     sendResponse(QLatin1String(msg_type::kCmdTriggerResultReset), msgId, false, QStringLiteral("直接触发未实现，请使用 PLC"));
+}
+
+void HmiTcpServer::handleCmdDebugTriggerInspection(const QJsonObject& message)
+{
+    const QString msgId = message.value(QLatin1String("msgId")).toString();
+
+    // 1. 配置开关：演示环境在 config.ini 打开，生产环境务必保持 false
+    const auto* cfgMgr = common::ConfigManager::instance();
+    if (cfgMgr == nullptr || !cfgMgr->hmiConfig().allowDebugTriggerInspection) {
+        sendResponse(
+            QLatin1String(msg_type::kCmdDebugTriggerInspection),
+            msgId,
+            false,
+            QStringLiteral("调试综合检测未启用，请在 config.ini [Hmi] 设置 allowDebugTriggerInspection=true 后重启 Core"));
+        return;
+    }
+
+    if (m_stateMachine == nullptr) {
+        sendResponse(
+            QLatin1String(msg_type::kCmdDebugTriggerInspection),
+            msgId,
+            false,
+            QStringLiteral("状态机不可用，无法读取点云缓存"));
+        return;
+    }
+
+    // 2. 读取当前缓存段位（多路径场景下 cache 可能含多段，见 multiPathNote）
+    const QVector<int> cachedSegments = m_stateMachine->cachedScanSegmentIndices();
+
+    // 3. 用缓存跑蓝友（不写 PLC、不清缓存）；notifyListener=false 避免与下方 publish 重复
+    const tracking::InspectionResult inspectionResult = m_stateMachine->runDebugInspectionOnCachedSegments();
+
+    // 4. 无论合格/不合格都推 event.inspection.finished 给显控
+    publishInspectionResult(inspectionResult);
+
+    // 5. 命令响应：附带缓存摘要，便于演示排障
+    QJsonObject payload = buildResponsePayload(
+        true,
+        QStringLiteral("调试综合检测已完成，event.inspection.finished 已推送（resultCode=%1）")
+            .arg(inspectionResult.resultCode));
+    payload[QLatin1String("resultCode")] = inspectionResult.resultCode;
+    payload[QLatin1String("ngReasonWord0")] = inspectionResult.ngReasonWord0;
+    payload[QLatin1String("cachedSegmentCount")] = cachedSegments.size();
+    QJsonArray segmentArray;
+    for (int segmentIndex : cachedSegments) {
+        segmentArray.append(segmentIndex);
+    }
+    payload[QLatin1String("cachedSegmentIndices")] = segmentArray;
+    payload[QLatin1String("inspectionMessage")] = inspectionResult.message;
+    // TODO(multipath): 多路径融合完成后，此处应返回 pathId、每路径点位列表及实际参与蓝友的段位
+    payload[QLatin1String("multiPathNote")] = QStringLiteral(
+        "当前蓝友仍按 config.ini [Tracking] 的 firstStationOuter/Inner/HoleSegmentIndex 三段取点；"
+        "多路径多点位缓存已可写入状态机，但尚未做路径级融合与 detectMultiPath。");
+
+    QJsonObject envelope;
+    envelope[QStringLiteral("version")] = QLatin1String(kProtocolVersion);
+    envelope[QStringLiteral("msgId")] = msgId;
+    envelope[QStringLiteral("type")] = QLatin1String(msg_type::kCmdDebugTriggerInspection);
+    envelope[QStringLiteral("timestamp")] = QDateTime::currentMSecsSinceEpoch();
+    envelope[QStringLiteral("payload")] = payload;
+    sendToClient(envelope);
+
+    qInfo(LOG_HMI_SERVER).noquote()
+        << "[TCPIP] 调试综合检测完成"
+        << "cachedSegments=" << cachedSegments
+        << "resultCode=" << inspectionResult.resultCode
+        << "message=" << inspectionResult.message;
 }
 
 void HmiTcpServer::handleCmdCaptureMechEye(const QJsonObject& message)
@@ -1024,31 +1096,8 @@ void HmiTcpServer::connectStateMachineSignals()
         sendToClient(buildEnvelope(QLatin1String(msg_type::kEventScanFinished), nextEventId(), payload));
     }, Qt::UniqueConnection);
 
-    // 绑定综合检测算法结束事件：推送所有工艺偏移量计算结果及缺陷诊断信息（如划痕、裂纹等特征字）
-    connect(m_stateMachine, &flow_control::StateMachine::inspectionFinished, this,
-        [this](quint16 resultCode, quint16 ngReasonWord0, quint16 ngReasonWord1,
-               quint16 measureItemCount, float offsetXmm, float offsetYmm, float offsetZmm,
-               float stableOffsetXmm, float stableOffsetYmm, float stableOffsetZmm,
-               const tracking::InspectionMeasurement& measurement,
-               const QString& outlinerErrorLog, const QString& inlinerErrorLog,
-               const QString& message) {
-        QJsonObject payload;
-        payload[QLatin1String("resultCode")] = resultCode;
-        payload[QLatin1String("ngReasonWord0")] = ngReasonWord0;    // 主要 NG 原因位图
-        payload[QLatin1String("ngReasonWord1")] = ngReasonWord1;    // 辅助 NG 原因位图
-        payload[QLatin1String("measureItemCount")] = measureItemCount;
-        payload[QLatin1String("offsetXmm")] = static_cast<double>(offsetXmm); // 相对基础模板的绝对偏移量
-        payload[QLatin1String("offsetYmm")] = static_cast<double>(offsetYmm);
-        payload[QLatin1String("offsetZmm")] = static_cast<double>(offsetZmm);
-        payload[QLatin1String("stableOffsetXmm")] = static_cast<double>(stableOffsetXmm); // 平滑滤波后的偏移量
-        payload[QLatin1String("stableOffsetYmm")] = static_cast<double>(stableOffsetYmm);
-        payload[QLatin1String("stableOffsetZmm")] = static_cast<double>(stableOffsetZmm);
-        tracking::appendInspectionMeasurementFields(payload, measurement);
-        payload[QLatin1String("outlinerErrorLog")] = outlinerErrorLog; // 外部轮廓瑕疵诊断日志
-        payload[QLatin1String("inlinerErrorLog")] = inlinerErrorLog;   // 内部孔径瑕疵诊断日志
-        payload[QLatin1String("message")] = message;
-        sendToClient(buildEnvelope(QLatin1String(msg_type::kEventInspectionFinished), nextEventId(), payload));
-    }, Qt::UniqueConnection);
+    // TODO(hmi-demo): 综合检测结果改由 TrackingService::deliverInspectionResult → publishInspectionResult 直推，
+    // 不再绑定 inspectionFinished，避免与显控收到重复 event.inspection.finished。
 
     // 位姿校验完成
     connect(m_stateMachine, &flow_control::StateMachine::poseCheckFinished, this,
@@ -1322,6 +1371,53 @@ void HmiTcpServer::uninstallLogForwarder()
     }
     s_instance = nullptr;
     s_logForwarderInstalled = false;
+}
+
+// --- 综合检测结果推送（演示初版）---
+
+QJsonObject HmiTcpServer::buildInspectionFinishedPayload(const tracking::InspectionResult& result)
+{
+    QJsonObject payload;
+    payload[QLatin1String("resultCode")] = result.resultCode;
+    payload[QLatin1String("ngReasonWord0")] = result.ngReasonWord0;
+    payload[QLatin1String("ngReasonWord1")] = result.ngReasonWord1;
+    payload[QLatin1String("measureItemCount")] = result.measureItemCount;
+    payload[QLatin1String("offsetXmm")] = static_cast<double>(result.offsetXmm);
+    payload[QLatin1String("offsetYmm")] = static_cast<double>(result.offsetYmm);
+    payload[QLatin1String("offsetZmm")] = static_cast<double>(result.offsetZmm);
+    payload[QLatin1String("stableOffsetXmm")] = static_cast<double>(result.stableOffsetXmm);
+    payload[QLatin1String("stableOffsetYmm")] = static_cast<double>(result.stableOffsetYmm);
+    payload[QLatin1String("stableOffsetZmm")] = static_cast<double>(result.stableOffsetZmm);
+    tracking::appendInspectionMeasurementFields(payload, result.measurement);
+    payload[QLatin1String("outlinerErrorLog")] = result.outlinerErrorLog;
+    payload[QLatin1String("inlinerErrorLog")] = result.inlinerErrorLog;
+    payload[QLatin1String("message")] = result.message;
+    payload[QLatin1String("segmentCount")] = result.segmentCount;
+    payload[QLatin1String("totalPointCount")] = result.totalPointCount;
+    return payload;
+}
+
+void HmiTcpServer::publishInspectionResult(const tracking::InspectionResult& result)
+{
+    if (!hasClient()) {
+        // TODO(hmi-demo): 无显控连接时缓存最后一帧，连接后补发
+        qInfo(LOG_HMI_SERVER).noquote()
+            << "[TCPIP] 蓝友检测结果未推送（无显控连接）"
+            << "resultCode=" << result.resultCode
+            << "message=" << result.message;
+        return;
+    }
+
+    const QJsonObject payload = buildInspectionFinishedPayload(result);
+    sendToClient(buildEnvelope(QLatin1String(msg_type::kEventInspectionFinished), nextEventId(), payload));
+
+    qInfo(LOG_HMI_SERVER).noquote()
+        << "[TCPIP] 蓝友检测结果已推送 event.inspection.finished"
+        << "resultCode=" << result.resultCode
+        << "ngWord0=" << result.ngReasonWord0
+        << "measureItems=" << result.measureItemCount
+        << "offset=(" << result.offsetXmm << "," << result.offsetYmm << "," << result.offsetZmm << ")"
+        << "message=" << result.message;
 }
 
 // --- 辅助发送 ---
