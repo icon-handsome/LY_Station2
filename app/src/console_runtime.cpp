@@ -2,12 +2,23 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#ifdef round
+#undef round
+#endif
+#ifdef Round
+#undef Round
+#endif
 #endif
 
 #include <QtCore/QCoreApplication>
+#include <QtCore/QDateTime>
+#include <QtCore/QDir>
+#include <QtCore/QFile>
 #include <QtCore/QLoggingCategory>
 #include <QtCore/QMetaObject>
+#include <QtCore/QSettings>
 #include <QtCore/QString>
+#include <QtCore/QTimer>
 
 #include "scan_tracking/common/application_info.h"
 #include "scan_tracking/common/config_manager.h"
@@ -20,8 +31,11 @@
 #include "scan_tracking/vision/hik_camera_service.h"
 #include "scan_tracking/vision/vision_pipeline_service.h"
 #include "scan_tracking/vision/hik_camera_c_controller.h"
+#include "scan_tracking/vision/hik_mono_io.h"
 #include "scan_tracking/vision/vision_types.h"
 #include "scan_tracking/hmi_server/hmi_tcp_server.h"
+#include "scan_tracking/mech_eye/point_cloud_io.h"
+#include "scan_tracking/common/capture_cache_paths.h"
 
 Q_LOGGING_CATEGORY(appLog, "app")
 
@@ -231,8 +245,12 @@ void ConsoleRuntime::initModules()
     QObject::connect(
         visionPipelineService_.get(),
         &scan_tracking::vision::VisionPipelineService::bundleCaptureFinished,
-        [](const scan_tracking::vision::MultiCameraCaptureBundle& bundle) {
+        &application_,
+        [this](const scan_tracking::vision::MultiCameraCaptureBundle& bundle) {
             qInfo(appLog) << "[VisionPipeline]" << bundle.summary();
+            if (m_autoLatencyTestPending) {
+                onAutoLatencyBundleFinished(bundle);
+            }
         });
 
     visionPipelineService_->start(visionConfig);
@@ -288,6 +306,238 @@ void ConsoleRuntime::initModules()
         qWarning(appLog) << "Modbus 连接初始化失败。";
     }
     qInfo(appLog) << "所有模块已初始化。";
+    scheduleAutoLatencyBundleTest();
+}
+
+void ConsoleRuntime::stopAutoLatencyBundleTest()
+{
+    if (m_autoLatencyTimer != nullptr) {
+        m_autoLatencyTimer->stop();
+    }
+}
+
+void ConsoleRuntime::scheduleAutoLatencyBundleTest()
+{
+    if (visionPipelineService_ == nullptr) {
+        return;
+    }
+
+    QString iniPath = QCoreApplication::applicationDirPath() + QStringLiteral("/config.ini");
+    QDir rootDir(QCoreApplication::applicationDirPath());
+    if (rootDir.cdUp() && rootDir.cdUp() && rootDir.cdUp()) {
+        const QString projectIni = rootDir.filePath(QStringLiteral("config.ini"));
+        if (QFile::exists(projectIni)) {
+            iniPath = projectIni;
+        }
+    }
+
+    QSettings settings(iniPath, QSettings::IniFormat);
+    settings.beginGroup(QStringLiteral("Debug"));
+    const bool enabled = settings.value(QStringLiteral("autoLatencyBundleTestEnabled"), false).toBool();
+    const int delayMs = settings.value(QStringLiteral("autoLatencyBundleTestDelayMs"), 20000).toInt();
+    const bool periodic = settings.value(QStringLiteral("autoLatencyBundleTestPeriodic"), false).toBool();
+    settings.endGroup();
+
+    if (!enabled) {
+        return;
+    }
+
+    m_autoLatencyPeriodic = periodic;
+    m_autoLatencyIntervalMs = delayMs > 0 ? delayMs : 20000;
+    m_latencyBundleSeq = 0;
+
+    if (m_autoLatencyTimer == nullptr) {
+        m_autoLatencyTimer = new QTimer(&application_);
+        QObject::connect(m_autoLatencyTimer, &QTimer::timeout, &application_, [this]() {
+            triggerAutoLatencyBundleTest();
+        });
+    }
+
+    m_autoLatencyTimer->setInterval(m_autoLatencyIntervalMs);
+
+    if (m_autoLatencyPeriodic) {
+        m_autoLatencyTimer->setSingleShot(false);
+        m_autoLatencyTimer->start();
+        qInfo(appLog).noquote()
+            << "[LatencyTest] 周期模式已启动：每" << m_autoLatencyIntervalMs
+            << "ms 组合拍一次（Mech 2D + 海康 A/B）；关闭周期请设 autoLatencyBundleTestPeriodic=false";
+    } else {
+        m_autoLatencyTimer->setSingleShot(true);
+        m_autoLatencyTimer->start();
+        qInfo(appLog).noquote()
+            << "[LatencyTest] 单次模式已调度：" << m_autoLatencyIntervalMs
+            << "ms 后触发一次（Mech 2D + 海康 A/B）；关闭请设 autoLatencyBundleTestEnabled=false";
+    }
+}
+
+void ConsoleRuntime::triggerAutoLatencyBundleTest()
+{
+    if (visionPipelineService_ == nullptr || !visionPipelineService_->isStarted()) {
+        qWarning(appLog) << "[LatencyTest] 视觉流水线未就绪，跳过自动采集。";
+        return;
+    }
+
+    if (m_autoLatencyTestPending) {
+        const QString modeText =
+            m_autoLatencyPeriodic ? QStringLiteral("周期") : QStringLiteral("单次");
+        qWarning(appLog).noquote()
+            << QStringLiteral("[LatencyTest] 上一轮采集尚未结束，跳过本次%1触发").arg(modeText);
+        return;
+    }
+
+    const qint64 triggerMs = QDateTime::currentMSecsSinceEpoch();
+    m_autoLatencyTriggerMs = triggerMs;
+    m_autoLatencyTestPending = true;
+
+    constexpr int kTestSegmentIndex = 1;
+    const quint32 roundIndex = m_latencyBundleSeq;
+    const quint32 taskId = 90001u + roundIndex;
+    m_latencyBundleSeq = roundIndex + 1u;
+
+    const QString periodicText = m_autoLatencyPeriodic ? QStringLiteral("true") : QStringLiteral("false");
+
+    qInfo(appLog).noquote()
+        << QStringLiteral("[ScanSync] trigger %1 (auto latency test round=%2)")
+               .arg(triggerMs)
+               .arg(roundIndex);
+
+    const quint64 requestId = visionPipelineService_->requestCaptureBundle(
+        kTestSegmentIndex,
+        taskId,
+        scan_tracking::mech_eye::CaptureMode::Capture2DOnly);
+
+    if (requestId == 0) {
+        m_autoLatencyTestPending = false;
+        qWarning(appLog) << "[LatencyTest] 组合采集请求被拒绝。";
+        return;
+    }
+
+    qInfo(appLog).noquote()
+        << QStringLiteral(
+               "[LatencyTest] 已发送组合采集 requestId=%1 segment=%2 taskId=%3 mechMode=Capture2DOnly "
+               "periodic=%4")
+               .arg(requestId)
+               .arg(kTestSegmentIndex)
+               .arg(taskId)
+               .arg(periodicText);
+}
+
+void ConsoleRuntime::onAutoLatencyBundleFinished(
+    const scan_tracking::vision::MultiCameraCaptureBundle& bundle)
+{
+    m_autoLatencyTestPending = false;
+
+    const qint64 triggerMs = m_autoLatencyTriggerMs;
+    const quint32 roundCount = m_latencyBundleSeq;
+    quint32 roundIndex = 0u;
+    quint32 taskId = 90001u;
+    if (roundCount > 0u) {
+        roundIndex = roundCount - 1u;
+        taskId = 90000u + roundCount;
+    }
+
+    const qint64 finishedMs = QDateTime::currentMSecsSinceEpoch();
+    qint64 wallMs = -1;
+    if (triggerMs > 0) {
+        wallMs = finishedMs - triggerMs;
+    }
+
+    const bool mechOk = bundle.mechEyeResult.success();
+    const qint64 mechElapsedMs = bundle.mechEyeResult.elapsedMs;
+    const int mechTexW = bundle.mechEyeResult.texture2D.width;
+    const int mechTexH = bundle.mechEyeResult.texture2D.height;
+
+    const bool hikAOk = bundle.hikCameraAResult.success();
+    const qint64 hikAElapsedMs = bundle.hikCameraAResult.elapsedMs;
+    const int hikAW = bundle.hikCameraAResult.frame.width;
+    const int hikAH = bundle.hikCameraAResult.frame.height;
+    const qint64 hikATs = bundle.hikCameraAResult.frame.timestampMs;
+
+    const bool hikBOk = bundle.hikCameraBResult.success();
+    const qint64 hikBElapsedMs = bundle.hikCameraBResult.elapsedMs;
+    const int hikBW = bundle.hikCameraBResult.frame.width;
+    const int hikBH = bundle.hikCameraBResult.frame.height;
+    const qint64 hikBTs = bundle.hikCameraBResult.frame.timestampMs;
+
+    qInfo(appLog).noquote()
+        << QStringLiteral("[LatencyTest] ========== 延时汇总 round=%1 ==========").arg(roundIndex);
+    qInfo(appLog).noquote()
+        << QStringLiteral("[LatencyTest] 触发时刻 triggerMs=%1 完成时刻 finishedMs=%2 墙钟总耗时 wallMs=%3")
+               .arg(triggerMs)
+               .arg(finishedMs)
+               .arg(wallMs);
+    qInfo(appLog).noquote()
+        << QStringLiteral("[LatencyTest] Mech 2D: success=%1 elapsedMs=%2 texture=%3x%4")
+               .arg(mechOk)
+               .arg(mechElapsedMs)
+               .arg(mechTexW)
+               .arg(mechTexH);
+    qInfo(appLog).noquote()
+        << QStringLiteral("[LatencyTest] Hik A: success=%1 elapsedMs=%2 frame=%3x%4 timestampMs=%5")
+               .arg(hikAOk)
+               .arg(hikAElapsedMs)
+               .arg(hikAW)
+               .arg(hikAH)
+               .arg(hikATs);
+    qInfo(appLog).noquote()
+        << QStringLiteral("[LatencyTest] Hik B: success=%1 elapsedMs=%2 frame=%3x%4 timestampMs=%5")
+               .arg(hikBOk)
+               .arg(hikBElapsedMs)
+               .arg(hikBW)
+               .arg(hikBH)
+               .arg(hikBTs);
+
+    if (triggerMs > 0) {
+        if (hikATs > 0) {
+            qInfo(appLog).noquote()
+                << QStringLiteral("[LatencyTest] Hik A 相对触发 deltaMs=%1").arg(hikATs - triggerMs);
+        }
+        if (hikBTs > 0) {
+            qInfo(appLog).noquote()
+                << QStringLiteral("[LatencyTest] Hik B 相对触发 deltaMs=%1").arg(hikBTs - triggerMs);
+        }
+    }
+
+    qInfo(appLog).noquote()
+        << QStringLiteral("[LatencyTest] 日志中搜索 [ScanSync] 可对比 trigger / mech / hik_a / hik_b 的 epoch ms");
+    qInfo(appLog).noquote() << QStringLiteral("[LatencyTest] ================================");
+
+    const auto* configManager = scan_tracking::common::ConfigManager::instance();
+    const QString configuredRoot = configManager != nullptr
+        ? configManager->flowControlConfig().scanCacheDirectory
+        : QString();
+    const QString cacheRoot = scan_tracking::common::resolveCaptureCacheRoot(configuredRoot);
+    const QString timestamp = scan_tracking::common::buildCaptureTimestamp();
+    constexpr int kTestSegmentIndex = 1;
+
+    QString mechPngPath;
+    QString hikAPath;
+    QString hikBPath;
+
+    if (bundle.mechEyeResult.texture2D.isValid()) {
+        mechPngPath = scan_tracking::mech_eye::buildSegmentMech2DPngPath(
+            configuredRoot, kTestSegmentIndex, taskId, timestamp);
+        scan_tracking::mech_eye::saveGrayTextureFrameToPng(
+            bundle.mechEyeResult.texture2D, mechPngPath);
+    }
+
+    if (bundle.hikCameraAResult.success() && bundle.hikCameraAResult.frame.isValid()) {
+        hikAPath = scan_tracking::vision::buildSegmentHikMonoPath(
+            configuredRoot, kTestSegmentIndex, taskId, QStringLiteral("hikA"), timestamp);
+        scan_tracking::vision::saveHikMonoFrameToPgm(
+            bundle.hikCameraAResult.frame, hikAPath);
+    }
+
+    if (bundle.hikCameraBResult.success() && bundle.hikCameraBResult.frame.isValid()) {
+        hikBPath = scan_tracking::vision::buildSegmentHikMonoPath(
+            configuredRoot, kTestSegmentIndex, taskId, QStringLiteral("hikB"), timestamp);
+        scan_tracking::vision::saveHikMonoFrameToPgm(
+            bundle.hikCameraBResult.frame, hikBPath);
+    }
+
+    qInfo(appLog).noquote()
+        << QStringLiteral("[LatencyTest] 落盘目录 cacheRoot=%1 mech2d=%2 hikA=%3 hikB=%4")
+               .arg(cacheRoot, mechPngPath, hikAPath, hikBPath);
 }
 
 void ConsoleRuntime::printStartupStatus()
@@ -302,6 +552,8 @@ void ConsoleRuntime::printStartupStatus()
 
 void ConsoleRuntime::printShutdownStatus()
 {
+    stopAutoLatencyBundleTest();
+
     // 关闭顺序按依赖逆序执行，避免退出过程中还有异步请求落到已析构对象上。
     // HmiTcpServer 必须最先停止：它持有所有其他服务的裸指针，
     // 必须在那些服务析构之前切断 TCP 连接和定时器，防止悬垂指针访问。

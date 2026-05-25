@@ -3,6 +3,10 @@
 #include <QtCore/QCoreApplication>
 #include <memory>
 
+class QTimer;
+
+#include "scan_tracking/vision/vision_types.h"
+
 namespace scan_tracking {
 namespace modbus { class ModbusService; }
 namespace mech_eye { class MechEyeService; }
@@ -30,6 +34,18 @@ private:
     void printStartupStatus();
     void printShutdownStatus();
     void initModules();
+    void scheduleAutoLatencyBundleTest();
+    void triggerAutoLatencyBundleTest();
+    void onAutoLatencyBundleFinished(const scan_tracking::vision::MultiCameraCaptureBundle& bundle);
+
+    void stopAutoLatencyBundleTest();
+
+    qint64 m_autoLatencyTriggerMs = 0;
+    bool m_autoLatencyTestPending = false;
+    bool m_autoLatencyPeriodic = false;
+    int m_autoLatencyIntervalMs = 20000;
+    quint32 m_latencyBundleSeq = 0;
+    QTimer* m_autoLatencyTimer = nullptr;
 
     /// 指针成员声明
     QCoreApplication& application_;

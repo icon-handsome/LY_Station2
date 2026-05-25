@@ -28,7 +28,11 @@ public:
     bool isStarted() const { return m_started; }
     VisionPipelineState state() const { return m_state; }
 
-    quint64 requestCaptureBundle(int segmentIndex, quint32 taskId, bool needMechEye2D = false);
+    quint64 requestCaptureBundle(
+        int segmentIndex,
+        quint32 taskId,
+        scan_tracking::mech_eye::CaptureMode mechCaptureMode =
+            scan_tracking::mech_eye::CaptureMode::Capture3DOnly);
 
 signals:
     void bundleCaptureFinished(scan_tracking::vision::MultiCameraCaptureBundle bundle);

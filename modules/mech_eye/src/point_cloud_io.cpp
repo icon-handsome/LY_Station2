@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QImage>
 #include <QLoggingCategory>
 #include <QTextStream>
 
@@ -242,6 +243,54 @@ void releasePointCloudFrameBuffers(PointCloudFrame* frame)
     }
     frame->pointsXYZ.reset();
     frame->normalsXYZ.reset();
+}
+
+QString buildSegmentMech2DPngPath(
+    const QString& configuredRoot,
+    int segmentIndex,
+    quint32 taskId,
+    const QString& timestamp)
+{
+    const QString baseDir = scan_tracking::common::captureCacheMech2DDir(configuredRoot);
+    if (baseDir.isEmpty()) {
+        qWarning(LOG_POINT_CLOUD_IO).noquote() << "无法创建 mech_2d 缓存目录";
+        return QString();
+    }
+
+    const QString ts =
+        timestamp.trimmed().isEmpty() ? scan_tracking::common::buildCaptureTimestamp() : timestamp;
+    const QString fileName =
+        QStringLiteral("segment_%1_task%2_%3_mech2d.png").arg(segmentIndex).arg(taskId).arg(ts);
+    return QDir(baseDir).absoluteFilePath(fileName);
+}
+
+bool saveGrayTextureFrameToPng(const GrayTextureFrame& frame, const QString& absolutePath)
+{
+    if (!frame.isValid() || absolutePath.trimmed().isEmpty()) {
+        return false;
+    }
+
+    QImage image(frame.width, frame.height, QImage::Format_Grayscale8);
+    if (image.isNull()) {
+        return false;
+    }
+
+    for (int row = 0; row < frame.height; ++row) {
+        auto* scanLine = image.scanLine(row);
+        const auto offset = static_cast<std::size_t>(row * frame.width);
+        for (int col = 0; col < frame.width; ++col) {
+            scanLine[col] = (*frame.pixels)[offset + static_cast<std::size_t>(col)];
+        }
+    }
+
+    if (!image.save(absolutePath, "PNG")) {
+        qWarning(LOG_POINT_CLOUD_IO).noquote() << "saveGrayTextureFrameToPng failed:" << absolutePath;
+        return false;
+    }
+
+    qInfo(LOG_POINT_CLOUD_IO).noquote()
+        << "Mech 2D PNG saved:" << absolutePath << frame.width << "x" << frame.height;
+    return true;
 }
 
 }  // namespace scan_tracking::mech_eye

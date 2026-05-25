@@ -164,6 +164,8 @@ struct MultiCameraCaptureRequest {
     quint32 taskId = 0;
     int segmentIndex = 0;
     bool needMechEye2D = false;
+    scan_tracking::mech_eye::CaptureMode mechCaptureMode =
+        scan_tracking::mech_eye::CaptureMode::Capture3DOnly;
     QString mechEyeCameraKey;
     int mechEyeTimeoutMs = 5000;
     QString hikCameraAKey;

@@ -17,6 +17,7 @@ namespace mech_eye {
 enum class CaptureMode {
     Capture3DOnly = 0,
     Capture2DAnd3D = 1,
+    Capture2DOnly = 2,
 };
 
 /* 采集与连接过程中的统一错误码 */

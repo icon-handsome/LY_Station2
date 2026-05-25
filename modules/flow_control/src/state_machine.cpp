@@ -929,10 +929,13 @@ void StateMachine::executeScanSegmentTask()
     const bool needMechEye2D = resolveNeedRotationForSegment(m_activeTask.scanSegmentIndex);
     qInfo(LOG_FLOW).noquote()
         << "[ScanSync] trigger" << QDateTime::currentMSecsSinceEpoch();
+    const auto mechCaptureMode = needMechEye2D
+        ? scan_tracking::mech_eye::CaptureMode::Capture2DAnd3D
+        : scan_tracking::mech_eye::CaptureMode::Capture3DOnly;
     const quint64 requestId = m_visionPipeline->requestCaptureBundle(
         m_activeTask.scanSegmentIndex,
         m_activeTask.taskId,
-        needMechEye2D);
+        mechCaptureMode);
 
     if (requestId == 0) {
         finishScanSegmentFailure(

@@ -19,6 +19,9 @@ QString captureCachePointCloudDir(const QString& root);
 /// 点子目录：<root>/hik_mono
 QString captureCacheHikMonoDir(const QString& root);
 
+/// 点子目录：<root>/mech_2d
+QString captureCacheMech2DDir(const QString& root);
+
 /// 同一次分段落盘共用的时间戳：yyyyMMdd_HHmmss_zzz
 QString buildCaptureTimestamp();
 

@@ -95,7 +95,25 @@ void VisionPipelineService::stop()
     setState(VisionPipelineState::Stopped, QStringLiteral("视觉流水线已停止。"));
 }
 
-quint64 VisionPipelineService::requestCaptureBundle(int segmentIndex, quint32 taskId, bool needMechEye2D)
+namespace {
+
+bool mechCapturePayloadReady(const scan_tracking::mech_eye::CaptureResult& result)
+{
+    if (!result.success()) {
+        return false;
+    }
+    if (result.mode == scan_tracking::mech_eye::CaptureMode::Capture2DOnly) {
+        return result.texture2D.isValid();
+    }
+    return result.pointCloud.isValid();
+}
+
+}  // namespace
+
+quint64 VisionPipelineService::requestCaptureBundle(
+    int segmentIndex,
+    quint32 taskId,
+    scan_tracking::mech_eye::CaptureMode mechCaptureMode)
 {
     if (!m_started) {
         emit fatalError(VisionErrorCode::NotStarted, QStringLiteral("视觉流水线未启动。"));
@@ -114,7 +132,9 @@ quint64 VisionPipelineService::requestCaptureBundle(int segmentIndex, quint32 ta
     request.requestId = m_nextRequestId++;
     request.taskId = taskId;
     request.segmentIndex = segmentIndex;
-    request.needMechEye2D = needMechEye2D;
+    request.mechCaptureMode = mechCaptureMode;
+    request.needMechEye2D =
+        mechCaptureMode == scan_tracking::mech_eye::CaptureMode::Capture2DAnd3D;
     request.mechEyeCameraKey = m_config.mechEyeCameraKey;
     request.mechEyeTimeoutMs = m_config.mechCaptureTimeoutMs > 0 ? m_config.mechCaptureTimeoutMs : 5000;
     request.hikCameraAKey = m_config.hikCameraA.cameraKey;
@@ -125,13 +145,10 @@ quint64 VisionPipelineService::requestCaptureBundle(int segmentIndex, quint32 ta
     pending.active = true;
     pending.bundle.request = request;
 
-    const bool invokeLbn = needMechEye2D && m_lbnPoseConfig.enabled;
-    const auto mechCaptureMode = invokeLbn
-        ? scan_tracking::mech_eye::CaptureMode::Capture2DAnd3D
-        : scan_tracking::mech_eye::CaptureMode::Capture3DOnly;
+    const bool invokeLbn = request.needMechEye2D && m_lbnPoseConfig.enabled;
     qInfo() << "[VisionPipeline] segment=" << segmentIndex
-            << "needMechEye2D=" << needMechEye2D
-            << "mechMode=" << (invokeLbn ? "2D+3D" : "3D-only");
+            << "needMechEye2D=" << request.needMechEye2D
+            << "mechMode=" << static_cast<int>(mechCaptureMode);
     pending.mechRequestId = m_mechEyeService->requestCapture(
         request.mechEyeCameraKey,
         mechCaptureMode,
@@ -210,7 +227,7 @@ void VisionPipelineService::finishBundleIfReady()
     const auto bundle = m_pending.bundle;
     m_pending = PendingCaptureContext{};
 
-    if (!bundle.mechEyeResult.success()) {
+    if (!mechCapturePayloadReady(bundle.mechEyeResult)) {
         m_processing = false;
         setState(
             VisionPipelineState::Error,
@@ -296,8 +313,9 @@ void VisionPipelineService::finishBundleIfReady()
                 }
 
                 self->m_processing = false;
-                const bool ok = completedBundle.mechEyeResult.success() &&
-                                (!hikReady || completedBundle.lbPoseResult.success);
+                const bool ok = mechCapturePayloadReady(completedBundle.mechEyeResult) &&
+                                completedBundle.hikCameraAResult.success() &&
+                                completedBundle.hikCameraBResult.success();
                 self->setState(
                     ok ? VisionPipelineState::Ready : VisionPipelineState::Error,
                     ok ? QStringLiteral("视觉组合采集成功完成。")

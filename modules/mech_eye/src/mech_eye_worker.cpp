@@ -324,7 +324,15 @@ void MechEyeWorker::performCapture(const scan_tracking::mech_eye::CaptureRequest
         qInfo(LOG_MECHEYE_WORKER).noquote()
             << "[ScanSync] mech" << QDateTime::currentMSecsSinceEpoch();
 
-        if (normalized.mode == CaptureMode::Capture3DOnly) {
+        if (normalized.mode == CaptureMode::Capture2DOnly) {
+            mmind::eye::Frame2D frame2D;
+            status = m_impl->camera.capture2D(
+                frame2D,
+                static_cast<unsigned int>(normalized.timeoutMs));
+            if (status.isOK()) {
+                result.texture2D = ConvertGrayTextureFrame(frame2D);
+            }
+        } else if (normalized.mode == CaptureMode::Capture3DOnly) {
             mmind::eye::Frame3D frame3D;
 
             // ---- 采集前设置深度范围 ----
@@ -394,7 +402,18 @@ void MechEyeWorker::performCapture(const scan_tracking::mech_eye::CaptureRequest
             return;
         }
 
-        if (!result.pointCloud.isValid()) {
+        if (normalized.mode == CaptureMode::Capture2DOnly) {
+            if (!result.texture2D.isValid()) {
+                m_busy = false;
+                setRuntimeState(CameraRuntimeState::Ready, QStringLiteral("采集结束，但 2D 图像为空"));
+                emit captureFinished(makeFailureResult(
+                    normalized,
+                    CaptureErrorCode::CaptureFailed,
+                    QStringLiteral("采集成功，但 2D 图像为空"),
+                    result.elapsedMs));
+                return;
+            }
+        } else if (!result.pointCloud.isValid()) {
             m_busy = false;
             setRuntimeState(CameraRuntimeState::Ready, QStringLiteral("采集结束，但点云为空"));
             emit captureFinished(makeFailureResult(
@@ -412,7 +431,9 @@ void MechEyeWorker::performCapture(const scan_tracking::mech_eye::CaptureRequest
         qInfo(LOG_MECHEYE_WORKER).noquote()
             << "采集成功"
             << "requestId=" << result.requestId
+            << "mode=" << static_cast<int>(result.mode)
             << "pointCount=" << result.pointCloud.pointCount
+            << "texture2D=" << result.texture2D.width << "x" << result.texture2D.height
             << "normalCount=" << result.pointCloud.normalCount()
             << "elapsedMs=" << result.elapsedMs;
         emit captureFinished(result);

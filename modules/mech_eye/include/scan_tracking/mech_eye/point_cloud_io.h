@@ -27,4 +27,14 @@ bool loadPointCloudFrameFromPly(const QString& absolutePath, PointCloudFrame* ou
 /// 释放 PointCloudFrame 中的大数组，保留 pointCount/width/height 等元数据
 void releasePointCloudFrameBuffers(PointCloudFrame* frame);
 
+/// 生成分段 Mech 2D PNG 绝对路径（mech_2d 子目录）
+QString buildSegmentMech2DPngPath(
+    const QString& configuredRoot,
+    int segmentIndex,
+    quint32 taskId,
+    const QString& timestamp = QString());
+
+/// 将 GrayTextureFrame 保存为 8 位灰度 PNG
+bool saveGrayTextureFrameToPng(const GrayTextureFrame& frame, const QString& absolutePath);
+
 }  // namespace scan_tracking::mech_eye
