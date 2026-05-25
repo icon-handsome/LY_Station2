@@ -260,7 +260,12 @@ bool HikCameraService::captureMonoFrame(int timeoutMs, const QString& cameraKey,
     }
 
     qInfo() << "[采图] 等待图像数据...";
-    
+    qInfo().noquote()
+        << "[ScanSync]"
+        << (m_roleName.contains(QStringLiteral("_b")) ? QStringLiteral("hik_b")
+                                                       : QStringLiteral("hik_a"))
+        << QDateTime::currentMSecsSinceEpoch();
+
     // 尝试使用 GetImageBuffer（推荐用于连续采集）
     // 注意：这里不持有锁，所以 handle 可能在等待期间被销毁
     // 但 StopGrabbing 应该会中断这个调用

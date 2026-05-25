@@ -277,7 +277,6 @@ void MechEyeWorker::performCapture(const scan_tracking::mech_eye::CaptureRequest
 {
     QElapsedTimer timer;
     timer.start();
-
     CaptureRequest normalized = request;
     if (normalized.timeoutMs <= 0) {
         normalized.timeoutMs = 5000;
@@ -321,6 +320,9 @@ void MechEyeWorker::performCapture(const scan_tracking::mech_eye::CaptureRequest
     try {
 #endif
         mmind::eye::ErrorStatus status;
+
+        qInfo(LOG_MECHEYE_WORKER).noquote()
+            << "[ScanSync] mech" << QDateTime::currentMSecsSinceEpoch();
 
         if (normalized.mode == CaptureMode::Capture3DOnly) {
             mmind::eye::Frame3D frame3D;

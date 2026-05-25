@@ -436,13 +436,17 @@ cannot open config/first_config.cfg
 - Windows 下源码编译通过。
 - PCL 依赖接通。
 - 项目内点云结构到 PCL 的转换适配。
-- 第一检测位外表面算法的 smoke test 调用打通。
+- 第一工位外/内表面 + 内孔检测适配（`lanyou_first_station_adapter`）。
+- **正式主流程**：`StateMachine` 点云缓存 → `TrackingService::inspectSegments` → 蓝友 `runFirstStationDetection`。
+- **HMI 推送**：检测完成（含 NG）经 `publishInspectionResult` 发送 `event.inspection.finished`。
+- 调试命令 `cmd.debug_trigger_inspection`（`allowDebugTriggerInspection` 配置门控）。
 
 当前尚未完成：
-- 正式业务流程接入。
-- 真实采集点云的效果验证。
+- 多路径点云融合与 `detectMultiPath()`（见未完成清单 §2.3.2）。
+- 第二/第三工位算法接入 IPC 主流程。
+- 真实采集点云现场效果充分验证。
 - 第二检测位 smoke test。
-- 配置文件路径标准化。
+- 配置文件路径标准化（蓝友 `first_config.cfg` 相对路径）。
 - 多线程/多任务并发隔离设计。
 
 ## 12. 常见问题

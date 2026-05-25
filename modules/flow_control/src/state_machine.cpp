@@ -916,6 +916,8 @@ void StateMachine::executeScanSegmentTask()
         : kDefaultScanSegmentCaptureTimeoutMs;
 
     const bool needMechEye2D = resolveNeedRotationForSegment(m_activeTask.scanSegmentIndex);
+    qInfo(LOG_FLOW).noquote()
+        << "[ScanSync] trigger" << QDateTime::currentMSecsSinceEpoch();
     const quint64 requestId = m_visionPipeline->requestCaptureBundle(
         m_activeTask.scanSegmentIndex,
         m_activeTask.taskId,
