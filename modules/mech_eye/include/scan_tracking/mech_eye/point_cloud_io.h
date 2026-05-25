@@ -9,7 +9,7 @@ namespace scan_tracking::mech_eye {
 /// 默认采集缓存根目录：<applicationDir>/ScanTracking_CaptureCache
 QString defaultScanCacheDirectory();
 
-/// 生成分段 PLY 绝对路径（pointcloud 子目录）：segment_{N}_task{T}_{timestamp}.ply
+/// 生成分段 PLY 绝对路径（mech_3d 子目录）：segment_{N}_task{T}_{timestamp}.ply
 /// @param configuredRoot config.ini scanCacheDirectory，空则默认根目录
 /// @param timestamp 与同段海康图共用；空则自动生成
 QString buildSegmentPlyPath(

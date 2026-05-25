@@ -24,19 +24,18 @@ QString buildSegmentHikMonoPath(
     const QString& cameraTag,
     const QString& timestamp)
 {
-    const QString baseDir = scan_tracking::common::captureCacheHikMonoDir(configuredRoot);
+    const QString baseDir =
+        scan_tracking::common::captureCacheHikMonoCameraDir(configuredRoot, cameraTag);
     if (baseDir.isEmpty()) {
-        qWarning(LOG_HIK_MONO_IO).noquote() << "无法创建 hik_mono 缓存目录";
+        qWarning(LOG_HIK_MONO_IO).noquote()
+            << "无法创建 hik_mono 相机子目录 cameraTag=" << cameraTag;
         return QString();
     }
 
     const QString ts =
         timestamp.trimmed().isEmpty() ? scan_tracking::common::buildCaptureTimestamp() : timestamp;
-    const QString fileName = QStringLiteral("segment_%1_task%2_%3_%4.pgm")
-                                 .arg(segmentIndex)
-                                 .arg(taskId)
-                                 .arg(ts)
-                                 .arg(cameraTag);
+    const QString fileName =
+        QStringLiteral("segment_%1_task%2_%3.pgm").arg(segmentIndex).arg(taskId).arg(ts);
     return QDir(baseDir).absoluteFilePath(fileName);
 }
 

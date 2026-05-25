@@ -13,7 +13,7 @@ class PointCloudIoTest : public QObject {
 
 private slots:
     void roundTripSaveLoad();
-    void plyPathUsesPointcloudSubdir();
+    void plyPathUsesMech3dSubdir();
 };
 
 void PointCloudIoTest::roundTripSaveLoad()
@@ -41,7 +41,7 @@ void PointCloudIoTest::roundTripSaveLoad()
 
     const QString ts = QStringLiteral("20260525_120000_000");
     const QString plyPath = buildSegmentPlyPath(tempDir.path(), 1, 100u, ts);
-    QVERIFY(plyPath.contains(QStringLiteral("pointcloud")));
+    QVERIFY(plyPath.contains(QStringLiteral("mech_3d")));
     QVERIFY(!plyPath.isEmpty());
     QVERIFY(savePointCloudFrameToPly(frame, plyPath));
     QVERIFY(QFile::exists(plyPath));
@@ -57,13 +57,13 @@ void PointCloudIoTest::roundTripSaveLoad()
     QCOMPARE(loaded.pointsXYZ->size(), static_cast<std::size_t>(9));
 }
 
-void PointCloudIoTest::plyPathUsesPointcloudSubdir()
+void PointCloudIoTest::plyPathUsesMech3dSubdir()
 {
     QTemporaryDir tempDir;
     QVERIFY(tempDir.isValid());
 
-    const QString root = scan_tracking::common::captureCachePointCloudDir(tempDir.path());
-    QVERIFY(root.endsWith(QStringLiteral("pointcloud")));
+    const QString root = scan_tracking::common::captureCacheMech3DDir(tempDir.path());
+    QVERIFY(root.endsWith(QStringLiteral("mech_3d")));
 }
 
 QTEST_MAIN(PointCloudIoTest)

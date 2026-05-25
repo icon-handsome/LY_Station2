@@ -31,6 +31,7 @@ void HikMonoIoTest::roundTripSavePgm()
     const QString ts = QStringLiteral("20260525_120000_000");
     const QString path = buildSegmentHikMonoPath(tempDir.path(), 2, 99u, QStringLiteral("hikA"), ts);
     QVERIFY(path.contains(QStringLiteral("hik_mono")));
+    QVERIFY(path.contains(QStringLiteral("camera_a")));
     QVERIFY(saveHikMonoFrameToPgm(frame, path));
     QVERIFY(QFile::exists(path));
 

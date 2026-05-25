@@ -37,9 +37,9 @@ QString buildSegmentPlyPath(
     quint32 taskId,
     const QString& timestamp)
 {
-    const QString baseDir = scan_tracking::common::captureCachePointCloudDir(configuredRoot);
+    const QString baseDir = scan_tracking::common::captureCacheMech3DDir(configuredRoot);
     if (baseDir.isEmpty()) {
-        qWarning(LOG_POINT_CLOUD_IO).noquote() << "无法创建 pointcloud 缓存目录";
+        qWarning(LOG_POINT_CLOUD_IO).noquote() << "无法创建 mech_3d 缓存目录";
         return QString();
     }
 
@@ -260,7 +260,7 @@ QString buildSegmentMech2DPngPath(
     const QString ts =
         timestamp.trimmed().isEmpty() ? scan_tracking::common::buildCaptureTimestamp() : timestamp;
     const QString fileName =
-        QStringLiteral("segment_%1_task%2_%3_mech2d.png").arg(segmentIndex).arg(taskId).arg(ts);
+        QStringLiteral("segment_%1_task%2_%3.png").arg(segmentIndex).arg(taskId).arg(ts);
     return QDir(baseDir).absoluteFilePath(fileName);
 }
 

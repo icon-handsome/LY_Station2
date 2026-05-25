@@ -6,7 +6,7 @@
 
 namespace scan_tracking::vision {
 
-/// 生成分段海康 Mono PGM 路径（hik_mono 子目录）
+/// 生成分段海康 Mono PGM 路径（hik_mono/camera_a 或 hik_mono/camera_b）
 QString buildSegmentHikMonoPath(
     const QString& configuredRoot,
     int segmentIndex,

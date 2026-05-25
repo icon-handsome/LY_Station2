@@ -33,13 +33,22 @@ QString ensureDirectoryExists(const QString& directoryPath)
     return QDir(directoryPath).absolutePath();
 }
 
-QString captureCachePointCloudDir(const QString& root)
+QString captureCacheMech3DDir(const QString& root)
 {
     const QString resolved = ensureDirectoryExists(resolveCaptureCacheRoot(root));
     if (resolved.isEmpty()) {
         return QString();
     }
-    return ensureDirectoryExists(QDir(resolved).absoluteFilePath(QStringLiteral("pointcloud")));
+    return ensureDirectoryExists(QDir(resolved).absoluteFilePath(QStringLiteral("mech_3d")));
+}
+
+QString captureCacheMech2DDir(const QString& root)
+{
+    const QString resolved = ensureDirectoryExists(resolveCaptureCacheRoot(root));
+    if (resolved.isEmpty()) {
+        return QString();
+    }
+    return ensureDirectoryExists(QDir(resolved).absoluteFilePath(QStringLiteral("mech_2d")));
 }
 
 QString captureCacheHikMonoDir(const QString& root)
@@ -51,13 +60,27 @@ QString captureCacheHikMonoDir(const QString& root)
     return ensureDirectoryExists(QDir(resolved).absoluteFilePath(QStringLiteral("hik_mono")));
 }
 
-QString captureCacheMech2DDir(const QString& root)
+QString captureCacheHikMonoCameraDir(const QString& root, const QString& cameraTag)
 {
-    const QString resolved = ensureDirectoryExists(resolveCaptureCacheRoot(root));
-    if (resolved.isEmpty()) {
+    const QString hikRoot = captureCacheHikMonoDir(root);
+    if (hikRoot.isEmpty()) {
         return QString();
     }
-    return ensureDirectoryExists(QDir(resolved).absoluteFilePath(QStringLiteral("mech_2d")));
+
+    QString subDir;
+    if (cameraTag.compare(QStringLiteral("hikA"), Qt::CaseInsensitive) == 0) {
+        subDir = QStringLiteral("camera_a");
+    } else if (cameraTag.compare(QStringLiteral("hikB"), Qt::CaseInsensitive) == 0) {
+        subDir = QStringLiteral("camera_b");
+    } else {
+        subDir = cameraTag.trimmed();
+    }
+
+    if (subDir.isEmpty()) {
+        return QString();
+    }
+
+    return ensureDirectoryExists(QDir(hikRoot).absoluteFilePath(subDir));
 }
 
 QString buildCaptureTimestamp()

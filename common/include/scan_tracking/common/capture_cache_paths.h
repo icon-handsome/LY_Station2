@@ -13,14 +13,17 @@ QString resolveCaptureCacheRoot(const QString& configuredRoot);
 /// 确保目录存在；失败返回空字符串
 QString ensureDirectoryExists(const QString& directoryPath);
 
-/// 点子目录：<root>/pointcloud
-QString captureCachePointCloudDir(const QString& root);
+/// Mech-Eye 3D 点云：<root>/mech_3d
+QString captureCacheMech3DDir(const QString& root);
 
-/// 点子目录：<root>/hik_mono
+/// Mech-Eye 2D 灰度图：<root>/mech_2d
+QString captureCacheMech2DDir(const QString& root);
+
+/// 海康 Mono 根目录：<root>/hik_mono
 QString captureCacheHikMonoDir(const QString& root);
 
-/// 点子目录：<root>/mech_2d
-QString captureCacheMech2DDir(const QString& root);
+/// 海康 A/B 分目录：<root>/hik_mono/camera_a 或 camera_b（cameraTag 为 hikA / hikB）
+QString captureCacheHikMonoCameraDir(const QString& root, const QString& cameraTag);
 
 /// 同一次分段落盘共用的时间戳：yyyyMMdd_HHmmss_zzz
 QString buildCaptureTimestamp();
