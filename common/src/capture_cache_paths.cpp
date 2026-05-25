@@ -1,0 +1,59 @@
+#include "scan_tracking/common/capture_cache_paths.h"
+
+#include <QCoreApplication>
+#include <QDateTime>
+#include <QDir>
+
+namespace scan_tracking::common {
+
+QString defaultCaptureCacheRoot()
+{
+    return QCoreApplication::applicationDirPath() + QStringLiteral("/ScanTracking_CaptureCache");
+}
+
+QString resolveCaptureCacheRoot(const QString& configuredRoot)
+{
+    const QString trimmed = configuredRoot.trimmed();
+    if (trimmed.isEmpty()) {
+        return defaultCaptureCacheRoot();
+    }
+    return QDir(trimmed).absolutePath();
+}
+
+QString ensureDirectoryExists(const QString& directoryPath)
+{
+    if (directoryPath.trimmed().isEmpty()) {
+        return QString();
+    }
+
+    QDir dir;
+    if (!dir.mkpath(directoryPath)) {
+        return QString();
+    }
+    return QDir(directoryPath).absolutePath();
+}
+
+QString captureCachePointCloudDir(const QString& root)
+{
+    const QString resolved = ensureDirectoryExists(resolveCaptureCacheRoot(root));
+    if (resolved.isEmpty()) {
+        return QString();
+    }
+    return ensureDirectoryExists(QDir(resolved).absoluteFilePath(QStringLiteral("pointcloud")));
+}
+
+QString captureCacheHikMonoDir(const QString& root)
+{
+    const QString resolved = ensureDirectoryExists(resolveCaptureCacheRoot(root));
+    if (resolved.isEmpty()) {
+        return QString();
+    }
+    return ensureDirectoryExists(QDir(resolved).absoluteFilePath(QStringLiteral("hik_mono")));
+}
+
+QString buildCaptureTimestamp()
+{
+    return QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss_zzz"));
+}
+
+}  // namespace scan_tracking::common

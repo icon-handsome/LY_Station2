@@ -297,6 +297,8 @@ void ConfigManager::load(const QString& filePath)
     m_flowControlConfig.pollIntervalMs = settings.value("pollIntervalMs", 100).toInt();
     m_flowControlConfig.heartbeatIntervalMs = settings.value("heartbeatIntervalMs", 1000).toInt();
     m_flowControlConfig.simulatedProcessingMs = settings.value("simulatedProcessingMs", 300).toInt();
+    m_flowControlConfig.scanCacheDirectory = settings.value("scanCacheDirectory").toString().trimmed();
+    m_flowControlConfig.retainSegmentPly = settings.value("retainSegmentPly", true).toBool();
     settings.endGroup();
 
     settings.beginGroup("Tracking");

@@ -360,31 +360,9 @@ void MechEyeWorker::performCapture(const scan_tracking::mech_eye::CaptureRequest
                     }
                 }
 
-                // 保存 PLY
-                const QString saveDir = QCoreApplication::applicationDirPath() + QStringLiteral("/Mech-Pictures");
-                QDir().mkpath(saveDir);
-                const QString ts = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss_zzz"));
-                const QString plyPath = QStringLiteral("%1/cloud_%2_%3.ply").arg(saveDir).arg(normalized.requestId).arg(ts);
-
-                if (validCount > 0 && pData) {
-                    std::ofstream ofs(plyPath.toStdString(), std::ios::binary);
-                    if (ofs.is_open()) {
-                        ofs << "ply\nformat ascii 1.0\nelement vertex " << validCount
-                            << "\nproperty float x\nproperty float y\nproperty float z\nproperty float nx\nproperty float ny\nproperty float nz\nend_header\n";
-                        for (std::size_t i = 0; i < totalPoints; ++i) {
-                            const auto& pt = pData[i];
-                            if (std::isfinite(pt.point.x) && std::isfinite(pt.point.y) && std::isfinite(pt.point.z)) {
-                                ofs << pt.point.x << " " << pt.point.y << " " << pt.point.z << " "
-                                    << pt.normal.x << " " << pt.normal.y << " " << pt.normal.z << "\n";
-                            }
-                        }
-                        ofs.close();
-                        qInfo(LOG_MECHEYE_WORKER) << "PLY保存完成:" << plyPath << "有效点=" << validCount << "/" << totalPoints;
-                    } else {
-                        qWarning(LOG_MECHEYE_WORKER) << "无法打开PLY文件:" << plyPath;
-                    }
-                } else {
-                    qWarning(LOG_MECHEYE_WORKER) << "点云全NaN，无法保存PLY, 请检查DepthRange配置和目标物距离";
+                if (validCount == 0) {
+                    qWarning(LOG_MECHEYE_WORKER)
+                        << "点云全NaN，请检查DepthRange配置和目标物距离；分段 PLY 由 ScanTracking_CaptureCache 落盘";
                 }
             }
         } else {
@@ -395,18 +373,6 @@ void MechEyeWorker::performCapture(const scan_tracking::mech_eye::CaptureRequest
             if (status.isOK()) {
                 result.pointCloud = buildPointCloud2DAnd3D(frame2DAnd3D);
                 result.texture2D = ConvertGrayTextureFrame(frame2DAnd3D.frame2D());
-                // 使用 SDK 内置方法保存纹理点云到文件
-                const QString saveDir = QCoreApplication::applicationDirPath() + QStringLiteral("/Mech-Pictures");
-                QDir().mkpath(saveDir);
-                const QString ts = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss_zzz"));
-                const QString plyPath = QStringLiteral("%1/textured_%2_%3.ply").arg(saveDir).arg(normalized.requestId).arg(ts);
-                qInfo(LOG_MECHEYE_WORKER) << "正在保存纹理点云:" << plyPath;
-                const auto saveStatus = frame2DAnd3D.saveTexturedPointCloud(mmind::eye::FileFormat::PLY, plyPath.toStdString());
-                if (saveStatus.isOK()) {
-                    qInfo(LOG_MECHEYE_WORKER) << "纹理点云已保存（SDK）:" << plyPath;
-                } else {
-                    qWarning(LOG_MECHEYE_WORKER) << "纹理点云保存失败:" << QString::fromStdString(saveStatus.errorDescription);
-                }
             }
         }
 

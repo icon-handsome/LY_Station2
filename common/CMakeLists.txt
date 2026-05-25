@@ -4,6 +4,7 @@ add_library(scan_tracking_common STATIC
     src/application_info.cpp
     src/logger.cpp
     src/config_manager.cpp
+    src/capture_cache_paths.cpp
 )
 
 target_include_directories(scan_tracking_common

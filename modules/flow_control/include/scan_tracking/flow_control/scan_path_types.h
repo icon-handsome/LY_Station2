@@ -25,9 +25,9 @@ struct ScanPointResult {
     // 点云数据（流式处理：只存文件路径，不缓存点云数据）
     QString pointCloudPath;      // PLY 文件路径
     
-    // 海康图像（可选：也可以只存路径）
-    vision::HikMonoFrame hikFrameA;   // 海康相机 A 的黑白图像
-    vision::HikMonoFrame hikFrameB;   // 海康相机 B 的黑白图像
+    // 海康图像路径（StateMachine 落盘至 hik_mono/*.pgm 后仅存路径，像素在 bundle 内已释放）
+    QString hikMonoPathA;
+    QString hikMonoPathB;
     
     // 位姿矩阵（轻量级，可以缓存）
     std::array<float, 16> calibrationMatrix;      // 标定矩阵 T0' 或 T0''（4×4，行优先）

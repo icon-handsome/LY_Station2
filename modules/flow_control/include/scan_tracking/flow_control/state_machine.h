@@ -27,6 +27,13 @@ struct PoseCheckResult;
 }
 namespace flow_control {
 
+/// 单段扫描落盘路径（点云 PLY + 海康 A/B PGM）
+struct SegmentDiskPaths {
+    QString pointCloudPly;
+    QString hikMonoA;
+    QString hikMonoB;
+};
+
 // 应用状态枚举
 enum class AppState {
     Init,      // 初始化
@@ -298,6 +305,16 @@ private:
     // 清空扫描分段缓存（点云 + 视觉 bundle）
     void resetScanSegmentCache();
 
+    // 将 Mech-Eye 点云落盘并写入轻量内存缓存
+    bool persistSegmentCaptureToDisk(
+        int segmentIndex,
+        const scan_tracking::mech_eye::CaptureResult& result,
+        const scan_tracking::vision::MultiCameraCaptureBundle* bundle);
+
+    // 综合检测前从磁盘加载 [Tracking] 必需的三段点云
+    QMap<int, scan_tracking::mech_eye::CaptureResult> loadSegmentCaptureResultsForInspection(
+        QString* errorMessage) const;
+
     // 从 scan_paths_config.json 重新加载 T0，并重置当前标定矩阵
     void reloadCalibrationMatricesFromConfig();
 
@@ -426,8 +443,9 @@ private:
     QElapsedTimer m_pollRequestTimer;                       // 当前轮询请求耗时计时器
     int m_consecutiveModbusFailures = 0;                    // 连续 Modbus 失败次数
     QVector<quint16> m_lastCommandBlock;                    // 上一次命令块副本
-    QMap<int, scan_tracking::mech_eye::CaptureResult> m_segmentCaptureResults;  // 分段采集结果缓存
+    QMap<int, scan_tracking::mech_eye::CaptureResult> m_segmentCaptureResults;  // 分段元数据（点云在磁盘）
     QMap<int, scan_tracking::vision::MultiCameraCaptureBundle> m_segmentCaptureBundles;  // 分段视觉 bundle 缓存
+    QMap<int, SegmentDiskPaths> m_segmentDiskPaths;  // segmentIndex -> 落盘文件路径
     std::array<float, 16> m_baseCalibrationMatrix{};       // 基准 T0（来自 scan_paths_config.json）
     std::array<float, 16> m_currentCalibrationMatrix{};    // 当前 T0' / T0''（转动点由 LBN 链式更新）
     QMap<int, std::array<float, 16>> m_segmentCalibrationMatrices;  // 每段扫描结束时的标定矩阵快照

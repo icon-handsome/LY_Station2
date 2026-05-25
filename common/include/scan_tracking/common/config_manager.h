@@ -63,6 +63,8 @@ struct FlowControlConfig {
     int pollIntervalMs;
     int heartbeatIntervalMs;
     int simulatedProcessingMs;
+    QString scanCacheDirectory;  ///< 采集缓存根目录，空则 <app>/ScanTracking_CaptureCache
+    bool retainSegmentPly = true; ///< true：检测/复位后不删磁盘 PLY（现场复盘）
 };
 
 struct TrackingConfig {

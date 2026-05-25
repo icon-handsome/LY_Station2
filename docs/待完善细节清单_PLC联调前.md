@@ -1,7 +1,8 @@
 # 待完善细节清单（PLC 联调前评估）
 
 编制日期：2026-05-15  
-当前版本：b20701a（存档）
+**文档修订**：2026-05-25（对齐分段落盘、LB 双链路、段数配置）  
+代码基线：以当前 `main` 工作区为准（非仅 b20701a）
 
 ---
 
@@ -17,16 +18,17 @@
 
 ### 第二优先级（尽量跑通）
 
-6. **Trig_ScanSegment 单段扫描**：PLC 写 ScanSegmentIndex + Trig=1，IPC 响应并返回 Res=1
-7. **Trig_Inspection 综合检测**：扫描完成后触发，IPC 返回检测结果
-8. **Trig_LoadGrasp 上料抓取**：验证握手流程和坐标回写格式（当前用模拟值）
-9. **Trig_UnloadCalc 下料计算**：同上
+6. **Trig_ScanSegment 单段扫描**：PLC 写 ScanSegmentIndex + Trig=1，IPC 响应并返回 Res=1；段总数与 `[Tracking] scanSegmentTotal` 一致（现场可为 10，上限 16）
+7. **Trig_Inspection 综合检测**：外/内/孔三段 PLY 已落盘后触发；IPC 从 `ScanTracking_CaptureCache` 加载后解算
+8. **落盘验收**：每段成功后检查 `pointcloud/*.ply` 与 `hik_mono/*_hikA/B.pgm`
+9. **Trig_LoadGrasp 上料抓取**：验证握手流程和坐标回写格式（当前用模拟值）
+10. **Trig_UnloadCalc 下料计算**：同上
 
 ### 第三优先级（记录问题，后续解决）
 
-10. 各触发任务的超时行为
-11. 异常中断后的 Trig_ResultReset 清理流程
-12. Safety_Status_Word 的联锁逻辑
+11. 各触发任务的超时行为
+12. 异常中断后的 Trig_ResultReset 清理流程
+13. Safety_Status_Word 的联锁逻辑
 
 ---
 
@@ -57,17 +59,34 @@
 |------|----------|----------|--------|
 | 1 | 海康相机 A/B 真实 4x4 位姿矩阵生成 | 当前返回单位矩阵占位 | 高 |
 | 2 | VisionPipeline 中 LB 位姿检测 | 默认启用 LBN 时 LB 走 stub；改 `SCAN_TRACKING_ENABLE_LBN_POSE_DETECTION=OFF` 可恢复 LB 实装 | 中 |
-| 2b | LBN 位姿检测（Mech-Eye） | 适配层与 `lbn_pose` 库已接入；`LbnPoseConfig.enabled` 控制调用；**未**接入多路径标定矩阵更新 | 中 |
+| 2b | LBN 位姿检测（Mech-Eye） | 适配层已接入；**单段**转动点 `T0'=Rt×T0` 已实现；**多路径级**标定重置与循环仍待 §2.2.1 | 中 |
 | 3 | 海康相机 C（智能相机）SDK 采图 | 不支持 GigE 数据流输出，只能走 TCP+FTP | 已确认限制 |
-| 4 | MechEye 3D 相机真实点云质量验证 | 框架已通，需现场验证点云完整性 | 中 |
+| 4 | MechEye 3D 相机真实点云质量验证 | 框架已通；落盘 `ScanTracking_CaptureCache/pointcloud/`（`retainSegmentPly=true` 长期保留），需现场验证点云完整性 | 中 |
 | 5 | 多相机同步时间戳对齐 | 未实现 | 低 |
+
+**分段采集落盘（已实现）**：
+- 根目录：`config.ini [FlowControl] scanCacheDirectory`，空则 `<程序目录>/ScanTracking_CaptureCache`
+- 点云：`pointcloud/segment_{段号}_task{任务ID}_{时间戳}.ply`
+- 海康：`hik_mono/segment_{段号}_task{任务ID}_{时间戳}_hikA.pgm`、`_hikB.pgm`
+- Mech-Eye worker 不再写 `Mech-Pictures/`；检测前从磁盘加载外/内/孔三段 PLY
+
+**分段扫描数据流（LB 与落盘）**：
+
+```text
+Trig_ScanSegment
+  → VisionPipeline（LB 用当次内存海康图，与落盘并行）
+  → persistSegmentCaptureToDisk（PLY + PGM，释放像素）
+Trig_Inspection
+  → loadSegmentCaptureResultsForInspection（仅 3 个 Tracking 段号）
+  → 蓝友 runFirstStationDetection
+```
 
 ### 2.4 跟踪服务/算法（完成度 ~80%）
 
 | 序号 | 待完善项 | 当前状态 | 优先级 |
 |------|----------|----------|--------|
 | 1 | LB 位姿检测使用硬编码标定参数 | `configureDefaultCalibration()` 中写死 | 中 |
-| 2 | LB 位姿检测从磁盘文件读图 | 未与实时海康相机采集对接 | 高 |
+| 2 | LB 图像来源（分两条链路） | **分段扫描**：`VisionPipeline` 内用当次采集的内存海康图跑 LB，**已对接**；落盘 PGM 仅存档。**Trig_PoseCheck**：`TrackingService` 仍可能从**文件**读图（与分段采集无关） | 中（PoseCheck 标定参数仍待完善） |
 | 3 | 第二检测位算法（SecondOut/SecondInliner）| 完全未接入 | 中 |
 | 4 | 蓝优算法配置文件路径 | 依赖当前工作目录，需改为绝对路径 | 中 |
 | 5 | 算法多线程并发隔离 | 使用全局变量 `GlobalFirstPoseParams()`，不支持并发 | 低 |
@@ -89,7 +108,7 @@
 
 | 业务触发 | 调用的算法 | 输入 | 输出 | 当前状态 |
 |----------|-----------|------|------|----------|
-| Trig_ScanSegment | MechEye 3D 采集 + 海康 A/B 采图 | 段号 | 点云帧 + 黑白图 | ✅ 框架已通 |
+| Trig_ScanSegment | MechEye 3D 采集 + 海康 A/B 采图 + LB/LBN | 段号 | 落盘 PLY/PGM；内存仅路径与元数据 | ✅ 框架已通 |
 | Trig_Inspection | 蓝优 FirstOutSurfaceDetection + FirstInlinerSurfaceDetection | 外表面/内表面/内孔三段点云 | 圆柱中心、内径、坡口角、直边高度等 | ✅ 已接入 |
 | Trig_PoseCheck | LB 位姿检测（TR_Mark_3D_Recon + FastGeoHash） | 左右相机图像 | 4x4 RT 矩阵、位姿偏差 | ✅ 已接入（从文件读图） |
 | Trig_LoadGrasp | 未接入真实算法 | 应为 3D 点云 | 6 轴坐标 (X,Y,Z,Rx,Ry,Rz) | ❌ 占位 |

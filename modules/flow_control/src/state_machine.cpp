@@ -3,6 +3,9 @@
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/common/logger.h"
 #include "scan_tracking/mech_eye/mech_eye_service.h"
+#include "scan_tracking/common/capture_cache_paths.h"
+#include "scan_tracking/mech_eye/point_cloud_io.h"
+#include "scan_tracking/vision/hik_mono_io.h"
 #include "scan_tracking/vision/vision_pipeline_service.h"
 
 #include <QtCore/QStringList>
@@ -46,7 +49,7 @@ constexpr quint16 kDeviceOnlineWord0 =
     (1u << 6);
 
 /// 最大扫描分段索引（从1开始计数）
-constexpr int kMaxScanSegmentIndex = 10;
+constexpr int kMaxScanSegmentIndex = 16;
 
 /// 默认扫描分段采集超时时间（毫秒）
 constexpr int kDefaultScanSegmentCaptureTimeoutMs = 30000;
@@ -105,6 +108,14 @@ bool lookupNeedRotationForSegment(int segmentIndex)
         }
     }
     return false;
+}
+
+QString selectedSegmentTextForInspection(const scan_tracking::common::TrackingConfig& tracking)
+{
+    return QStringLiteral("[%1,%2,%3]")
+        .arg(tracking.firstStationOuterSegmentIndex)
+        .arg(tracking.firstStationInnerSegmentIndex)
+        .arg(tracking.firstStationHoleSegmentIndex);
 }
 
 /**
@@ -980,14 +991,35 @@ void StateMachine::onVisionBundleCaptureFinished(scan_tracking::vision::MultiCam
     const bool needRotation = resolveNeedRotationForSegment(m_activeTask.scanSegmentIndex);
     applyLbnCalibrationUpdate(m_activeTask.scanSegmentIndex, needRotation, bundle);
 
-    m_segmentCaptureResults.insert(m_activeTask.scanSegmentIndex, result);
-    m_segmentCaptureBundles.insert(m_activeTask.scanSegmentIndex, bundle);
+    if (!result.pointCloud.isValid()) {
+        finishScanSegmentFailure(
+            7,
+            3,
+            722,
+            QStringLiteral("Mech-Eye 点云无效，无法落盘"),
+            QStringLiteral("Mech-Eye 点云无效，无法落盘"));
+        return;
+    }
+
+    if (!persistSegmentCaptureToDisk(m_activeTask.scanSegmentIndex, result, &bundle)) {
+        finishScanSegmentFailure(
+            7,
+            3,
+            722,
+            QStringLiteral("分段点云保存到磁盘失败"),
+            QStringLiteral("分段点云保存到磁盘失败"));
+        return;
+    }
+
     writeScanSegmentResult(m_activeTask.scanSegmentIndex, 2, result.pointCloud.pointCount > 0 ? 1 : 0);
     m_progress = 100;
     qInfo(LOG_FLOW).noquote()
         << "Vision bundle capture finished"
         << "segmentIndex=" << m_activeTask.scanSegmentIndex
         << "mechPointCount=" << result.pointCloud.pointCount
+        << "plyPath=" << m_segmentDiskPaths.value(m_activeTask.scanSegmentIndex).pointCloudPly
+        << "hikA=" << m_segmentDiskPaths.value(m_activeTask.scanSegmentIndex).hikMonoA
+        << "hikB=" << m_segmentDiskPaths.value(m_activeTask.scanSegmentIndex).hikMonoB
         << "hikAFrame=" << bundle.hikCameraAResult.frame.width << "x" << bundle.hikCameraAResult.frame.height
         << "hikBFrame=" << bundle.hikCameraBResult.frame.width << "x" << bundle.hikCameraBResult.frame.height;
     completeActiveTask(1);
@@ -1125,12 +1157,169 @@ void StateMachine::setInspectionResultPublisher(
 QVector<int> StateMachine::cachedScanSegmentIndices() const
 {
     QVector<int> indices;
-    indices.reserve(m_segmentCaptureResults.size());
-    for (auto it = m_segmentCaptureResults.cbegin(); it != m_segmentCaptureResults.cend(); ++it) {
+    indices.reserve(m_segmentDiskPaths.size());
+    for (auto it = m_segmentDiskPaths.cbegin(); it != m_segmentDiskPaths.cend(); ++it) {
         indices.push_back(it.key());
     }
     std::sort(indices.begin(), indices.end());
     return indices;
+}
+
+bool StateMachine::persistSegmentCaptureToDisk(
+    int segmentIndex,
+    const scan_tracking::mech_eye::CaptureResult& result,
+    const scan_tracking::vision::MultiCameraCaptureBundle* bundle)
+{
+    const auto* configManager = scan_tracking::common::ConfigManager::instance();
+    const QString configuredRoot = configManager != nullptr
+        ? configManager->flowControlConfig().scanCacheDirectory
+        : QString();
+
+    const QString timestamp = scan_tracking::common::buildCaptureTimestamp();
+
+    const QString plyPath = scan_tracking::mech_eye::buildSegmentPlyPath(
+        configuredRoot,
+        segmentIndex,
+        m_activeTask.taskId,
+        timestamp);
+    if (plyPath.isEmpty()) {
+        qWarning(LOG_FLOW).noquote() << "persistSegmentCaptureToDisk: failed to build ply path";
+        return false;
+    }
+
+    if (!scan_tracking::mech_eye::savePointCloudFrameToPly(result.pointCloud, plyPath)) {
+        qWarning(LOG_FLOW).noquote()
+            << "persistSegmentCaptureToDisk: save failed segmentIndex=" << segmentIndex;
+        return false;
+    }
+
+    SegmentDiskPaths diskPaths;
+    diskPaths.pointCloudPly = plyPath;
+
+    if (bundle != nullptr) {
+        if (bundle->hikCameraAResult.success() && bundle->hikCameraAResult.frame.isValid()) {
+            const QString hikAPath = scan_tracking::vision::buildSegmentHikMonoPath(
+                configuredRoot,
+                segmentIndex,
+                m_activeTask.taskId,
+                QStringLiteral("hikA"),
+                timestamp);
+            if (!hikAPath.isEmpty() &&
+                scan_tracking::vision::saveHikMonoFrameToPgm(
+                    bundle->hikCameraAResult.frame, hikAPath)) {
+                diskPaths.hikMonoA = hikAPath;
+            } else {
+                qWarning(LOG_FLOW).noquote()
+                    << "persistSegmentCaptureToDisk: hikA PGM save failed segmentIndex="
+                    << segmentIndex;
+            }
+        }
+
+        if (bundle->hikCameraBResult.success() && bundle->hikCameraBResult.frame.isValid()) {
+            const QString hikBPath = scan_tracking::vision::buildSegmentHikMonoPath(
+                configuredRoot,
+                segmentIndex,
+                m_activeTask.taskId,
+                QStringLiteral("hikB"),
+                timestamp);
+            if (!hikBPath.isEmpty() &&
+                scan_tracking::vision::saveHikMonoFrameToPgm(
+                    bundle->hikCameraBResult.frame, hikBPath)) {
+                diskPaths.hikMonoB = hikBPath;
+            } else {
+                qWarning(LOG_FLOW).noquote()
+                    << "persistSegmentCaptureToDisk: hikB PGM save failed segmentIndex="
+                    << segmentIndex;
+            }
+        }
+    }
+
+    m_segmentDiskPaths.insert(segmentIndex, diskPaths);
+
+    scan_tracking::mech_eye::CaptureResult slimResult = result;
+    scan_tracking::mech_eye::releasePointCloudFrameBuffers(&slimResult.pointCloud);
+    m_segmentCaptureResults.insert(segmentIndex, slimResult);
+
+    if (bundle != nullptr) {
+        scan_tracking::vision::MultiCameraCaptureBundle slimBundle = *bundle;
+        scan_tracking::mech_eye::releasePointCloudFrameBuffers(&slimBundle.mechEyeResult.pointCloud);
+        scan_tracking::vision::releaseHikMonoFrameBuffers(&slimBundle.hikCameraAResult.frame);
+        scan_tracking::vision::releaseHikMonoFrameBuffers(&slimBundle.hikCameraBResult.frame);
+        m_segmentCaptureBundles.insert(segmentIndex, slimBundle);
+    }
+
+    qInfo(LOG_FLOW).noquote()
+        << "Segment capture persisted to disk"
+        << "segmentIndex=" << segmentIndex
+        << "cacheRoot=" << scan_tracking::common::resolveCaptureCacheRoot(configuredRoot)
+        << "plyPath=" << diskPaths.pointCloudPly
+        << "hikA=" << diskPaths.hikMonoA
+        << "hikB=" << diskPaths.hikMonoB
+        << "pointCount=" << slimResult.pointCloud.pointCount
+        << "cacheEntries=" << m_segmentDiskPaths.size();
+
+    return true;
+}
+
+QMap<int, scan_tracking::mech_eye::CaptureResult> StateMachine::loadSegmentCaptureResultsForInspection(
+    QString* errorMessage) const
+{
+    QMap<int, scan_tracking::mech_eye::CaptureResult> loaded = m_segmentCaptureResults;
+
+    const auto* configManager = scan_tracking::common::ConfigManager::instance();
+    if (configManager == nullptr) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("综合检测失败：ConfigManager 不可用。");
+        }
+        return {};
+    }
+
+    const auto& tracking = configManager->trackingConfig();
+    const QVector<int> requiredSegments = {
+        tracking.firstStationOuterSegmentIndex,
+        tracking.firstStationInnerSegmentIndex,
+        tracking.firstStationHoleSegmentIndex,
+    };
+
+    for (int segmentIndex : requiredSegments) {
+        const QString plyPath = m_segmentDiskPaths.value(segmentIndex).pointCloudPly;
+        if (plyPath.isEmpty()) {
+            if (errorMessage != nullptr) {
+                QStringList cachedKeys;
+                for (auto it = m_segmentDiskPaths.cbegin();
+                     it != m_segmentDiskPaths.cend();
+                     ++it) {
+                    cachedKeys << QString::number(it.key());
+                }
+                *errorMessage = QStringLiteral(
+                    "第一工位检测缺少必需分段 %1，配置段位 %2，已落盘段位 [%3]")
+                                      .arg(segmentIndex)
+                                      .arg(selectedSegmentTextForInspection(tracking))
+                                      .arg(cachedKeys.join(QLatin1Char(',')));
+            }
+            return {};
+        }
+
+        if (const auto metaIt = m_segmentCaptureResults.constFind(segmentIndex);
+            metaIt != m_segmentCaptureResults.cend()) {
+            loaded[segmentIndex] = metaIt.value();
+        }
+
+        scan_tracking::mech_eye::CaptureResult& entry = loaded[segmentIndex];
+        if (!entry.pointCloud.isValid()) {
+            if (!scan_tracking::mech_eye::loadPointCloudFrameFromPly(plyPath, &entry.pointCloud)) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = QStringLiteral(
+                        "从磁盘加载点云失败: segment=%1 path=%2")
+                                          .arg(segmentIndex)
+                                          .arg(plyPath);
+                }
+                return {};
+            }
+        }
+    }
+
+    return loaded;
 }
 
 tracking::InspectionResult StateMachine::runDebugInspectionOnCachedSegments() const
@@ -1144,15 +1333,23 @@ tracking::InspectionResult StateMachine::runDebugInspectionOnCachedSegments() co
         return failure;
     }
 
-    if (m_segmentCaptureResults.isEmpty()) {
+    if (m_segmentDiskPaths.isEmpty()) {
         failure.ngReasonWord0 = (1u << 4);
         failure.message = QStringLiteral("调试综合检测失败：点云缓存为空，请先完成扫描分段采集。");
         return failure;
     }
 
-    // TODO(multipath): 真实业务有多条路径、每路径多个点位；当前仍把整表缓存交给 inspectSegments，
-    // 蓝友侧仅按 config.ini [Tracking] 三个段位索引取外/内/孔点云，未做多路径融合。
-    return m_tracking->inspectSegments(m_segmentCaptureResults, false);
+    QString loadError;
+    const auto segmentsForInspection = loadSegmentCaptureResultsForInspection(&loadError);
+    if (segmentsForInspection.isEmpty()) {
+        failure.ngReasonWord0 = (1u << 4);
+        failure.message = loadError.isEmpty()
+            ? QStringLiteral("调试综合检测失败：无法加载必需分段点云。")
+            : loadError;
+        return failure;
+    }
+
+    return m_tracking->inspectSegments(segmentsForInspection, false);
 }
 
 void StateMachine::executeInspectionTask()
@@ -1178,9 +1375,27 @@ void StateMachine::executeInspectionTask()
         return;
     }
 
-    // Step 3 正式通过 tracking 模块消费前序缓存的分段点云，避免综合检测继续依赖本地 mock。
+    QString loadError;
+    const auto segmentsForInspection = loadSegmentCaptureResultsForInspection(&loadError);
+    if (segmentsForInspection.isEmpty()) {
+        qWarning(LOG_FLOW).noquote() << "Inspection point cloud load failed:" << loadError;
+        writeInspectionResult({2, 1u << 4, 0, 0});
+        if (m_inspectionResultPublisher) {
+            tracking::InspectionResult failure;
+            failure.resultCode = 2;
+            failure.ngReasonWord0 = (1u << 4);
+            failure.message = loadError.isEmpty()
+                ? QStringLiteral("综合检测失败：无法加载必需分段点云。")
+                : loadError;
+            m_inspectionResultPublisher(failure);
+        }
+        completeActiveTask(7, protocol::AckState::Failed, false);
+        resetScanSegmentCache();
+        return;
+    }
+
     const tracking::InspectionResult trackingResult =
-        m_tracking->inspectSegments(m_segmentCaptureResults);
+        m_tracking->inspectSegments(segmentsForInspection);
 
     // 将跟踪服务的检测结果转换为内部摘要结构
     InspectionSummary summary;
@@ -1438,23 +1653,30 @@ void StateMachine::onCaptureFinished(mech_eye::CaptureResult result)
         return;
     }
 
-    // CaptureResult 内部点云使用 shared_ptr 承载大数组，QMap 只保存结果对象和共享指针，
-    // 不会在主线程里深拷贝整块点云数据。
-    // 将成功的采集结果按段索引存入缓存，供后续综合检测使用
-    m_segmentCaptureResults.insert(m_activeTask.scanSegmentIndex, result);
-    m_progress = 100;  // 更新进度为 100%
-    // 向 PLC 写入扫描分段结果：段索引、图像数=1、点云帧数=1
+    if (!persistSegmentCaptureToDisk(m_activeTask.scanSegmentIndex, result, nullptr)) {
+        finishScanSegmentFailure(
+            7,
+            3,
+            722,
+            QStringLiteral("分段点云保存到磁盘失败"),
+            QStringLiteral("分段点云保存到磁盘失败"));
+        return;
+    }
+
+    m_progress = 100;
     writeScanSegmentResult(m_activeTask.scanSegmentIndex, 1, 1);
-    // 完成任务，标记为成功且数据有效
     completeActiveTask(1, protocol::AckState::Completed, true);
 
     qInfo(LOG_FLOW).noquote()
         << "Trig_ScanSegment capture saved"
         << "segmentIndex=" << m_activeTask.scanSegmentIndex
-        << "cacheSize=" << m_segmentCaptureResults.size()   // 当前缓存中的分段数量
-        << "pointCount=" << result.pointCloud.pointCount     // 本次采集的点数
-        << "normalCount=" << result.pointCloud.normalCount()  // 本次采集法向量数量
-        << "elapsedMs=" << result.elapsedMs;                 // 采集耗时（毫秒）
+        << "cacheSize=" << m_segmentDiskPaths.size()
+        << "plyPath=" << m_segmentDiskPaths.value(m_activeTask.scanSegmentIndex).pointCloudPly
+        << "hikA=" << m_segmentDiskPaths.value(m_activeTask.scanSegmentIndex).hikMonoA
+        << "hikB=" << m_segmentDiskPaths.value(m_activeTask.scanSegmentIndex).hikMonoB
+        << "pointCount=" << result.pointCloud.pointCount
+        << "normalCount=" << result.pointCloud.normalCount()
+        << "elapsedMs=" << result.elapsedMs;
 }
 
 /**
@@ -1913,22 +2135,34 @@ void StateMachine::writeInspectionResult(const InspectionSummary& summary)
  */
 void StateMachine::resetPointCloudCache()
 {
-    const int cacheSize = m_segmentCaptureResults.size();
-    // 遍历所有缓存的点云，主动释放 shared_ptr 引用以确保内存及时回收
+    const int cacheSize = m_segmentDiskPaths.size();
     for (auto it = m_segmentCaptureResults.begin(); it != m_segmentCaptureResults.end(); ++it) {
-        // 主动释放 shared_ptr 引用，确保 ResultReset 或检测完成后不继续持有大点云内存。
-        it->pointCloud.pointsXYZ.reset();
-        it->pointCloud.normalsXYZ.reset();
+        scan_tracking::mech_eye::releasePointCloudFrameBuffers(&it->pointCloud);
     }
-    m_segmentCaptureResults.clear();  // 清空 QMap
+    m_segmentCaptureResults.clear();
+    m_segmentDiskPaths.clear();
 
     if (cacheSize > 0) {
-        qInfo(LOG_FLOW).noquote() << "Cleared scan segment point cloud cache, count=" << cacheSize;
+        const auto* configManager = scan_tracking::common::ConfigManager::instance();
+        const bool retainOnDisk =
+            configManager == nullptr || configManager->flowControlConfig().retainSegmentPly;
+        const QString configuredRoot =
+            configManager != nullptr ? configManager->flowControlConfig().scanCacheDirectory : QString();
+        qInfo(LOG_FLOW).noquote()
+            << "Cleared in-memory scan segment cache, diskEntries=" << cacheSize
+            << "retainSegmentPly=" << retainOnDisk
+            << "captureCacheRoot="
+            << scan_tracking::common::resolveCaptureCacheRoot(configuredRoot);
     }
 }
 
 void StateMachine::resetScanSegmentCache()
 {
+    for (auto it = m_segmentCaptureBundles.begin(); it != m_segmentCaptureBundles.end(); ++it) {
+        scan_tracking::vision::releaseHikMonoFrameBuffers(&it->hikCameraAResult.frame);
+        scan_tracking::vision::releaseHikMonoFrameBuffers(&it->hikCameraBResult.frame);
+        scan_tracking::mech_eye::releasePointCloudFrameBuffers(&it->mechEyeResult.pointCloud);
+    }
     resetPointCloudCache();
     m_segmentCaptureBundles.clear();
     m_segmentCalibrationMatrices.clear();
@@ -2237,25 +2471,26 @@ bool StateMachine::validateScanSegmentRequest(const QVector<quint16>& commandBlo
     }
 
     // 检查是否已经采集过该分段（防止重复触发污染缓存）
-    if (m_segmentCaptureResults.contains(segmentIndex)) {
+    if (m_segmentDiskPaths.contains(segmentIndex) ||
+        m_segmentCaptureResults.contains(segmentIndex)) {
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("Duplicate scan segment index: %1").arg(segmentIndex);
         }
         qWarning(LOG_FLOW).noquote() << "Rejecting Trig_ScanSegment due to duplicate cache entry"
                                      << "segmentIndex=" << segmentIndex
-                                     << "cacheSize=" << m_segmentCaptureResults.size();
+                                     << "cacheSize=" << m_segmentDiskPaths.size();
         return false;
     }
 
     // P2改进：检查缓存大小是否达到上限，防止内存无限增长
-    if (m_segmentCaptureResults.size() >= kMaxPointCloudCacheSize) {
+    if (m_segmentDiskPaths.size() >= kMaxPointCloudCacheSize) {
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("Point cloud cache is full: current size=%1, max allowed=%2")
-                .arg(m_segmentCaptureResults.size())
+                .arg(m_segmentDiskPaths.size())
                 .arg(kMaxPointCloudCacheSize);
         }
         qWarning(LOG_FLOW).noquote() << "Rejecting Trig_ScanSegment due to cache size limit exceeded"
-                                     << "currentSize=" << m_segmentCaptureResults.size()
+                                     << "currentSize=" << m_segmentDiskPaths.size()
                                      << "maxAllowed=" << kMaxPointCloudCacheSize;
         return false;
     }

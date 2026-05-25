@@ -1,7 +1,7 @@
 # LBN 离线调通 — AI Agent 交接说明
 
 > **文档目的**：供后续 AI Agent / 开发者快速理解当前进度、已改代码、如何复现 `success=1`，以及下一步工作边界。  
-> **最后更新**：2026-05-22  
+> **最后更新**：2026-05-25  
 > **仓库路径**：`D:\work\LY\IPC-192.168.110.173_track-main`
 
 ---
@@ -22,6 +22,8 @@
 | group1 / group2 | `testdata/group1`、`testdata/group2` | **否** | 仅有缩略 jpg + PLY，无 `texture_aligned.bmp` |
 
 **结论**：后续默认用 **`150200`** 做 LBN 回归；`145026` 需重新采集或换视角，不是参数能单独修好的问题。
+
+**与现场 IPC 的关系（2026-05-25）**：在线 `Trig_ScanSegment` 转动段会走 LBN 并更新 `T0'`；Mech-Eye 点云与海康图会写入 `ScanTracking_CaptureCache`（见 [`算法使用API.md`](./算法使用API.md) §10.1）。LBN 离线 runner 与分段落盘**独立**，落盘不改变 LBN 算法输入时序。
 
 ---
 

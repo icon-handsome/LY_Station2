@@ -1,10 +1,12 @@
 set(SCAN_TRACKING_VISION_SOURCES
+    src/hik_mono_io.cpp
     src/hik_camera_service.cpp
     src/hik_camera_c_controller.cpp
     src/hik_smart_camera_tcp_server.cpp
     src/hik_smart_camera_ftp_monitor.cpp
     src/vision_pipeline_service.cpp
     include/scan_tracking/vision/vision_types.h
+    include/scan_tracking/vision/hik_mono_io.h
     include/scan_tracking/vision/hik_camera_service.h
     include/scan_tracking/vision/hik_camera_c_controller.h
     include/scan_tracking/vision/hik_smart_camera_tcp_server.h
@@ -73,6 +75,30 @@ target_link_libraries(scan_tracking_vision
 )
 
 target_compile_features(scan_tracking_vision PUBLIC cxx_std_17)
+
+if(BUILD_TESTING)
+    find_package(Qt5 REQUIRED COMPONENTS Test)
+
+    add_executable(scan_tracking_hik_mono_io_test
+        tests/hik_mono_io_test.cpp
+    )
+
+    target_link_libraries(scan_tracking_hik_mono_io_test
+        PRIVATE
+            Qt5::Core
+            Qt5::Test
+            scan_tracking_vision
+            scan_tracking_common
+    )
+
+    add_test(NAME scan_tracking_hik_mono_io_test
+        COMMAND scan_tracking_hik_mono_io_test
+    )
+
+    set_target_properties(scan_tracking_hik_mono_io_test PROPERTIES
+        FOLDER "tests"
+    )
+endif()
 
 if(SCAN_TRACKING_ENABLE_LANYOU_DETECTION)
     add_library(scan_tracking_lanyou_test_adapter STATIC

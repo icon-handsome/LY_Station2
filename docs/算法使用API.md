@@ -15,8 +15,8 @@
 当前构建方式说明：
 - 蓝优算法以源码方式参与编译。
 - 默认编译为单一静态库 `lanyou_first_detection`。
-- 目前只接入了测试专用适配层，尚未直接挂入正式业务状态机。
-- 因此现阶段的目标是“先打通点云输入与算法调用链”，不是直接产出正式业务结果。
+- **正式主流程已接入**：`Trig_Inspection` → `lanyou_first_station_adapter::runFirstStationDetection`（外/内/孔三段点云）；分段 PLY 由 `StateMachine` 落盘后按需加载（§10.1、§11）。
+- **仍保留**测试适配层 `lanyou_detection_adapter` 与 smoke test，用于无硬件/极小点云联调。
 
 ## 2. 依赖与编译要求
 
@@ -410,6 +410,22 @@ Lanyou adapter smoke tests passed
 
 ## 10. 配置文件说明
 
+### 10.1 分段采集缓存（`config.ini [FlowControl]`）
+
+默认根目录：`<程序目录>/ScanTracking_CaptureCache`（与 `scan-tracking.exe` 同级）
+
+| 子目录 | 内容 | 命名示例 |
+|--------|------|----------|
+| `pointcloud/` | Mech-Eye PLY | `segment_{N}_task{T}_{ts}.ply` |
+| `hik_mono/` | 海康 A/B Mono8 PGM | `segment_{N}_task{T}_{ts}_hikA.pgm`、`_hikB.pgm` |
+
+| 键 | 说明 |
+|----|------|
+| `scanCacheDirectory` | 缓存**根目录**；空则用 `ScanTracking_CaptureCache` |
+| `retainSegmentPly` | `true`（默认）：检测/复位后**不删**磁盘文件，仅清内存索引 |
+
+实现：`capture_cache_paths` + `point_cloud_io` + `hik_mono_io`，由 `StateMachine::persistSegmentCaptureToDisk` 统一落盘。
+
 当前算法目录下有配置文件：
 - `third_party/lanyou_first_detection/config/first_config.cfg`
 - `third_party/lanyou_first_detection/config/second_config.cfg`
@@ -437,9 +453,14 @@ cannot open config/first_config.cfg
 - PCL 依赖接通。
 - 项目内点云结构到 PCL 的转换适配。
 - 第一工位外/内表面 + 内孔检测适配（`lanyou_first_station_adapter`）。
-- **正式主流程**：`StateMachine` 点云缓存 → `TrackingService::inspectSegments` → 蓝友 `runFirstStationDetection`。
+- **分段采集磁盘缓存**：`Trig_ScanSegment` 成功后写入 `ScanTracking_CaptureCache/pointcloud/*.ply` 与 `hik_mono/*_hikA/B.pgm`；内存仅保留元数据与路径；`Trig_Inspection` 前按 `[Tracking]` 三个段位从磁盘加载 PLY。
+- **正式主流程**：`StateMachine` 点云路径缓存 → `loadSegmentCaptureResultsForInspection` → `TrackingService::inspectSegments` → 蓝友 `runFirstStationDetection`。
 - **HMI 推送**：检测完成（含 NG）经 `publishInspectionResult` 发送 `event.inspection.finished`。
 - 调试命令 `cmd.debug_trigger_inspection`（`allowDebugTriggerInspection` 配置门控）。
+
+**数据流补充**：
+- **分段 LB**：在 `VisionPipeline` 完成 bundle 时使用**内存**海康图；PGM 落盘不参与 LB 重算。
+- **分段落盘**：不影响 LBN/LB 时序；仅降低内存并在 `Trig_Inspection` 前加载 3 段 PLY。
 
 当前尚未完成：
 - 多路径点云融合与 `detectMultiPath()`（见未完成清单 §2.3.2）。
