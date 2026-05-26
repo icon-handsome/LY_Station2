@@ -99,10 +99,14 @@ HikCameraService::~HikCameraService()
 
 void HikCameraService::start(
     const scan_tracking::common::VisionCameraEndpointConfig& endpointConfig,
-    int defaultCaptureTimeoutMs)
+    int defaultCaptureTimeoutMs,
+    float exposureTimeUs,
+    float gain)
 {
     m_endpointConfig = endpointConfig;
     m_defaultCaptureTimeoutMs = defaultCaptureTimeoutMs > 0 ? defaultCaptureTimeoutMs : 1000;
+    m_exposureTimeUs = exposureTimeUs > 0.0f ? exposureTimeUs : 50000.0f;
+    m_gain = gain;
 
     {
         QMutexLocker locker(&g_sdkMutex);
@@ -651,19 +655,19 @@ bool HikCameraService::openMatchedDevice(const QString& preferredCameraKey, QStr
         }
 
         // 3. 设置曝光时间（微秒）
-        ret = MV_CC_SetFloatValue(handle, "ExposureTime", 1307379.0f);
+        ret = MV_CC_SetFloatValue(handle, "ExposureTime", m_exposureTimeUs);
         if (ret != MV_OK) {
             qWarning() << "设置 ExposureTime 失败，错误码=0x" << QString::number(ret, 16);
         } else {
-            qInfo() << "设置 ExposureTime=1307379us 成功";
+            qInfo() << "设置 ExposureTime=" << m_exposureTimeUs << "us 成功";
         }
 
         // 4. 设置增益
-        ret = MV_CC_SetFloatValue(handle, "Gain", 0.0f);
+        ret = MV_CC_SetFloatValue(handle, "Gain", m_gain);
         if (ret != MV_OK) {
             qWarning() << "设置 Gain 失败，错误码=0x" << QString::number(ret, 16);
         } else {
-            qInfo() << "设置 Gain=0dB 成功";
+            qInfo() << "设置 Gain=" << m_gain << "dB 成功";
         }
 
         // 5. 读取并验证当前参数

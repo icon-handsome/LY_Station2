@@ -161,8 +161,16 @@ void ConsoleRuntime::initModules()
             qInfo(appLog) << "[HikCamera]" << roleName << stateText << description;
         });
 
-    hikCameraAService_->start(visionConfig.hikCameraA, visionConfig.hikCaptureTimeoutMs);
-    hikCameraBService_->start(visionConfig.hikCameraB, visionConfig.hikCaptureTimeoutMs);
+    hikCameraAService_->start(
+        visionConfig.hikCameraA,
+        visionConfig.hikCaptureTimeoutMs,
+        visionConfig.hikExposureTimeUs,
+        visionConfig.hikGain);
+    hikCameraBService_->start(
+        visionConfig.hikCameraB,
+        visionConfig.hikCaptureTimeoutMs,
+        visionConfig.hikExposureTimeUs,
+        visionConfig.hikGain);
 
     // 第三台海康相机（独立用途，不同型号 - 读码相机）
     hikCameraCService_ = std::make_unique<scan_tracking::vision::HikCameraService>(
@@ -524,14 +532,14 @@ void ConsoleRuntime::onAutoLatencyBundleFinished(
     if (bundle.hikCameraAResult.success() && bundle.hikCameraAResult.frame.isValid()) {
         hikAPath = scan_tracking::vision::buildSegmentHikMonoPath(
             configuredRoot, kTestSegmentIndex, taskId, QStringLiteral("hikA"), timestamp);
-        scan_tracking::vision::saveHikMonoFrameToPgm(
+        scan_tracking::vision::saveHikMonoFrameToBmp(
             bundle.hikCameraAResult.frame, hikAPath);
     }
 
     if (bundle.hikCameraBResult.success() && bundle.hikCameraBResult.frame.isValid()) {
         hikBPath = scan_tracking::vision::buildSegmentHikMonoPath(
             configuredRoot, kTestSegmentIndex, taskId, QStringLiteral("hikB"), timestamp);
-        scan_tracking::vision::saveHikMonoFrameToPgm(
+        scan_tracking::vision::saveHikMonoFrameToBmp(
             bundle.hikCameraBResult.frame, hikBPath);
     }
 

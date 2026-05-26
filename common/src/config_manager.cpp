@@ -132,6 +132,8 @@ void ConfigManager::writeDefaults(QSettings& settings)
     settings.setValue("mechCaptureTimeoutMs", 5000);
     settings.setValue("hikConnectTimeoutMs", 3000);
     settings.setValue("hikCaptureTimeoutMs", 1000);
+    settings.setValue("hikExposureTimeUs", 50000);
+    settings.setValue("hikGain", 0.0);
     settings.setValue("hikSdkRoot", "D:/work/scan-tracking/third_party/hik_mvs");
     settings.setValue("hikCameraAName", "hik_camera_a");
     settings.setValue("hikCameraAKey", "192.168.10.12");
@@ -241,6 +243,9 @@ void ConfigManager::load(const QString& filePath)
     m_visionConfig.mechDepthRangeMax = settings.value("mechDepthRangeMax", 2000).toInt();
     m_visionConfig.hikConnectTimeoutMs = settings.value("hikConnectTimeoutMs", 3000).toInt();
     m_visionConfig.hikCaptureTimeoutMs = settings.value("hikCaptureTimeoutMs", 1000).toInt();
+    m_visionConfig.hikExposureTimeUs =
+        static_cast<float>(settings.value("hikExposureTimeUs", 50000).toDouble());
+    m_visionConfig.hikGain = static_cast<float>(settings.value("hikGain", 0.0).toDouble());
     m_visionConfig.hikSdkRoot = settings.value("hikSdkRoot", "D:/work/scan-tracking/third_party/hik_mvs").toString();
     m_visionConfig.hikCameraA.logicalName = settings.value("hikCameraAName", "hik_camera_a").toString();
     m_visionConfig.hikCameraA.cameraKey = settings.value("hikCameraAKey", "192.168.10.12").toString();

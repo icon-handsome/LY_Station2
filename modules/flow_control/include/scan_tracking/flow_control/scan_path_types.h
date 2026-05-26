@@ -24,7 +24,7 @@ struct ScanPointResult {
     // 点云数据（流式处理：只存文件路径，不缓存点云数据）
     QString pointCloudPath;      // PLY 文件路径
     
-    // 海康图像路径（落盘至 hik_mono/camera_a|camera_b/*.pgm 后仅存路径，像素在 bundle 内已释放）
+    // 海康图像路径（落盘至 hik_mono/camera_a|camera_b/*.bmp 后仅存路径，像素在 bundle 内已释放）
     QString hikMonoPathA;
     QString hikMonoPathB;
     

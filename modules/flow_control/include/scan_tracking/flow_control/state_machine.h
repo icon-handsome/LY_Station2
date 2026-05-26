@@ -27,7 +27,7 @@ struct PoseCheckResult;
 }
 namespace flow_control {
 
-/// 单段扫描落盘路径（点云 PLY + 海康 A/B PGM）
+/// 单段扫描落盘路径（点云 PLY + 海康 A/B BMP）
 struct SegmentDiskPaths {
     QString pointCloudPly;
     QString hikMonoA;

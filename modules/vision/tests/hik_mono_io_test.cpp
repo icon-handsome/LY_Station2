@@ -11,10 +11,10 @@ class HikMonoIoTest : public QObject {
     Q_OBJECT
 
 private slots:
-    void roundTripSavePgm();
+    void roundTripSaveBmp();
 };
 
-void HikMonoIoTest::roundTripSavePgm()
+void HikMonoIoTest::roundTripSaveBmp()
 {
     HikMonoFrame frame;
     frame.width = 2;
@@ -32,14 +32,16 @@ void HikMonoIoTest::roundTripSavePgm()
     const QString path = buildSegmentHikMonoPath(tempDir.path(), 2, 99u, QStringLiteral("hikA"), ts);
     QVERIFY(path.contains(QStringLiteral("hik_mono")));
     QVERIFY(path.contains(QStringLiteral("camera_a")));
-    QVERIFY(saveHikMonoFrameToPgm(frame, path));
+    QVERIFY(path.endsWith(QStringLiteral(".bmp")));
+    QVERIFY(saveHikMonoFrameToBmp(frame, path));
     QVERIFY(QFile::exists(path));
 
     QFile file(path);
     QVERIFY(file.open(QIODevice::ReadOnly));
     const QByteArray content = file.readAll();
-    QVERIFY(content.contains("P5"));
-    QVERIFY(content.contains("2 2"));
+    QVERIFY(content.size() >= 2);
+    QCOMPARE(content.at(0), char('B'));
+    QCOMPARE(content.at(1), char('M'));
 }
 
 QTEST_MAIN(HikMonoIoTest)

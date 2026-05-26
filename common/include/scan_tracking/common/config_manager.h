@@ -49,6 +49,8 @@ struct VisionConfig {
     int mechDepthRangeMax;
     int hikConnectTimeoutMs;
     int hikCaptureTimeoutMs;
+    float hikExposureTimeUs = 50000.0f;  ///< 海康 A/B 双目曝光（微秒），连接时写入相机
+    float hikGain = 0.0f;              ///< 海康 A/B 增益（dB）
     QString hikSdkRoot;
     VisionCameraEndpointConfig hikCameraA;
     VisionCameraEndpointConfig hikCameraB;

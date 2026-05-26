@@ -6,7 +6,7 @@
 
 namespace scan_tracking::vision {
 
-/// 生成分段海康 Mono PGM 路径（hik_mono/camera_a 或 hik_mono/camera_b）
+/// 生成分段海康 Mono BMP 路径（hik_mono/camera_a 或 hik_mono/camera_b）
 QString buildSegmentHikMonoPath(
     const QString& configuredRoot,
     int segmentIndex,
@@ -14,8 +14,8 @@ QString buildSegmentHikMonoPath(
     const QString& cameraTag,
     const QString& timestamp);
 
-/// 将 Mono8 帧保存为 P5 PGM
-bool saveHikMonoFrameToPgm(const HikMonoFrame& frame, const QString& absolutePath);
+/// 将 Mono8 帧保存为 8 位灰度 BMP
+bool saveHikMonoFrameToBmp(const HikMonoFrame& frame, const QString& absolutePath);
 
 /// 释放像素缓冲，保留 width/height 等元数据
 void releaseHikMonoFrameBuffers(HikMonoFrame* frame);

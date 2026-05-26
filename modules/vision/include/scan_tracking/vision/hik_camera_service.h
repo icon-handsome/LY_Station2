@@ -23,7 +23,9 @@ public:
 
     void start(
         const scan_tracking::common::VisionCameraEndpointConfig& endpointConfig,
-        int defaultCaptureTimeoutMs);
+        int defaultCaptureTimeoutMs,
+        float exposureTimeUs = 50000.0f,
+        float gain = 0.0f);
     void stop();
 
     bool isStarted() const;
@@ -59,6 +61,8 @@ private:
     QString m_roleName;
     scan_tracking::common::VisionCameraEndpointConfig m_endpointConfig;
     int m_defaultCaptureTimeoutMs = 1000;
+    float m_exposureTimeUs = 50000.0f;
+    float m_gain = 0.0f;
     quint64 m_nextRequestId = 1;
     bool m_started = false;
     std::atomic_bool m_connectInFlight = false;

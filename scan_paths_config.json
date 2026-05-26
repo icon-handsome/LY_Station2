@@ -2,9 +2,10 @@
   "version": "1.0",
   "description": "封头检测多路径扫描配置文件",
   "lastModified": "2026-05-25",
+  "_fieldTestNote": "实测：仅路径1，6点，全无转动(仅3D)；PLC ScanSegmentIndex=1..6，与 config.ini scanSegmentTotal=6 对齐",
 
   "calibrationMatrix": {
-    "_todo": "TODO(calibration): 当前 T0 为临时联调用单位矩阵；正式投产前须替换为现场标定的 Mech-Eye → 机械臂/世界 4×4。转动段仍由 LBN 输出 Rt，状态机执行 T0' = Rt × T0'。",
+    "_todo": "TODO(calibration): 当前 T0 为临时联调用单位矩阵；正式投产前须替换为现场标定的 Mech-Eye → 机械臂/世界 4×4。",
     "calibrationStatus": "PLACEHOLDER_IDENTITY_FOR_TEMP_TEST",
     "T0": [
       [1.0, 0.0, 0.0, 0.0],
@@ -12,84 +13,60 @@
       [0.0, 0.0, 1.0, 0.0],
       [0.0, 0.0, 0.0, 1.0]
     ],
-    "description": "Mech-Eye 相机到机械臂基座的标定变换矩阵 (4x4)，行主序；临时测试见 calibrationStatus",
-    "unit": "mm for translation, no unit for rotation",
-    "templateFileNote": "LBN 3D 模板点（非矩阵）已入库：third_party/LBN/data/template-3D-ALL-Shift-Cut-Cut.txt，路径见 config.ini [LbnPose] templateFile"
+    "description": "Mech-Eye 相机到机械臂基座的标定变换矩阵 (4x4)，行主序",
+    "unit": "mm for translation, no unit for rotation"
   },
 
   "scanPaths": [
     {
       "pathId": 1,
+      "pathName": "实测路径1",
+      "description": "现场实测：6点、无转动，仅 Mech 3D + 海康 A/B",
       "enabled": true,
-      "totalPoints": 8,
+      "totalPoints": 6,
       "points": [
-        { "pointIndex": 1, "needRotation": true },
-        { "pointIndex": 2, "needRotation": false },
-        { "pointIndex": 3, "needRotation": false },
-        { "pointIndex": 4, "needRotation": false },
-        { "pointIndex": 5, "needRotation": true },
-        { "pointIndex": 6, "needRotation": false },
-        { "pointIndex": 7, "needRotation": false },
-        { "pointIndex": 8, "needRotation": true }
+        { "pointIndex": 1, "pointName": "点1", "needRotation": false, "rotationAngle": 0, "description": "仅3D" },
+        { "pointIndex": 2, "pointName": "点2", "needRotation": false, "rotationAngle": 0, "description": "仅3D" },
+        { "pointIndex": 3, "pointName": "点3", "needRotation": false, "rotationAngle": 0, "description": "仅3D" },
+        { "pointIndex": 4, "pointName": "点4", "needRotation": false, "rotationAngle": 0, "description": "仅3D" },
+        { "pointIndex": 5, "pointName": "点5", "needRotation": false, "rotationAngle": 0, "description": "仅3D" },
+        { "pointIndex": 6, "pointName": "点6", "needRotation": false, "rotationAngle": 0, "description": "仅3D" }
       ]
     },
     {
       "pathId": 2,
-      "enabled": true,
+      "pathName": "内圈扫描路径",
+      "enabled": false,
       "totalPoints": 6,
-      "points": [
-        { "pointIndex": 1, "needRotation": true },
-        { "pointIndex": 2, "needRotation": false },
-        { "pointIndex": 3, "needRotation": false },
-        { "pointIndex": 4, "needRotation": true },
-        { "pointIndex": 5, "needRotation": false },
-        { "pointIndex": 6, "needRotation": true }
-      ]
+      "points": []
     },
     {
       "pathId": 3,
-      "enabled": true,
+      "pathName": "焊缝检测路径",
+      "enabled": false,
       "totalPoints": 12,
-      "points": [
-        { "pointIndex": 1, "needRotation": true },
-        { "pointIndex": 2, "needRotation": false },
-        { "pointIndex": 3, "needRotation": false },
-        { "pointIndex": 4, "needRotation": true },
-        { "pointIndex": 5, "needRotation": false },
-        { "pointIndex": 6, "needRotation": false },
-        { "pointIndex": 7, "needRotation": true },
-        { "pointIndex": 8, "needRotation": false },
-        { "pointIndex": 9, "needRotation": false },
-        { "pointIndex": 10, "needRotation": true },
-        { "pointIndex": 11, "needRotation": false },
-        { "pointIndex": 12, "needRotation": false }
-      ]
+      "points": []
     },
     {
       "pathId": 4,
+      "pathName": "快速预检路径",
       "enabled": false,
       "totalPoints": 4,
-      "points": [
-        { "pointIndex": 1, "needRotation": true },
-        { "pointIndex": 2, "needRotation": true },
-        { "pointIndex": 3, "needRotation": true },
-        { "pointIndex": 4, "needRotation": true }
-      ]
+      "points": []
     }
   ],
 
   "executionConfig": {
-    "executeAllPaths": false, 
-    "description": "是否执行所有启用的路径，false 表示仅执行 selectedPathIds 中指定的路径",
-    "selectedPathIds": [1, 2],
+    "executeAllPaths": false,
+    "description": "实测仅路径1；IPC 当前由 PLC 按段触发，本段配置供 HMI/后续多路径调度",
+    "selectedPathIds": [1],
     "pathExecutionOrder": "sequential",
-    "allowPathSkipOnError": false,  
-    "description2": "路径执行顺序：sequential(顺序) 或 parallel(并行，暂不支持)"
+    "allowPathSkipOnError": false
   },
 
   "turntableConfig": {
-    "enabled": true,
-    "description": "转盘是否启用；转动角度由 LBN 运行时解算，点位仅配置 needRotation"
+    "enabled": false,
+    "description": "实测无转动点，转盘标定/LBN 2D 本轮回路不启用"
   },
 
   "captureConfig": {
@@ -97,36 +74,19 @@
       "capture3DTimeoutMs": 5000,
       "capture2DTimeoutMs": 3000,
       "depthRangeMin": 500,
-      "depthRangeMax": 2000,
-      "description": "Mech-Eye 相机采集配置：3D超时、2D超时、深度范围(mm)"
+      "depthRangeMax": 2000
     },
     "hikCamera": {
       "captureTimeoutMs": 1000,
-      "exposureTimeUs": 1307379,
-      "gain": 0.0,
-      "description": "海康相机采集配置：超时(ms)、曝光时间(us)、增益(dB)"
+      "exposureTimeUs": 50000,
+      "gain": 0.0
     }
   },
 
   "algorithmConfig": {
-    "lbn": {
-      "enabled": true,
-      "timeoutMs": 2000,
-      "confidenceThreshold": 0.8,
-      "description": "LBN 算法配置：是否启用、超时、置信度阈值"
-    },
-    "lb": {
-      "enabled": true,
-      "timeoutMs": 1500,
-      "minFeaturePoints": 50,
-      "description": "LB 双目跟踪算法配置：是否启用、超时、最小特征点数"
-    },
-    "lanyou": {
-      "enabled": true,
-      "timeoutMs": 10000,
-      "qualityThreshold": 0.7,
-      "description": "蓝友最终解算算法配置：是否启用、超时、质量阈值"
-    }
+    "lbn": { "enabled": true, "timeoutMs": 2000, "confidenceThreshold": 0.8 },
+    "lb": { "enabled": true, "timeoutMs": 1500, "minFeaturePoints": 50 },
+    "lanyou": { "enabled": true, "timeoutMs": 10000, "qualityThreshold": 0.7 }
   },
 
   "dataManagement": {
@@ -134,7 +94,6 @@
     "saveRawImages": true,
     "saveIntermediateResults": true,
     "outputDirectory": "./scan_results",
-    "maxStorageDays": 30,
-    "description": "数据管理配置：是否保存点云、原始图像、中间结果，输出目录，最大保存天数"
+    "maxStorageDays": 30
   }
 }

@@ -1208,12 +1208,12 @@ bool StateMachine::persistSegmentCaptureToDisk(
                 QStringLiteral("hikA"),
                 timestamp);
             if (!hikAPath.isEmpty() &&
-                scan_tracking::vision::saveHikMonoFrameToPgm(
+                scan_tracking::vision::saveHikMonoFrameToBmp(
                     bundle->hikCameraAResult.frame, hikAPath)) {
                 diskPaths.hikMonoA = hikAPath;
             } else {
                 qWarning(LOG_FLOW).noquote()
-                    << "persistSegmentCaptureToDisk: hikA PGM save failed segmentIndex="
+                    << "persistSegmentCaptureToDisk: hikA BMP save failed segmentIndex="
                     << segmentIndex;
             }
         }
@@ -1226,12 +1226,12 @@ bool StateMachine::persistSegmentCaptureToDisk(
                 QStringLiteral("hikB"),
                 timestamp);
             if (!hikBPath.isEmpty() &&
-                scan_tracking::vision::saveHikMonoFrameToPgm(
+                scan_tracking::vision::saveHikMonoFrameToBmp(
                     bundle->hikCameraBResult.frame, hikBPath)) {
                 diskPaths.hikMonoB = hikBPath;
             } else {
                 qWarning(LOG_FLOW).noquote()
-                    << "persistSegmentCaptureToDisk: hikB PGM save failed segmentIndex="
+                    << "persistSegmentCaptureToDisk: hikB BMP save failed segmentIndex="
                     << segmentIndex;
             }
         }
