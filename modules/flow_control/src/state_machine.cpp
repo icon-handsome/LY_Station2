@@ -10,6 +10,7 @@
 
 #include <QtCore/QStringList>
 #include <QtCore/QLoggingCategory>
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QThread>
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDateTime>
@@ -18,9 +19,13 @@
 #include <QtCore/QFileInfo>
 #include <QtCore/QTextStream>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <algorithm>
+#include <memory>
 #include <thread>
+#include <utility>
+#include <vector>
 #include <qdebug.h>
 namespace scan_tracking::flow_control {
 
@@ -57,6 +62,152 @@ constexpr int kDefaultScanSegmentCaptureTimeoutMs = 30000;
 /// 允许的最大连续 Modbus 通信失败次数，超过此值将进入故障状态
 constexpr int kMaxConsecutiveModbusFailures = 3;
 constexpr int kPollLogEveryN = 20;
+struct SegmentPersistInput {
+    int segmentIndex = 0;
+    quint32 taskId = 0;
+    scan_tracking::mech_eye::CaptureResult captureResult;
+    std::unique_ptr<scan_tracking::vision::MultiCameraCaptureBundle> bundle;
+    QString configuredRoot;
+    QString timestamp;
+};
+
+scan_tracking::mech_eye::PointCloudFrame clonePointCloudFrame(
+    const scan_tracking::mech_eye::PointCloudFrame& src)
+{
+    scan_tracking::mech_eye::PointCloudFrame dst = src;
+    if (src.pointsXYZ) {
+        dst.pointsXYZ = std::make_shared<std::vector<float>>(*src.pointsXYZ);
+    }
+    if (src.normalsXYZ) {
+        dst.normalsXYZ = std::make_shared<std::vector<float>>(*src.normalsXYZ);
+    }
+    return dst;
+}
+
+scan_tracking::mech_eye::CaptureResult cloneCaptureResult(
+    const scan_tracking::mech_eye::CaptureResult& src)
+{
+    scan_tracking::mech_eye::CaptureResult dst = src;
+    dst.pointCloud = clonePointCloudFrame(src.pointCloud);
+    if (src.texture2D.isValid()) {
+        dst.texture2D.pixels =
+            std::make_shared<std::vector<uint8_t>>(*src.texture2D.pixels);
+    }
+    return dst;
+}
+
+scan_tracking::vision::HikMonoFrame cloneHikMonoFrame(
+    const scan_tracking::vision::HikMonoFrame& src)
+{
+    scan_tracking::vision::HikMonoFrame dst = src;
+    if (src.pixels) {
+        dst.pixels = std::make_shared<std::vector<std::uint8_t>>(*src.pixels);
+    }
+    return dst;
+}
+
+scan_tracking::vision::MultiCameraCaptureBundle cloneCaptureBundle(
+    const scan_tracking::vision::MultiCameraCaptureBundle& src)
+{
+    scan_tracking::vision::MultiCameraCaptureBundle dst = src;
+    dst.mechEyeResult = cloneCaptureResult(src.mechEyeResult);
+    dst.hikCameraAResult.frame = cloneHikMonoFrame(src.hikCameraAResult.frame);
+    dst.hikCameraBResult.frame = cloneHikMonoFrame(src.hikCameraBResult.frame);
+    return dst;
+}
+
+bool persistSegmentCaptureToDiskImpl(
+    const SegmentPersistInput& input,
+    SegmentPersistOutcome* outcome)
+{
+    if (outcome == nullptr) {
+        return false;
+    }
+
+    outcome->segmentIndex = input.segmentIndex;
+    outcome->taskId = input.taskId;
+    outcome->success = false;
+
+    const QString plyPath = scan_tracking::mech_eye::buildSegmentPlyPath(
+        input.configuredRoot,
+        input.segmentIndex,
+        input.taskId,
+        input.timestamp);
+    if (plyPath.isEmpty()) {
+        qWarning(LOG_FLOW).noquote()
+            << "persistSegmentCaptureToDiskImpl: failed to build ply path";
+        return false;
+    }
+
+    if (!scan_tracking::mech_eye::savePointCloudFrameToPly(
+            input.captureResult.pointCloud,
+            plyPath)) {
+        qWarning(LOG_FLOW).noquote()
+            << "persistSegmentCaptureToDiskImpl: PLY save failed segmentIndex="
+            << input.segmentIndex;
+        return false;
+    }
+
+    SegmentDiskPaths diskPaths;
+    diskPaths.pointCloudPly = plyPath;
+
+    if (input.bundle != nullptr) {
+        const auto& bundle = *input.bundle;
+        if (bundle.hikCameraAResult.success() && bundle.hikCameraAResult.frame.isValid()) {
+            const QString hikAPath = scan_tracking::vision::buildSegmentHikMonoPath(
+                input.configuredRoot,
+                input.segmentIndex,
+                input.taskId,
+                QStringLiteral("hikA"),
+                input.timestamp);
+            if (!hikAPath.isEmpty() &&
+                scan_tracking::vision::saveHikMonoFrameToBmp(
+                    bundle.hikCameraAResult.frame,
+                    hikAPath)) {
+                diskPaths.hikMonoA = hikAPath;
+            } else {
+                qWarning(LOG_FLOW).noquote()
+                    << "persistSegmentCaptureToDiskImpl: hikA BMP save failed segmentIndex="
+                    << input.segmentIndex;
+            }
+        }
+
+        if (bundle.hikCameraBResult.success() && bundle.hikCameraBResult.frame.isValid()) {
+            const QString hikBPath = scan_tracking::vision::buildSegmentHikMonoPath(
+                input.configuredRoot,
+                input.segmentIndex,
+                input.taskId,
+                QStringLiteral("hikB"),
+                input.timestamp);
+            if (!hikBPath.isEmpty() &&
+                scan_tracking::vision::saveHikMonoFrameToBmp(
+                    bundle.hikCameraBResult.frame,
+                    hikBPath)) {
+                diskPaths.hikMonoB = hikBPath;
+            } else {
+                qWarning(LOG_FLOW).noquote()
+                    << "persistSegmentCaptureToDiskImpl: hikB BMP save failed segmentIndex="
+                    << input.segmentIndex;
+            }
+        }
+    }
+
+    outcome->diskPaths = diskPaths;
+    outcome->slimCaptureResult = input.captureResult;
+    scan_tracking::mech_eye::releasePointCloudFrameBuffers(&outcome->slimCaptureResult.pointCloud);
+
+    if (input.bundle != nullptr) {
+        auto slimBundle = std::make_unique<scan_tracking::vision::MultiCameraCaptureBundle>(*input.bundle);
+        scan_tracking::mech_eye::releasePointCloudFrameBuffers(
+            &slimBundle->mechEyeResult.pointCloud);
+        scan_tracking::vision::releaseHikMonoFrameBuffers(&slimBundle->hikCameraAResult.frame);
+        scan_tracking::vision::releaseHikMonoFrameBuffers(&slimBundle->hikCameraBResult.frame);
+        outcome->slimBundle = std::move(slimBundle);
+    }
+
+    outcome->success = true;
+    return true;
+}
 
 std::array<float, 16> identityMatrix4x4()
 {
@@ -372,6 +523,8 @@ void StateMachine::start()
  */
 void StateMachine::stop()
 {
+    joinPersistThreadIfRunning();
+
     m_pollTimer->stop();         // 停止 PLC 轮询定时器
     m_heartbeatTimer->stop();    // 停止心跳定时器
     m_timeoutTimer->stop();      // 停止超时定时器
@@ -1004,29 +1157,7 @@ void StateMachine::onVisionBundleCaptureFinished(scan_tracking::vision::MultiCam
         return;
     }
 
-    if (!persistSegmentCaptureToDisk(m_activeTask.scanSegmentIndex, result, &bundle)) {
-        finishScanSegmentFailure(
-            7,
-            3,
-            722,
-            QStringLiteral("分段点云保存到磁盘失败"),
-            QStringLiteral("分段点云保存到磁盘失败"));
-        return;
-    }
-
-    writeScanSegmentResult(m_activeTask.scanSegmentIndex, 2, result.pointCloud.pointCount > 0 ? 1 : 0);
-    m_progress = 100;
-    qInfo(LOG_FLOW).noquote()
-        << "Vision bundle capture finished"
-        << "segmentIndex=" << m_activeTask.scanSegmentIndex
-        << "mechPointCount=" << result.pointCloud.pointCount
-        << "plyPath=" << m_segmentDiskPaths.value(m_activeTask.scanSegmentIndex).pointCloudPly
-        << "hikA=" << m_segmentDiskPaths.value(m_activeTask.scanSegmentIndex).hikMonoA
-        << "hikB=" << m_segmentDiskPaths.value(m_activeTask.scanSegmentIndex).hikMonoB
-        << "hikAFrame=" << bundle.hikCameraAResult.frame.width << "x" << bundle.hikCameraAResult.frame.height
-        << "hikBFrame=" << bundle.hikCameraBResult.frame.width << "x" << bundle.hikCameraBResult.frame.height;
-    completeActiveTask(1);
-    emit scanFinished(m_activeTask.scanSegmentIndex, 1, 2, result.pointCloud.pointCount > 0 ? 1 : 0);
+    startSegmentPersistAsync(m_activeTask.scanSegmentIndex, result, &bundle);
 }
 
 /**
@@ -1168,100 +1299,176 @@ QVector<int> StateMachine::cachedScanSegmentIndices() const
     return indices;
 }
 
-bool StateMachine::persistSegmentCaptureToDisk(
+void StateMachine::joinPersistThreadIfRunning()
+{
+    if (m_persistThread.joinable()) {
+        qInfo(LOG_FLOW).noquote() << "Waiting for segment persist worker thread to finish...";
+        m_persistThread.join();
+    }
+    m_segmentPersistInFlight = false;
+}
+
+void StateMachine::startSegmentPersistAsync(
     int segmentIndex,
     const scan_tracking::mech_eye::CaptureResult& result,
     const scan_tracking::vision::MultiCameraCaptureBundle* bundle)
 {
+    joinPersistThreadIfRunning();
+
     const auto* configManager = scan_tracking::common::ConfigManager::instance();
     const QString configuredRoot = configManager != nullptr
         ? configManager->flowControlConfig().scanCacheDirectory
         : QString();
 
-    const QString timestamp = scan_tracking::common::buildCaptureTimestamp();
-
-    const QString plyPath = scan_tracking::mech_eye::buildSegmentPlyPath(
-        configuredRoot,
-        segmentIndex,
-        m_activeTask.taskId,
-        timestamp);
-    if (plyPath.isEmpty()) {
-        qWarning(LOG_FLOW).noquote() << "persistSegmentCaptureToDisk: failed to build ply path";
-        return false;
-    }
-
-    if (!scan_tracking::mech_eye::savePointCloudFrameToPly(result.pointCloud, plyPath)) {
-        qWarning(LOG_FLOW).noquote()
-            << "persistSegmentCaptureToDisk: save failed segmentIndex=" << segmentIndex;
-        return false;
-    }
-
-    SegmentDiskPaths diskPaths;
-    diskPaths.pointCloudPly = plyPath;
-
+    SegmentPersistInput input;
+    input.segmentIndex = segmentIndex;
+    input.taskId = m_activeTask.taskId;
+    input.configuredRoot = configuredRoot;
+    input.timestamp = scan_tracking::common::buildCaptureTimestamp();
+    input.captureResult = cloneCaptureResult(result);
     if (bundle != nullptr) {
-        if (bundle->hikCameraAResult.success() && bundle->hikCameraAResult.frame.isValid()) {
-            const QString hikAPath = scan_tracking::vision::buildSegmentHikMonoPath(
-                configuredRoot,
-                segmentIndex,
-                m_activeTask.taskId,
-                QStringLiteral("hikA"),
-                timestamp);
-            if (!hikAPath.isEmpty() &&
-                scan_tracking::vision::saveHikMonoFrameToBmp(
-                    bundle->hikCameraAResult.frame, hikAPath)) {
-                diskPaths.hikMonoA = hikAPath;
-            } else {
-                qWarning(LOG_FLOW).noquote()
-                    << "persistSegmentCaptureToDisk: hikA BMP save failed segmentIndex="
-                    << segmentIndex;
-            }
-        }
-
-        if (bundle->hikCameraBResult.success() && bundle->hikCameraBResult.frame.isValid()) {
-            const QString hikBPath = scan_tracking::vision::buildSegmentHikMonoPath(
-                configuredRoot,
-                segmentIndex,
-                m_activeTask.taskId,
-                QStringLiteral("hikB"),
-                timestamp);
-            if (!hikBPath.isEmpty() &&
-                scan_tracking::vision::saveHikMonoFrameToBmp(
-                    bundle->hikCameraBResult.frame, hikBPath)) {
-                diskPaths.hikMonoB = hikBPath;
-            } else {
-                qWarning(LOG_FLOW).noquote()
-                    << "persistSegmentCaptureToDisk: hikB BMP save failed segmentIndex="
-                    << segmentIndex;
-            }
-        }
+        input.bundle = std::make_unique<scan_tracking::vision::MultiCameraCaptureBundle>(
+            cloneCaptureBundle(*bundle));
     }
 
-    m_segmentDiskPaths.insert(segmentIndex, diskPaths);
+    const quint64 captureRequestId = m_activeTask.captureRequestId;
+    const quint32 taskId = m_activeTask.taskId;
+    const int segmentIndexCopy = segmentIndex;
 
-    scan_tracking::mech_eye::CaptureResult slimResult = result;
-    scan_tracking::mech_eye::releasePointCloudFrameBuffers(&slimResult.pointCloud);
-    m_segmentCaptureResults.insert(segmentIndex, slimResult);
+    m_segmentPersistInFlight = true;
+    m_progress = 85;
+    publishIpcStatus();
 
-    if (bundle != nullptr) {
-        scan_tracking::vision::MultiCameraCaptureBundle slimBundle = *bundle;
-        scan_tracking::mech_eye::releasePointCloudFrameBuffers(&slimBundle.mechEyeResult.pointCloud);
-        scan_tracking::vision::releaseHikMonoFrameBuffers(&slimBundle.hikCameraAResult.frame);
-        scan_tracking::vision::releaseHikMonoFrameBuffers(&slimBundle.hikCameraBResult.frame);
-        m_segmentCaptureBundles.insert(segmentIndex, slimBundle);
+    qInfo(LOG_FLOW).noquote()
+        << "[ScanSync] persist started"
+        << "segmentIndex=" << segmentIndexCopy
+        << "taskId=" << taskId
+        << "captureRequestId=" << captureRequestId
+        << "pointCount=" << result.pointCloud.pointCount;
+
+    StateMachine* self = this;
+    m_persistThread = std::thread(
+        [self, input = std::move(input), captureRequestId, segmentIndexCopy, taskId]() mutable {
+            QElapsedTimer timer;
+            timer.start();
+
+            SegmentPersistOutcome outcome;
+            outcome.captureRequestId = captureRequestId;
+            outcome.segmentIndex = segmentIndexCopy;
+            outcome.taskId = taskId;
+            persistSegmentCaptureToDiskImpl(input, &outcome);
+            outcome.persistElapsedMs = timer.elapsed();
+
+            QMetaObject::invokeMethod(
+                self,
+                [self, outcome = std::move(outcome)]() mutable {
+                    self->onSegmentPersistFinished(std::move(outcome));
+                },
+                Qt::QueuedConnection);
+        });
+}
+
+void StateMachine::onSegmentPersistFinished(SegmentPersistOutcome outcome)
+{
+    joinPersistThreadIfRunning();
+
+    if (!m_activeTask.definition || m_activeTask.completionAnnounced) {
+        qInfo(LOG_FLOW).noquote()
+            << "Ignoring stale persist finished: no active task or already completed";
+        return;
+    }
+    if (outcome.captureRequestId != m_activeTask.captureRequestId ||
+        outcome.segmentIndex != m_activeTask.scanSegmentIndex) {
+        qInfo(LOG_FLOW).noquote()
+            << "Ignoring stale persist finished: captureRequestId/segment mismatch"
+            << "expected captureRequestId=" << m_activeTask.captureRequestId
+            << "got=" << outcome.captureRequestId
+            << "expected segment=" << m_activeTask.scanSegmentIndex
+            << "got=" << outcome.segmentIndex;
+        return;
     }
 
     qInfo(LOG_FLOW).noquote()
+        << "[ScanSync] persist finished"
+        << "segmentIndex=" << outcome.segmentIndex
+        << "elapsedMs=" << outcome.persistElapsedMs
+        << "success=" << outcome.success;
+
+    if (!outcome.success) {
+        finishScanSegmentFailure(
+            7,
+            3,
+            722,
+            QStringLiteral("分段点云保存到磁盘失败"),
+            QStringLiteral("分段点云保存到磁盘失败"));
+        return;
+    }
+
+    applySegmentPersistOutcome(outcome);
+}
+
+void StateMachine::applySegmentPersistOutcome(const SegmentPersistOutcome& outcome)
+{
+    m_segmentDiskPaths.insert(outcome.segmentIndex, outcome.diskPaths);
+    m_segmentCaptureResults.insert(outcome.segmentIndex, outcome.slimCaptureResult);
+    if (outcome.slimBundle) {
+        m_segmentCaptureBundles.insert(outcome.segmentIndex, *outcome.slimBundle);
+    }
+
+    const auto* configManager = scan_tracking::common::ConfigManager::instance();
+    const QString configuredRoot = configManager != nullptr
+        ? configManager->flowControlConfig().scanCacheDirectory
+        : QString();
+
+    qInfo(LOG_FLOW).noquote()
         << "Segment capture persisted to disk"
-        << "segmentIndex=" << segmentIndex
+        << "segmentIndex=" << outcome.segmentIndex
         << "cacheRoot=" << scan_tracking::common::resolveCaptureCacheRoot(configuredRoot)
-        << "plyPath=" << diskPaths.pointCloudPly
-        << "hikA=" << diskPaths.hikMonoA
-        << "hikB=" << diskPaths.hikMonoB
-        << "pointCount=" << slimResult.pointCloud.pointCount
+        << "plyPath=" << outcome.diskPaths.pointCloudPly
+        << "hikA=" << outcome.diskPaths.hikMonoA
+        << "hikB=" << outcome.diskPaths.hikMonoB
+        << "pointCount=" << outcome.slimCaptureResult.pointCloud.pointCount
         << "cacheEntries=" << m_segmentDiskPaths.size();
 
-    return true;
+    const int cloudFrameCount =
+        outcome.slimCaptureResult.pointCloud.pointCount > 0 ? 1 : 0;
+    int imageCount = 0;
+    if (!outcome.diskPaths.hikMonoA.isEmpty()) {
+        ++imageCount;
+    }
+    if (!outcome.diskPaths.hikMonoB.isEmpty()) {
+        ++imageCount;
+    }
+    if (imageCount == 0) {
+        imageCount = 1;
+    }
+    writeScanSegmentResult(outcome.segmentIndex, imageCount, cloudFrameCount);
+    m_progress = 100;
+    publishIpcStatus();
+
+    int hikAWidth = 0;
+    int hikAHeight = 0;
+    int hikBWidth = 0;
+    int hikBHeight = 0;
+    if (outcome.slimBundle) {
+        hikAWidth = outcome.slimBundle->hikCameraAResult.frame.width;
+        hikAHeight = outcome.slimBundle->hikCameraAResult.frame.height;
+        hikBWidth = outcome.slimBundle->hikCameraBResult.frame.width;
+        hikBHeight = outcome.slimBundle->hikCameraBResult.frame.height;
+    }
+
+    qInfo(LOG_FLOW).noquote()
+        << "Vision bundle capture finished"
+        << "segmentIndex=" << outcome.segmentIndex
+        << "mechPointCount=" << outcome.slimCaptureResult.pointCloud.pointCount
+        << "plyPath=" << outcome.diskPaths.pointCloudPly
+        << "hikA=" << outcome.diskPaths.hikMonoA
+        << "hikB=" << outcome.diskPaths.hikMonoB
+        << "hikAFrame=" << hikAWidth << "x" << hikAHeight
+        << "hikBFrame=" << hikBWidth << "x" << hikBHeight;
+
+    completeActiveTask(1);
+    emit scanFinished(outcome.segmentIndex, 1, imageCount, cloudFrameCount);
 }
 
 QMap<int, scan_tracking::mech_eye::CaptureResult> StateMachine::loadSegmentCaptureResultsForInspection(
@@ -1656,30 +1863,7 @@ void StateMachine::onCaptureFinished(mech_eye::CaptureResult result)
         return;
     }
 
-    if (!persistSegmentCaptureToDisk(m_activeTask.scanSegmentIndex, result, nullptr)) {
-        finishScanSegmentFailure(
-            7,
-            3,
-            722,
-            QStringLiteral("分段点云保存到磁盘失败"),
-            QStringLiteral("分段点云保存到磁盘失败"));
-        return;
-    }
-
-    m_progress = 100;
-    writeScanSegmentResult(m_activeTask.scanSegmentIndex, 1, 1);
-    completeActiveTask(1, protocol::AckState::Completed, true);
-
-    qInfo(LOG_FLOW).noquote()
-        << "Trig_ScanSegment capture saved"
-        << "segmentIndex=" << m_activeTask.scanSegmentIndex
-        << "cacheSize=" << m_segmentDiskPaths.size()
-        << "plyPath=" << m_segmentDiskPaths.value(m_activeTask.scanSegmentIndex).pointCloudPly
-        << "hikA=" << m_segmentDiskPaths.value(m_activeTask.scanSegmentIndex).hikMonoA
-        << "hikB=" << m_segmentDiskPaths.value(m_activeTask.scanSegmentIndex).hikMonoB
-        << "pointCount=" << result.pointCloud.pointCount
-        << "normalCount=" << result.pointCloud.normalCount()
-        << "elapsedMs=" << result.elapsedMs;
+    startSegmentPersistAsync(m_activeTask.scanSegmentIndex, result, nullptr);
 }
 
 /**

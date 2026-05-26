@@ -7,7 +7,10 @@
 #include <QtCore/QVector>
 #include <QtCore/QtGlobal>
 
+#include <atomic>
 #include <functional>
+#include <memory>
+#include <thread>
 
 #include "scan_tracking/flow_control/plc_protocol.h"
 #include "scan_tracking/mech_eye/mech_eye_types.h"
@@ -32,6 +35,18 @@ struct SegmentDiskPaths {
     QString pointCloudPly;
     QString hikMonoA;
     QString hikMonoB;
+};
+
+/// 分段落盘 worker 输出（由主线程 applySegmentPersistOutcome 消费）
+struct SegmentPersistOutcome {
+    bool success = false;
+    int segmentIndex = 0;
+    quint32 taskId = 0;
+    quint64 captureRequestId = 0;
+    qint64 persistElapsedMs = 0;
+    SegmentDiskPaths diskPaths;
+    scan_tracking::mech_eye::CaptureResult slimCaptureResult;
+    std::unique_ptr<scan_tracking::vision::MultiCameraCaptureBundle> slimBundle;
 };
 
 // 应用状态枚举
@@ -305,11 +320,19 @@ private:
     // 清空扫描分段缓存（点云 + 视觉 bundle）
     void resetScanSegmentCache();
 
-    // 将 Mech-Eye 点云落盘并写入轻量内存缓存
-    bool persistSegmentCaptureToDisk(
+    // 分段落盘工作线程完成（主线程；非 slot，因 SegmentPersistOutcome 含 unique_ptr 不可拷贝）
+    void onSegmentPersistFinished(SegmentPersistOutcome outcome);
+
+    // 后台落盘（深拷贝后在 worker 线程执行 IO）
+    void startSegmentPersistAsync(
         int segmentIndex,
         const scan_tracking::mech_eye::CaptureResult& result,
         const scan_tracking::vision::MultiCameraCaptureBundle* bundle);
+
+    // 将落盘结果写入内存缓存并完成 Trig_ScanSegment 握手
+    void applySegmentPersistOutcome(const SegmentPersistOutcome& outcome);
+
+    void joinPersistThreadIfRunning();
 
     // 综合检测前从磁盘加载 [Tracking] 必需的三段点云
     QMap<int, scan_tracking::mech_eye::CaptureResult> loadSegmentCaptureResultsForInspection(
@@ -454,6 +477,9 @@ private:
     std::function<void(const tracking::InspectionResult&)> m_inspectionResultPublisher;
 
     static constexpr int kMaxPointCloudCacheSize = 20;    // 允许的最大点云缓存条目数，防止内存无限增长
+
+    std::atomic_bool m_segmentPersistInFlight{false};
+    std::thread m_persistThread;
 };
 
 }  // namespace flow_control

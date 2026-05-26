@@ -239,7 +239,7 @@ inline const QVector<TriggerDefinition>& triggerDefinitions()
         {"Trig_LoadGrasp", 19, registers::kAckLoadGrasp, registers::kResLoadGrasp, Stage::LoadGrasp, 10},
         {"Trig_StationMaterialCheck", 20, registers::kAckStationMaterialCheck, registers::kResStationMaterialCheck, Stage::StationMaterialCheck, 5},
         {"Trig_PoseCheck", 21, registers::kAckPoseCheck, registers::kResPoseCheck, Stage::PoseCheck, 5},
-        {"Trig_ScanSegment", 22, registers::kAckScanSegment, registers::kResScanSegment, Stage::ScanSegment, 60},
+        {"Trig_ScanSegment", 22, registers::kAckScanSegment, registers::kResScanSegment, Stage::ScanSegment, 90},
         {"Trig_Inspection", 23, registers::kAckInspection, registers::kResInspection, Stage::Inspection, 60},
         {"Trig_UnloadCalc", 24, registers::kAckUnloadCalc, registers::kResUnloadCalc, Stage::UnloadCalc, 10},
         {"Trig_SelfCheck", 25, registers::kAckSelfCheck, registers::kResSelfCheck, Stage::SelfCheck, 10},
