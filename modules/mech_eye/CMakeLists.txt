@@ -1,14 +1,18 @@
 scan_tracking_require_mech_eye_sdk()
 
+find_package(PCL 1.12 REQUIRED COMPONENTS common filters surface)
+
 add_library(scan_tracking_mech_eye STATIC
     src/mech_eye_service.cpp
     src/mech_eye_worker.cpp
     src/point_cloud_io.cpp
+    src/point_cloud_processor.cpp
     src/mech_eye_nano_smoke_test.cpp
     include/scan_tracking/mech_eye/mech_eye_types.h
     include/scan_tracking/mech_eye/mech_eye_service.h
     include/scan_tracking/mech_eye/mech_eye_worker.h
     include/scan_tracking/mech_eye/point_cloud_io.h
+    include/scan_tracking/mech_eye/point_cloud_processor.h
 )
 
 # 启用 AUTOMOC：MechEyeService 和 MechEyeWorker 都使用了 Q_OBJECT 宏，
@@ -30,6 +34,17 @@ target_link_libraries(scan_tracking_mech_eye
         scan_tracking_common
     PRIVATE
         MechEyeSdk::MechEyeApi
+        ${PCL_LIBRARIES}
+)
+
+target_include_directories(scan_tracking_mech_eye
+    PRIVATE
+        ${PCL_INCLUDE_DIRS}
+)
+
+target_compile_definitions(scan_tracking_mech_eye
+    PRIVATE
+        ${PCL_DEFINITIONS}
 )
 
 target_compile_features(scan_tracking_mech_eye PUBLIC cxx_std_17)
@@ -54,6 +69,26 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(scan_tracking_point_cloud_io_test PROPERTIES
+        FOLDER "tests"
+    )
+
+    add_executable(scan_tracking_point_cloud_processor_test
+        tests/point_cloud_processor_test.cpp
+    )
+
+    target_link_libraries(scan_tracking_point_cloud_processor_test
+        PRIVATE
+            Qt5::Core
+            Qt5::Test
+            scan_tracking_mech_eye
+            scan_tracking_common
+    )
+
+    add_test(NAME scan_tracking_point_cloud_processor_test
+        COMMAND scan_tracking_point_cloud_processor_test
+    )
+
+    set_target_properties(scan_tracking_point_cloud_processor_test PROPERTIES
         FOLDER "tests"
     )
 endif()

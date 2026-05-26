@@ -52,12 +52,12 @@ QString buildSegmentHikMonoPath(
 bool saveHikMonoFrameToBmp(const HikMonoFrame& frame, const QString& absolutePath)
 {
     if (!frame.isValid() || absolutePath.trimmed().isEmpty()) {
-        qWarning(LOG_HIK_MONO_IO) << "saveHikMonoFrameToBmp: invalid frame or path";
+        qWarning(LOG_HIK_MONO_IO) << QStringLiteral("saveHikMonoFrameToBmp：帧或路径无效");
         return false;
     }
 
     if (frame.stride <= 0 || frame.width <= 0 || frame.height <= 0) {
-        qWarning(LOG_HIK_MONO_IO) << "saveHikMonoFrameToBmp: invalid geometry";
+        qWarning(LOG_HIK_MONO_IO) << QStringLiteral("saveHikMonoFrameToBmp：几何尺寸无效");
         return false;
     }
 
@@ -71,7 +71,7 @@ bool saveHikMonoFrameToBmp(const HikMonoFrame& frame, const QString& absolutePat
     QByteArray fileBuffer;
     fileBuffer.resize(static_cast<int>(fileSize));
     if (fileBuffer.size() != static_cast<int>(fileSize)) {
-        qWarning(LOG_HIK_MONO_IO) << "saveHikMonoFrameToBmp: failed to allocate buffer";
+        qWarning(LOG_HIK_MONO_IO) << QStringLiteral("saveHikMonoFrameToBmp：分配缓冲区失败");
         return false;
     }
 
@@ -123,7 +123,7 @@ bool saveHikMonoFrameToBmp(const HikMonoFrame& frame, const QString& absolutePat
         const int srcRow = frame.height - 1 - row;
         const int srcOffset = srcRow * sourceStride;
         if (srcOffset + frame.width > static_cast<int>(pixels.size())) {
-            qWarning(LOG_HIK_MONO_IO) << "saveHikMonoFrameToBmp: pixel buffer underrun";
+            qWarning(LOG_HIK_MONO_IO) << QStringLiteral("saveHikMonoFrameToBmp：像素缓冲区越界");
             return false;
         }
         uchar* dstRow = dstRows + row * rowStride;
@@ -136,18 +136,18 @@ bool saveHikMonoFrameToBmp(const HikMonoFrame& frame, const QString& absolutePat
     QFile file(absolutePath);
     if (!file.open(QIODevice::WriteOnly)) {
         qWarning(LOG_HIK_MONO_IO).noquote()
-            << "saveHikMonoFrameToBmp: cannot open" << absolutePath;
+            << QStringLiteral("saveHikMonoFrameToBmp：无法打开") << absolutePath;
         return false;
     }
     if (file.write(fileBuffer) != fileBuffer.size()) {
-        qWarning(LOG_HIK_MONO_IO) << "saveHikMonoFrameToBmp: write failed";
+        qWarning(LOG_HIK_MONO_IO) << QStringLiteral("saveHikMonoFrameToBmp：写入失败");
         return false;
     }
     file.close();
 
     qInfo(LOG_HIK_MONO_IO).noquote()
-        << "BMP saved:" << absolutePath
-        << "size=" << frame.width << "x" << frame.height;
+        << QStringLiteral("BMP 已保存：") << absolutePath
+        << QStringLiteral(" size=") << frame.width << QStringLiteral("x") << frame.height;
 
     return true;
 }

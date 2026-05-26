@@ -33,14 +33,14 @@ HikSmartCameraFtpMonitor::~HikSmartCameraFtpMonitor()
 bool HikSmartCameraFtpMonitor::start(const QString& ftpDirectory)
 {
     if (m_monitoring) {
-        qWarning(hikFtpMonitorLog) << "Monitor already running";
+        qWarning(hikFtpMonitorLog) << QStringLiteral("监控器已在运行");
         return false;
     }
 
     // 检查目录是否存在
     QDir dir(ftpDirectory);
     if (!dir.exists()) {
-        qCritical(hikFtpMonitorLog) << "FTP directory does not exist:" << ftpDirectory;
+        qCritical(hikFtpMonitorLog) << QStringLiteral("FTP 目录不存在：") << ftpDirectory;
         emit error(QStringLiteral("FTP 目录不存在: %1").arg(ftpDirectory));
         return false;
     }
@@ -49,7 +49,7 @@ bool HikSmartCameraFtpMonitor::start(const QString& ftpDirectory)
     
     // 添加目录到监控
     if (!m_watcher->addPath(m_ftpDirectory)) {
-        qCritical(hikFtpMonitorLog) << "Failed to add directory to watcher:" << m_ftpDirectory;
+        qCritical(hikFtpMonitorLog) << QStringLiteral("无法将目录加入监控：") << m_ftpDirectory;
         emit error(QStringLiteral("无法监控目录: %1").arg(m_ftpDirectory));
         return false;
     }
@@ -101,7 +101,7 @@ void HikSmartCameraFtpMonitor::stop()
 
 void HikSmartCameraFtpMonitor::onDirectoryChanged(const QString& path)
 {
-    qDebug(hikFtpMonitorLog) << "Directory changed:" << path;
+    qDebug(hikFtpMonitorLog) << QStringLiteral("目录变化：") << path;
     scanDirectory();
 }
 
@@ -183,7 +183,7 @@ void HikSmartCameraFtpMonitor::checkPendingFiles()
         qint64 currentSize = 0;
         if (!isFileComplete(filePath, currentSize)) {
             // 文件不存在或无法访问
-            qWarning(hikFtpMonitorLog) << "File not accessible:" << filePath;
+            qWarning(hikFtpMonitorLog) << QStringLiteral("文件不可访问：") << filePath;
             completedFiles.append(filePath);
             m_processedFiles.insert(filePath);
             continue;

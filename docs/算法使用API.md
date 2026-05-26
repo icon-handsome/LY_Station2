@@ -410,21 +410,20 @@ Lanyou adapter smoke tests passed
 
 ## 10. 配置文件说明
 
-### 10.1 分段采集缓存（`config.ini [FlowControl]`）
+### 10.1 分段采集内存缓存（`config.ini [PointCloudProcessing]`）
 
-默认根目录：`<程序目录>/ScanTracking_CaptureCache`（与 `scan-tracking.exe` 同级）
-
-| 子目录 | 内容 | 命名示例 |
-|--------|------|----------|
-| `pointcloud/` | Mech-Eye PLY | `segment_{N}_task{T}_{ts}.ply` |
-| `hik_mono/` | 海康 A/B Mono8 PGM | `segment_{N}_task{T}_{ts}_hikA.pgm`、`_hikB.pgm` |
+`Trig_ScanSegment` 成功后，后台线程 `processPointCloudFrame` 对点云做深度裁剪 / 离群去除 / MLS 平滑 / 体素降采样，结果写入 `StateMachine::m_segmentCaptureResults`；海康 A/B 帧写入 `m_segmentCaptureBundles`。
 
 | 键 | 说明 |
 |----|------|
-| `scanCacheDirectory` | 缓存**根目录**；空则用 `ScanTracking_CaptureCache` |
-| `retainSegmentPly` | `true`（默认）：检测/复位后**不删**磁盘文件，仅清内存索引 |
+| `enabled` | 总开关；`false` 时直通原始点云 |
+| `depthMinMm` / `depthMaxMm` | 后处理 Z 向 PassThrough（mm） |
+| `outlierRemovalEnabled` / `outlierMeanK` / `outlierStddevMul` | 统计离群点去除 |
+| `smoothingEnabled` / `mlsSearchRadiusMm` / `mlsPolynomialOrder` | MLS 表面平滑 |
+| `downsampleEnabled` / `voxelLeafSizeMm` | 体素均匀降采样 |
+| `minPointsAfterProcessing` | 任一步后最少点数，不足则本段失败 |
 
-实现：`capture_cache_paths` + `point_cloud_io` + `hik_mono_io`，由 `StateMachine::persistSegmentCaptureToDisk` 统一落盘。
+`[FlowControl] scanCacheDirectory` / `retainSegmentPly` 已废弃（仅 LatencyTest 等调试仍可读该路径落盘）。离线 PLY 工具见 `point_cloud_io`。
 
 当前算法目录下有配置文件：
 - `third_party/lanyou_first_detection/config/first_config.cfg`

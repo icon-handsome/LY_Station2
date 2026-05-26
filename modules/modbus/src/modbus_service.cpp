@@ -85,9 +85,9 @@ bool ModbusService::connectDevice()
     m_server->setServerAddress(m_unitId);
 
     qInfo(LOG_MODBUS).noquote()
-        << "正在启动 Modbus TCP Server，监听:"
-        << conf.host << ":" << m_port
-        << "unitId=" << m_unitId;
+        << QStringLiteral("正在启动 Modbus TCP Server，监听:")
+        << conf.host << QStringLiteral(":") << m_port
+        << QStringLiteral(" unitId=") << m_unitId;
 
     if (!m_server->connectDevice()) {
         const QString error = m_server->errorString();
@@ -198,9 +198,9 @@ void ModbusService::onDataWritten(QModbusDataUnit::RegisterType table, int addre
         ++m_writeByPlcLogCounter;
         if (m_writeByPlcLogCounter <= 3 || (m_writeByPlcLogCounter % 100) == 0) {
             qDebug(LOG_MODBUS).noquote()
-                << "PLC 写入命令区 | address=" << address
-                << "size=" << size
-                << "totalWrites=" << m_writeByPlcLogCounter;
+                << QStringLiteral("PLC 写入命令区 | address=") << address
+                << QStringLiteral(" size=") << size
+                << QStringLiteral(" totalWrites=") << m_writeByPlcLogCounter;
         }
     }
 }

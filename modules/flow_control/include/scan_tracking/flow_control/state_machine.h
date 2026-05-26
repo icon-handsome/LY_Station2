@@ -30,23 +30,18 @@ struct PoseCheckResult;
 }
 namespace flow_control {
 
-/// 单段扫描落盘路径（点云 PLY + 海康 A/B BMP）
-struct SegmentDiskPaths {
-    QString pointCloudPly;
-    QString hikMonoA;
-    QString hikMonoB;
-};
-
-/// 分段落盘 worker 输出（由主线程 applySegmentPersistOutcome 消费）
-struct SegmentPersistOutcome {
+/// 分段点云后处理 worker 输出（由主线程 applySegmentProcessOutcome 消费）
+struct SegmentProcessOutcome {
     bool success = false;
     int segmentIndex = 0;
     quint32 taskId = 0;
     quint64 captureRequestId = 0;
-    qint64 persistElapsedMs = 0;
-    SegmentDiskPaths diskPaths;
-    scan_tracking::mech_eye::CaptureResult slimCaptureResult;
-    std::unique_ptr<scan_tracking::vision::MultiCameraCaptureBundle> slimBundle;
+    qint64 processElapsedMs = 0;
+    int rawPointCount = 0;
+    int processedPointCount = 0;
+    QString errorMessage;
+    scan_tracking::mech_eye::CaptureResult captureResult;
+    std::unique_ptr<scan_tracking::vision::MultiCameraCaptureBundle> bundle;
 };
 
 // 应用状态枚举
@@ -320,21 +315,21 @@ private:
     // 清空扫描分段缓存（点云 + 视觉 bundle）
     void resetScanSegmentCache();
 
-    // 分段落盘工作线程完成（主线程；非 slot，因 SegmentPersistOutcome 含 unique_ptr 不可拷贝）
-    void onSegmentPersistFinished(SegmentPersistOutcome outcome);
+    // 分段后处理工作线程完成（主线程；非 slot，因 SegmentProcessOutcome 含 unique_ptr 不可拷贝）
+    void onSegmentProcessFinished(SegmentProcessOutcome outcome);
 
-    // 后台落盘（深拷贝后在 worker 线程执行 IO）
-    void startSegmentPersistAsync(
+    // 后台点云后处理（深拷贝后在 worker 线程执行 PCL 滤波）
+    void startSegmentProcessAsync(
         int segmentIndex,
         const scan_tracking::mech_eye::CaptureResult& result,
         const scan_tracking::vision::MultiCameraCaptureBundle* bundle);
 
-    // 将落盘结果写入内存缓存并完成 Trig_ScanSegment 握手
-    void applySegmentPersistOutcome(const SegmentPersistOutcome& outcome);
+    // 将处理结果写入内存缓存并完成 Trig_ScanSegment 握手
+    void applySegmentProcessOutcome(const SegmentProcessOutcome& outcome);
 
-    void joinPersistThreadIfRunning();
+    void joinProcessThreadIfRunning();
 
-    // 综合检测前从磁盘加载 [Tracking] 必需的三段点云
+    // 综合检测前从内存缓存取 [Tracking] 必需的三段点云
     QMap<int, scan_tracking::mech_eye::CaptureResult> loadSegmentCaptureResultsForInspection(
         QString* errorMessage) const;
 
@@ -466,9 +461,8 @@ private:
     QElapsedTimer m_pollRequestTimer;                       // 当前轮询请求耗时计时器
     int m_consecutiveModbusFailures = 0;                    // 连续 Modbus 失败次数
     QVector<quint16> m_lastCommandBlock;                    // 上一次命令块副本
-    QMap<int, scan_tracking::mech_eye::CaptureResult> m_segmentCaptureResults;  // 分段元数据（点云在磁盘）
-    QMap<int, scan_tracking::vision::MultiCameraCaptureBundle> m_segmentCaptureBundles;  // 分段视觉 bundle 缓存
-    QMap<int, SegmentDiskPaths> m_segmentDiskPaths;  // segmentIndex -> 落盘文件路径
+    QMap<int, scan_tracking::mech_eye::CaptureResult> m_segmentCaptureResults;  // 分段点云（已后处理）
+    QMap<int, scan_tracking::vision::MultiCameraCaptureBundle> m_segmentCaptureBundles;  // 分段视觉 bundle（含海康帧）
     std::array<float, 16> m_baseCalibrationMatrix{};       // 基准 T0（来自 scan_paths_config.json）
     std::array<float, 16> m_currentCalibrationMatrix{};    // 当前 T0' / T0''（转动点由 LBN 链式更新）
     QMap<int, std::array<float, 16>> m_segmentCalibrationMatrices;  // 每段扫描结束时的标定矩阵快照
@@ -478,8 +472,8 @@ private:
 
     static constexpr int kMaxPointCloudCacheSize = 20;    // 允许的最大点云缓存条目数，防止内存无限增长
 
-    std::atomic_bool m_segmentPersistInFlight{false};
-    std::thread m_persistThread;
+    std::atomic_bool m_segmentProcessInFlight{false};
+    std::thread m_processThread;
 };
 
 }  // namespace flow_control

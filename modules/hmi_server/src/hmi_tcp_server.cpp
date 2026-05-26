@@ -61,35 +61,35 @@ QString summarizeCameraStatusPayload(const QJsonObject& payload)
 
     const QJsonObject mechEye = payload.value(QLatin1String("mechEye")).toObject();
     if (!mechEye.isEmpty()) {
-        parts << QStringLiteral("mechEye(state=%1,connected=%2)")
+        parts << QStringLiteral("梅卡(状态=%1,已连接=%2)")
                      .arg(mechEye.value(QLatin1String("state")).toInt(-1))
                      .arg(mechEye.value(QLatin1String("connected")).toBool() ? 1 : 0);
     }
 
     const QJsonObject hikA = payload.value(QLatin1String("hikA")).toObject();
     if (!hikA.isEmpty()) {
-        parts << QStringLiteral("hikA(connected=%1)")
+        parts << QStringLiteral("海康A(已连接=%1)")
                      .arg(hikA.value(QLatin1String("connected")).toBool() ? 1 : 0);
     }
 
     const QJsonObject hikB = payload.value(QLatin1String("hikB")).toObject();
     if (!hikB.isEmpty()) {
-        parts << QStringLiteral("hikB(connected=%1)")
+        parts << QStringLiteral("海康B(已连接=%1)")
                      .arg(hikB.value(QLatin1String("connected")).toBool() ? 1 : 0);
     }
 
     const QJsonObject hikC = payload.value(QLatin1String("hikC")).toObject();
     if (!hikC.isEmpty()) {
-        parts << QStringLiteral("hikC(connected=%1)")
+        parts << QStringLiteral("海康C(已连接=%1)")
                      .arg(hikC.value(QLatin1String("connected")).toBool() ? 1 : 0);
     }
 
     const QJsonObject pipeline = payload.value(QLatin1String("pipeline")).toObject();
     if (!pipeline.isEmpty()) {
-        parts << QStringLiteral("pipeline(state=%1)")
+        parts << QStringLiteral("流水线(状态=%1)")
                      .arg(pipeline.value(QLatin1String("state")).toInt(-1));
     }
-    return parts.isEmpty() ? QStringLiteral("(empty)") : parts.join(QLatin1String(" "));
+    return parts.isEmpty() ? QStringLiteral("（空）") : parts.join(QLatin1String(" "));
 }
 
 // TODO(hmi): 远程 event.log 转发默认关闭，优先保证 TCP 简洁与主业务打通。
@@ -337,7 +337,7 @@ void HmiTcpServer::onMessageReceived(const QJsonObject& message)
     // 本地单行摘要；完整 JSON 不再打印/转发，避免套娃与刷屏
     if (!isHighFrequencyTcpType(type)) {
         qDebug(LOG_HMI_SERVER).noquote()
-            << "[TCPIP] RX" << type << msgId;
+            << QStringLiteral("[TCPIP] 接收") << type << msgId;
     }
     
     // ------------------------------------------------------------------
@@ -705,10 +705,10 @@ void HmiTcpServer::handleCmdDebugTriggerInspection(const QJsonObject& message)
     sendToClient(envelope);
 
     qInfo(LOG_HMI_SERVER).noquote()
-        << "[TCPIP] 调试综合检测完成"
-        << "cachedSegments=" << cachedSegments
-        << "resultCode=" << inspectionResult.resultCode
-        << "message=" << inspectionResult.message;
+        << QStringLiteral("[TCPIP] 调试综合检测完成")
+        << QStringLiteral(" cachedSegments=") << cachedSegments
+        << QStringLiteral(" resultCode=") << inspectionResult.resultCode
+        << QStringLiteral(" message=") << inspectionResult.message;
 }
 
 void HmiTcpServer::handleCmdCaptureMechEye(const QJsonObject& message)
@@ -800,7 +800,7 @@ bool HmiTcpServer::pushStatusIfChanged(const QString& type, const QJsonObject& p
     sendToClient(buildEnvelope(type, nextEventId(), payload));
     if (hasClient() && type == QLatin1String(msg_type::kStatusCamera)) {
         qInfo(LOG_HMI_SERVER).noquote()
-            << "[TCPIP] status.camera TX |" << summarizeCameraStatusPayload(payload);
+            << QStringLiteral("[TCPIP] 推送 status.camera |") << summarizeCameraStatusPayload(payload);
     }
     return true;
 }
@@ -1405,9 +1405,9 @@ void HmiTcpServer::publishInspectionResult(const tracking::InspectionResult& res
     if (!hasClient()) {
         // TODO(hmi-demo): 无显控连接时缓存最后一帧，连接后补发
         qInfo(LOG_HMI_SERVER).noquote()
-            << "[TCPIP] 蓝友检测结果未推送（无显控连接）"
-            << "resultCode=" << result.resultCode
-            << "message=" << result.message;
+            << QStringLiteral("[TCPIP] 蓝友检测结果未推送（无显控连接）")
+            << QStringLiteral(" resultCode=") << result.resultCode
+            << QStringLiteral(" message=") << result.message;
         return;
     }
 
@@ -1415,12 +1415,12 @@ void HmiTcpServer::publishInspectionResult(const tracking::InspectionResult& res
     sendToClient(buildEnvelope(QLatin1String(msg_type::kEventInspectionFinished), nextEventId(), payload));
 
     qInfo(LOG_HMI_SERVER).noquote()
-        << "[TCPIP] 蓝友检测结果已推送 event.inspection.finished"
-        << "resultCode=" << result.resultCode
-        << "ngWord0=" << result.ngReasonWord0
-        << "measureItems=" << result.measureItemCount
-        << "offset=(" << result.offsetXmm << "," << result.offsetYmm << "," << result.offsetZmm << ")"
-        << "message=" << result.message;
+        << QStringLiteral("[TCPIP] 蓝友检测结果已推送 event.inspection.finished")
+        << QStringLiteral(" resultCode=") << result.resultCode
+        << QStringLiteral(" ngWord0=") << result.ngReasonWord0
+        << QStringLiteral(" measureItems=") << result.measureItemCount
+        << QStringLiteral(" offset=(") << result.offsetXmm << QStringLiteral(",") << result.offsetYmm << QStringLiteral(",") << result.offsetZmm << QStringLiteral(")")
+        << QStringLiteral(" message=") << result.message;
 }
 
 // --- 辅助发送 ---
@@ -1436,7 +1436,7 @@ void HmiTcpServer::sendToClient(const QJsonObject& envelope)
 
     g_inTcpSend = true;
     if (!isHighFrequencyTcpType(type)) {
-        qDebug(LOG_HMI_SERVER).noquote() << "[TCPIP] TX" << type << msgId;
+        qDebug(LOG_HMI_SERVER).noquote() << QStringLiteral("[TCPIP] 发送") << type << msgId;
     }
     m_session->sendMessage(envelope);
     g_inTcpSend = false;

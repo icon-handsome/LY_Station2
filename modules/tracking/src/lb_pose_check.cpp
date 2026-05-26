@@ -174,15 +174,15 @@ PoseCheckResult runLegacyLbPoseCheck(const scan_tracking::common::LbPoseConfig& 
 
     // 打印配置信息
     qInfo(LOG_LB_POSE).noquote()
-        << "LB pose config:" 
-        << "dataRoot=" << summarizePath(dataRootText)
-        << "leftPattern=" << summarizePath(leftPatternText)
-        << "rightPattern=" << summarizePath(rightPatternText)
-        << "templateFile=" << summarizePath(templateText)
-        << "minDistance=" << config.minDistance
-        << "maxDistance=" << config.maxDistance
-        << "cosTolerance=" << config.cosTolerance
-        << "minPercent=" << config.minPercent;
+        << QStringLiteral("LB 位姿配置：")
+        << QStringLiteral(" dataRoot=") << summarizePath(dataRootText)
+        << QStringLiteral(" leftPattern=") << summarizePath(leftPatternText)
+        << QStringLiteral(" rightPattern=") << summarizePath(rightPatternText)
+        << QStringLiteral(" templateFile=") << summarizePath(templateText)
+        << QStringLiteral(" minDistance=") << config.minDistance
+        << QStringLiteral(" maxDistance=") << config.maxDistance
+        << QStringLiteral(" cosTolerance=") << config.cosTolerance
+        << QStringLiteral(" minPercent=") << config.minPercent;
 
     // 检查数据根目录是否存在
     const QFileInfo dataRootInfo(dataRootText);
@@ -301,9 +301,9 @@ PoseCheckResult runLegacyLbPoseCheck(const scan_tracking::common::LbPoseConfig& 
         result.rt = toRtArray(geoHash.Rt);
         result.message = QStringLiteral("LB 位姿检测成功。");
         qInfo(LOG_LB_POSE).noquote()
-            << "LB pose succeeded"
-            << "inputPoints=" << result.inputPointCount
-            << "deviationMm=" << result.poseDeviationMm;
+            << QStringLiteral("LB 位姿检测成功")
+            << QStringLiteral(" inputPoints=") << result.inputPointCount
+            << QStringLiteral(" deviationMm=") << result.poseDeviationMm;
         return result;
     } catch (const std::exception& ex) {
         // 捕获标准异常

@@ -191,16 +191,22 @@ struct MultiCameraCaptureBundle {
 
     QString summary() const
     {
+        const auto flag = [](bool ok) {
+            return ok ? QStringLiteral("成功") : QStringLiteral("失败");
+        };
+        const QString lbnFlag = lbnPoseResult.invoked
+            ? (lbnPoseResult.success ? QStringLiteral("成功") : QStringLiteral("失败"))
+            : QStringLiteral("跳过");
         return QStringLiteral(
-                   "bundle requestId=%1 taskId=%2 segment=%3 mech=%4 hikA=%5 hikB=%6 lb=%7 lbn=%8")
+                   "组合采集 requestId=%1 taskId=%2 段号=%3 梅卡=%4 海康A=%5 海康B=%6 LB=%7 LBN=%8")
             .arg(request.requestId)
             .arg(request.taskId)
             .arg(request.segmentIndex)
-            .arg(mechEyeResult.success() ? QStringLiteral("ok") : QStringLiteral("fail"))
-            .arg(hikCameraAResult.success() ? QStringLiteral("ok") : QStringLiteral("fail"))
-            .arg(hikCameraBResult.success() ? QStringLiteral("ok") : QStringLiteral("fail"))
-            .arg(lbPoseResult.success ? QStringLiteral("ok") : QStringLiteral("fail"))
-            .arg(lbnPoseResult.success ? QStringLiteral("ok") : QStringLiteral("skip"));
+            .arg(flag(mechEyeResult.success()))
+            .arg(flag(hikCameraAResult.success()))
+            .arg(flag(hikCameraBResult.success()))
+            .arg(flag(lbPoseResult.success))
+            .arg(lbnFlag);
     }
 };
 

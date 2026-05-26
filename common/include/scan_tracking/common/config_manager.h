@@ -66,8 +66,26 @@ struct FlowControlConfig {
     int pollIntervalMs;
     int heartbeatIntervalMs;
     int simulatedProcessingMs;
-    QString scanCacheDirectory;  ///< 采集缓存根目录，空则 <app>/ScanTracking_CaptureCache
-    bool retainSegmentPly = true; ///< true：检测/复位后不删磁盘 PLY（现场复盘）
+    /// @deprecated 分段点云/海康已改内存缓存；仅 LatencyTest 等调试落盘仍可读此路径
+    QString scanCacheDirectory;
+    /// @deprecated 不再用于分段 PLY 生命周期
+    bool retainSegmentPly = true;
+};
+
+/// Mech-Eye 点云 IPC 后处理（深度裁剪 / 离群 / 平滑 / 降采样）
+struct PointCloudProcessingConfig {
+    bool enabled = true;
+    float depthMinMm = 100.0f;
+    float depthMaxMm = 2000.0f;
+    bool outlierRemovalEnabled = true;
+    int outlierMeanK = 50;
+    float outlierStddevMul = 1.0f;
+    bool smoothingEnabled = true;
+    float mlsSearchRadiusMm = 5.0f;
+    int mlsPolynomialOrder = 2;
+    bool downsampleEnabled = true;
+    float voxelLeafSizeMm = 2.0f;
+    int minPointsAfterProcessing = 1000;
 };
 
 struct TrackingConfig {
@@ -179,6 +197,7 @@ public:
     const HmiConfig& hmiConfig() const;
     const LbPoseConfig& lbPoseConfig() const;
     const LbnPoseConfig& lbnPoseConfig() const;
+    const PointCloudProcessingConfig& pointCloudProcessingConfig() const;
     const ScanPathsConfig& scanPathsConfig() const;  // 新增：获取扫描路径配置
 
 private:
@@ -209,6 +228,7 @@ private:
     HmiConfig m_hmiConfig;
     LbPoseConfig m_lbPoseConfig;
     LbnPoseConfig m_lbnPoseConfig;
+    PointCloudProcessingConfig m_pointCloudProcessingConfig;
     ScanPathsConfig m_scanPathsConfig;  // 新增：扫描路径配置
 };
 

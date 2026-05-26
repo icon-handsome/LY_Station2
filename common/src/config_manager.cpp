@@ -100,6 +100,10 @@ const TrackingConfig& ConfigManager::trackingConfig() const { return m_trackingC
 const HmiConfig& ConfigManager::hmiConfig() const { return m_hmiConfig; }
 const LbPoseConfig& ConfigManager::lbPoseConfig() const { return m_lbPoseConfig; }
 const LbnPoseConfig& ConfigManager::lbnPoseConfig() const { return m_lbnPoseConfig; }
+const PointCloudProcessingConfig& ConfigManager::pointCloudProcessingConfig() const
+{
+    return m_pointCloudProcessingConfig;
+}
 const ScanPathsConfig& ConfigManager::scanPathsConfig() const { return m_scanPathsConfig; }
 
 void ConfigManager::writeDefaults(QSettings& settings)
@@ -309,6 +313,30 @@ void ConfigManager::load(const QString& filePath)
     m_flowControlConfig.retainSegmentPly = settings.value("retainSegmentPly", true).toBool();
     settings.endGroup();
 
+    settings.beginGroup("PointCloudProcessing");
+    m_pointCloudProcessingConfig.enabled = settings.value("enabled", true).toBool();
+    m_pointCloudProcessingConfig.depthMinMm =
+        settings.value("depthMinMm", m_visionConfig.mechDepthRangeMin).toFloat();
+    m_pointCloudProcessingConfig.depthMaxMm =
+        settings.value("depthMaxMm", m_visionConfig.mechDepthRangeMax).toFloat();
+    m_pointCloudProcessingConfig.outlierRemovalEnabled =
+        settings.value("outlierRemovalEnabled", true).toBool();
+    m_pointCloudProcessingConfig.outlierMeanK = settings.value("outlierMeanK", 50).toInt();
+    m_pointCloudProcessingConfig.outlierStddevMul =
+        settings.value("outlierStddevMul", 1.0).toFloat();
+    m_pointCloudProcessingConfig.smoothingEnabled = settings.value("smoothingEnabled", true).toBool();
+    m_pointCloudProcessingConfig.mlsSearchRadiusMm =
+        settings.value("mlsSearchRadiusMm", 5.0).toFloat();
+    m_pointCloudProcessingConfig.mlsPolynomialOrder =
+        settings.value("mlsPolynomialOrder", 2).toInt();
+    m_pointCloudProcessingConfig.downsampleEnabled =
+        settings.value("downsampleEnabled", true).toBool();
+    m_pointCloudProcessingConfig.voxelLeafSizeMm =
+        settings.value("voxelLeafSizeMm", 2.0).toFloat();
+    m_pointCloudProcessingConfig.minPointsAfterProcessing =
+        settings.value("minPointsAfterProcessing", 1000).toInt();
+    settings.endGroup();
+
     settings.beginGroup("Tracking");
     m_trackingConfig.firstStationOuterSegmentIndex = settings.value("firstStationOuterSegmentIndex", 1).toInt();
     m_trackingConfig.firstStationInnerSegmentIndex = settings.value("firstStationInnerSegmentIndex", 2).toInt();
@@ -342,12 +370,12 @@ void ConfigManager::load(const QString& filePath)
 
     qInfo(LOG_CONFIG) << "已从以下位置加载 config.ini：" << filePath;
     qInfo(LOG_CONFIG).noquote()
-        << "Modbus 配置："
-        << "host=" << m_modbusConfig.host
-        << "port=" << m_modbusConfig.port
-        << "unitId=" << m_modbusConfig.unitId
-        << "timeoutMs=" << m_modbusConfig.timeoutMs
-        << "reconnectIntervalMs=" << m_modbusConfig.reconnectIntervalMs;
+        << QStringLiteral("Modbus 配置：")
+        << QStringLiteral(" host=") << m_modbusConfig.host
+        << QStringLiteral(" port=") << m_modbusConfig.port
+        << QStringLiteral(" unitId=") << m_modbusConfig.unitId
+        << QStringLiteral(" timeoutMs=") << m_modbusConfig.timeoutMs
+        << QStringLiteral(" reconnectIntervalMs=") << m_modbusConfig.reconnectIntervalMs;
 }
 
 /**

@@ -27,7 +27,7 @@ HikSmartCameraSession::HikSmartCameraSession(QTcpSocket* socket, QObject* parent
                 this, &HikSmartCameraSession::onSocketError);
 
         updateHeartbeat();
-        qInfo(hikTcpLog) << "Camera session created:" << m_cameraIp << ":" << m_cameraPort;
+        qInfo(hikTcpLog) << QStringLiteral("相机会话已创建：") << m_cameraIp << QStringLiteral(":") << m_cameraPort;
     }
 }
 
@@ -50,7 +50,7 @@ bool HikSmartCameraSession::isConnected() const
 bool HikSmartCameraSession::sendCommand(const QString& command)
 {
     if (!isConnected()) {
-        qWarning(hikTcpLog) << "Cannot send command: not connected" << m_cameraIp;
+        qWarning(hikTcpLog) << QStringLiteral("无法发送命令：未连接") << m_cameraIp;
         return false;
     }
 
@@ -61,7 +61,7 @@ bool HikSmartCameraSession::sendCommand(const QString& command)
 
     qint64 written = m_socket->write(data);
     if (written == -1) {
-        qWarning(hikTcpLog) << "Failed to send command to" << m_cameraIp << ":" << command;
+        qWarning(hikTcpLog) << QStringLiteral("发送命令失败") << m_cameraIp << QStringLiteral("：") << command;
         return false;
     }
 
@@ -95,7 +95,7 @@ void HikSmartCameraSession::onReadyRead()
 
     // 防止缓冲区无限增长
     if (m_receiveBuffer.size() > 1024 * 1024) {  // 1MB
-        qWarning(hikTcpLog) << "Receive buffer too large, clearing:" << m_cameraIp;
+        qWarning(hikTcpLog) << QStringLiteral("接收缓冲区过大，已清空：") << m_cameraIp;
         m_receiveBuffer.clear();
     }
 }
@@ -137,8 +137,8 @@ void HikSmartCameraSession::onDisconnected()
 
 void HikSmartCameraSession::onSocketError(QAbstractSocket::SocketError socketError)
 {
-    QString errorMsg = m_socket ? m_socket->errorString() : "Unknown error";
-    qWarning(hikTcpLog) << "Socket error for" << m_cameraIp << ":" << socketError << errorMsg;
+    QString errorMsg = m_socket ? m_socket->errorString() : QStringLiteral("未知错误");
+    qWarning(hikTcpLog) << QStringLiteral("Socket 错误") << m_cameraIp << QStringLiteral("：") << socketError << errorMsg;
     emit error(m_cameraIp, errorMsg);
 }
 
@@ -165,7 +165,7 @@ HikSmartCameraTcpServer::~HikSmartCameraTcpServer()
 bool HikSmartCameraTcpServer::start(const QString& listenIp, quint16 port)
 {
     if (m_tcpServer->isListening()) {
-        qWarning(hikTcpLog) << "Server already listening";
+        qWarning(hikTcpLog) << QStringLiteral("服务器已在监听");
         return false;
     }
 
@@ -176,7 +176,7 @@ bool HikSmartCameraTcpServer::start(const QString& listenIp, quint16 port)
     
     if (!m_tcpServer->listen(address, port)) {
         QString errorMsg = m_tcpServer->errorString();
-        qCritical(hikTcpLog) << "Failed to start TCP server on" << listenIp << ":" << port << "-" << errorMsg;
+        qCritical(hikTcpLog) << QStringLiteral("TCP 服务器启动失败") << listenIp << QStringLiteral(":") << port << QStringLiteral(" - ") << errorMsg;
         emit error(QStringLiteral("TCP 服务器启动失败: %1").arg(errorMsg));
         return false;
     }
@@ -231,7 +231,7 @@ QStringList HikSmartCameraTcpServer::connectedCameras() const
 bool HikSmartCameraTcpServer::sendCommandToCamera(const QString& cameraIp, const QString& command)
 {
     if (!m_sessions.contains(cameraIp)) {
-        qWarning(hikTcpLog) << "Camera not connected:" << cameraIp;
+        qWarning(hikTcpLog) << QStringLiteral("相机未连接：") << cameraIp;
         return false;
     }
 
@@ -256,7 +256,7 @@ void HikSmartCameraTcpServer::onNewConnection()
 
         // 如果已存在连接，先断开旧的
         if (m_sessions.contains(cameraIp)) {
-            qWarning(hikTcpLog) << "Camera already connected, replacing old session:" << cameraIp;
+            qWarning(hikTcpLog) << QStringLiteral("相机已连接，替换旧会话：") << cameraIp;
             m_sessions[cameraIp]->deleteLater();
             m_sessions.remove(cameraIp);
         }
@@ -279,7 +279,7 @@ void HikSmartCameraTcpServer::onNewConnection()
                     emit error(QStringLiteral("相机 %1 错误: %2").arg(cameraIp, errorMsg));
                 });
 
-        qInfo(hikTcpLog) << "Camera connected:" << cameraIp << ":" << cameraPort;
+        qInfo(hikTcpLog) << QStringLiteral("相机已连接：") << cameraIp << QStringLiteral(":") << cameraPort;
         emit cameraConnected(cameraIp, cameraPort);
     }
 }
@@ -289,7 +289,7 @@ void HikSmartCameraTcpServer::onSessionDisconnected(QString cameraIp)
     if (m_sessions.contains(cameraIp)) {
         m_sessions[cameraIp]->deleteLater();
         m_sessions.remove(cameraIp);
-        qInfo(hikTcpLog) << "Session removed:" << cameraIp;
+        qInfo(hikTcpLog) << QStringLiteral("会话已移除：") << cameraIp;
         emit cameraDisconnected(cameraIp);
     }
 }
@@ -302,8 +302,8 @@ void HikSmartCameraTcpServer::onHeartbeatTimeout()
     for (auto it = m_sessions.begin(); it != m_sessions.end(); ++it) {
         qint64 elapsed = now - it.value()->lastHeartbeatTime();
         if (elapsed > m_heartbeatTimeoutMs) {
-            qWarning(hikTcpLog) << "Camera heartbeat timeout:" << it.key()
-                                << "elapsed:" << elapsed << "ms";
+            qWarning(hikTcpLog) << QStringLiteral("相机心跳超时：") << it.key()
+                                << QStringLiteral(" elapsed=") << elapsed << QStringLiteral("ms");
             timeoutCameras.append(it.key());
         }
     }

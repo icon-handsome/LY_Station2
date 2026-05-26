@@ -103,8 +103,8 @@ void ConsoleRuntime::initModules()
             startupStage = 5;
         }
     }
-    qInfo(appLog) << "启动阶段 =" << startupStage
-                  << "(0=Modbus, 1=+MechEye, 2=+Hik, 3=+VisionPipeline, 4=+Tracking, 5=+StateMachine)";
+    qInfo(appLog) << QStringLiteral("启动阶段 =") << startupStage
+                  << QStringLiteral(" (0=Modbus, 1=+MechEye, 2=+Hik, 3=+VisionPipeline, 4=+Tracking, 5=+StateMachine)");
 
     modbusService_ = std::make_unique<scan_tracking::modbus::ModbusService>(&application_);
     qInfo(appLog) << "Modbus 服务已创建。";
@@ -124,18 +124,18 @@ void ConsoleRuntime::initModules()
         mechEyeService_.get(),
         &scan_tracking::mech_eye::MechEyeService::stateChanged,
         [](scan_tracking::mech_eye::CameraRuntimeState state, const QString& description) {
-            qInfo(appLog) << "[MechEye] 状态 =" << static_cast<int>(state) << description;
+            qInfo(appLog) << QStringLiteral("[梅卡] 状态 =") << static_cast<int>(state) << description;
         });
 
     QObject::connect(
         mechEyeService_.get(),
         &scan_tracking::mech_eye::MechEyeService::fatalError,
         [](scan_tracking::mech_eye::CaptureErrorCode code, const QString& message) {
-            qCritical(appLog) << "[MechEye] 致命错误：" << static_cast<int>(code) << message;
+            qCritical(appLog) << QStringLiteral("[梅卡] 致命错误：") << static_cast<int>(code) << message;
         });
 
     mechEyeService_->start();
-    qInfo(appLog) << "MechEye 服务已启动。";
+    qInfo(appLog) << QStringLiteral("梅卡相机服务已启动。");
 
     const auto* configManager = scan_tracking::common::ConfigManager::instance();
     const auto visionConfig = configManager != nullptr
@@ -152,13 +152,13 @@ void ConsoleRuntime::initModules()
         hikCameraAService_.get(),
         &scan_tracking::vision::HikCameraService::stateChanged,
         [](const QString& roleName, const QString& stateText, const QString& description) {
-            qInfo(appLog) << "[HikCamera]" << roleName << stateText << description;
+            qInfo(appLog) << QStringLiteral("[海康]") << roleName << stateText << description;
         });
     QObject::connect(
         hikCameraBService_.get(),
         &scan_tracking::vision::HikCameraService::stateChanged,
         [](const QString& roleName, const QString& stateText, const QString& description) {
-            qInfo(appLog) << "[HikCamera]" << roleName << stateText << description;
+            qInfo(appLog) << QStringLiteral("[海康]") << roleName << stateText << description;
         });
 
     hikCameraAService_->start(
@@ -180,18 +180,18 @@ void ConsoleRuntime::initModules()
         hikCameraCService_.get(),
         &scan_tracking::vision::HikCameraService::stateChanged,
         [](const QString& roleName, const QString& stateText, const QString& description) {
-            qInfo(appLog) << "[HikCamera]" << roleName << stateText << description;
+            qInfo(appLog) << QStringLiteral("[海康]") << roleName << stateText << description;
         });
     QObject::connect(
         hikCameraCService_.get(),
         &scan_tracking::vision::HikCameraService::fatalError,
         [](scan_tracking::vision::VisionErrorCode code, const QString& message) {
-            qCritical(appLog) << "[HikCamera] hik_camera_c 致命错误：" 
+            qCritical(appLog) << QStringLiteral("[海康] hik_camera_c 致命错误：")
                               << static_cast<int>(code) << message;
         });
 
     hikCameraCService_->start(visionConfig.hikCameraC, visionConfig.hikCaptureTimeoutMs);
-    qInfo(appLog) << "HikCamera C 服务已启动（仅连接，不采集）。";
+    qInfo(appLog) << QStringLiteral("海康 C 相机服务已启动（仅连接，不采集）。");
 
     // 海康相机 C 控制器（独立管理第三台相机 - 智能相机）
     // 使用 TCP 通信协议进行控制和图像获取
@@ -202,13 +202,13 @@ void ConsoleRuntime::initModules()
         hikCameraCController_.get(),
         &scan_tracking::vision::HikCameraCController::stateChanged,
         [](scan_tracking::vision::HikCameraCState state, const QString& description) {
-            qInfo(appLog) << "[HikCameraCController] 状态 =" << static_cast<int>(state) << description;
+            qInfo(appLog) << QStringLiteral("[海康C控制器] 状态 =") << static_cast<int>(state) << description;
         });
     QObject::connect(
         hikCameraCController_.get(),
         &scan_tracking::vision::HikCameraCController::fatalError,
         [](scan_tracking::vision::VisionErrorCode code, const QString& message) {
-            qCritical(appLog) << "[HikCameraCController] 致命错误：" 
+            qCritical(appLog) << QStringLiteral("[海康C控制器] 致命错误：")
                               << static_cast<int>(code) << message;
         });
     QObject::connect(
@@ -218,24 +218,24 @@ void ConsoleRuntime::initModules()
             QString typeStr;
             switch (type) {
                 case scan_tracking::vision::CaptureType::SurfaceDefect:
-                    typeStr = "SurfaceDefect";
+                    typeStr = QStringLiteral("表面缺陷");
                     break;
                 case scan_tracking::vision::CaptureType::WeldDefect:
-                    typeStr = "WeldDefect";
+                    typeStr = QStringLiteral("焊缝缺陷");
                     break;
                 case scan_tracking::vision::CaptureType::NumberRecognition:
-                    typeStr = "NumberRecognition";
+                    typeStr = QStringLiteral("编号识别");
                     break;
                 default:
-                    typeStr = "Unknown";
+                    typeStr = QStringLiteral("未知");
                     break;
             }
-            qInfo(appLog) << "[HikCameraCController] 采集完成：" << typeStr
-                          << imageData.size() << "字节";
+            qInfo(appLog) << QStringLiteral("[海康C控制器] 采集完成：") << typeStr
+                          << imageData.size() << QStringLiteral("字节");
         });
 
     hikCameraCController_->start(visionConfig);
-    qInfo(appLog) << "HikCamera C 控制器已启动（TCP 通信模式）。";
+    qInfo(appLog) << QStringLiteral("海康 C 相机控制器已启动（TCP 通信模式）。");
 
 
     // 统一视觉编排层负责把“1 份点云 + 2 份矩阵”收口为一个算法输入包。
@@ -248,14 +248,14 @@ void ConsoleRuntime::initModules()
         visionPipelineService_.get(),
         &scan_tracking::vision::VisionPipelineService::stateChanged,
         [](scan_tracking::vision::VisionPipelineState state, const QString& description) {
-            qInfo(appLog) << "[VisionPipeline] 状态 =" << static_cast<int>(state) << description;
+            qInfo(appLog) << QStringLiteral("[视觉流水线] 状态 =") << static_cast<int>(state) << description;
         });
     QObject::connect(
         visionPipelineService_.get(),
         &scan_tracking::vision::VisionPipelineService::bundleCaptureFinished,
         &application_,
         [this](const scan_tracking::vision::MultiCameraCaptureBundle& bundle) {
-            qInfo(appLog) << "[VisionPipeline]" << bundle.summary();
+            qInfo(appLog) << QStringLiteral("[视觉流水线]") << bundle.summary();
             if (m_autoLatencyTestPending) {
                 onAutoLatencyBundleFinished(bundle);
             }
@@ -405,7 +405,7 @@ void ConsoleRuntime::triggerAutoLatencyBundleTest()
     const QString periodicText = m_autoLatencyPeriodic ? QStringLiteral("true") : QStringLiteral("false");
 
     qInfo(appLog).noquote()
-        << QStringLiteral("[ScanSync] trigger %1 (auto latency test round=%2)")
+        << QStringLiteral("[ScanSync] 触发 %1（自动延时测试 round=%2）")
                .arg(triggerMs)
                .arg(roundIndex);
 
@@ -422,8 +422,7 @@ void ConsoleRuntime::triggerAutoLatencyBundleTest()
 
     qInfo(appLog).noquote()
         << QStringLiteral(
-               "[LatencyTest] 已发送组合采集 requestId=%1 segment=%2 taskId=%3 mechMode=Capture2DOnly "
-               "periodic=%4")
+               "[LatencyTest] 已发送组合采集 requestId=%1 segment=%2 taskId=%3 mechMode=仅2D periodic=%4")
                .arg(requestId)
                .arg(kTestSegmentIndex)
                .arg(taskId)
@@ -475,20 +474,20 @@ void ConsoleRuntime::onAutoLatencyBundleFinished(
                .arg(finishedMs)
                .arg(wallMs);
     qInfo(appLog).noquote()
-        << QStringLiteral("[LatencyTest] Mech 2D: success=%1 elapsedMs=%2 texture=%3x%4")
+        << QStringLiteral("[LatencyTest] Mech 2D：成功=%1 耗时ms=%2 纹理=%3x%4")
                .arg(mechOk)
                .arg(mechElapsedMs)
                .arg(mechTexW)
                .arg(mechTexH);
     qInfo(appLog).noquote()
-        << QStringLiteral("[LatencyTest] Hik A: success=%1 elapsedMs=%2 frame=%3x%4 timestampMs=%5")
+        << QStringLiteral("[LatencyTest] 海康 A：成功=%1 耗时ms=%2 帧=%3x%4 时间戳ms=%5")
                .arg(hikAOk)
                .arg(hikAElapsedMs)
                .arg(hikAW)
                .arg(hikAH)
                .arg(hikATs);
     qInfo(appLog).noquote()
-        << QStringLiteral("[LatencyTest] Hik B: success=%1 elapsedMs=%2 frame=%3x%4 timestampMs=%5")
+        << QStringLiteral("[LatencyTest] 海康 B：成功=%1 耗时ms=%2 帧=%3x%4 时间戳ms=%5")
                .arg(hikBOk)
                .arg(hikBElapsedMs)
                .arg(hikBW)
@@ -507,7 +506,7 @@ void ConsoleRuntime::onAutoLatencyBundleFinished(
     }
 
     qInfo(appLog).noquote()
-        << QStringLiteral("[LatencyTest] 日志中搜索 [ScanSync] 可对比 trigger / mech / hik_a / hik_b 的 epoch ms");
+        << QStringLiteral("[LatencyTest] 日志中搜索 [ScanSync] 可对比触发时刻 / 梅卡 / 海康_a / 海康_b 的 epoch ms");
     qInfo(appLog).noquote() << QStringLiteral("[LatencyTest] ================================");
 
     const auto* configManager = scan_tracking::common::ConfigManager::instance();
@@ -544,7 +543,7 @@ void ConsoleRuntime::onAutoLatencyBundleFinished(
     }
 
     qInfo(appLog).noquote()
-        << QStringLiteral("[LatencyTest] 落盘目录 cacheRoot=%1 mech2d=%2 hikA=%3 hikB=%4")
+        << QStringLiteral("[LatencyTest] 落盘目录 cacheRoot=%1 mech2d=%2 海康A=%3 海康B=%4")
                .arg(cacheRoot, mechPngPath, hikAPath, hikBPath);
 }
 

@@ -322,7 +322,7 @@ void MechEyeWorker::performCapture(const scan_tracking::mech_eye::CaptureRequest
         mmind::eye::ErrorStatus status;
 
         qInfo(LOG_MECHEYE_WORKER).noquote()
-            << "[ScanSync] mech" << QDateTime::currentMSecsSinceEpoch();
+            << QStringLiteral("[ScanSync] 梅卡采集时刻 ms=") << QDateTime::currentMSecsSinceEpoch();
 
         if (normalized.mode == CaptureMode::Capture2DOnly) {
             mmind::eye::Frame2D frame2D;
@@ -343,7 +343,10 @@ void MechEyeWorker::performCapture(const scan_tracking::mech_eye::CaptureRequest
                 const auto& visionCfg = common::ConfigManager::instance()->visionConfig();
                 mmind::eye::Range<int> configuredRange(visionCfg.mechDepthRangeMin, visionCfg.mechDepthRangeMax);
                 auto setStatus = userSet.setRangeValue("DepthRange", configuredRange);
-                qInfo(LOG_MECHEYE_WORKER) << "[深度范围] 设置为 [" << configuredRange.min << "," << configuredRange.max << "] mm, status=" << setStatus.isOK();
+                qInfo(LOG_MECHEYE_WORKER) << QStringLiteral("[深度范围] 设置为 [")
+                                          << configuredRange.min << QStringLiteral(",")
+                                          << configuredRange.max << QStringLiteral("] mm，成功=")
+                                          << setStatus.isOK();
             }
 
             // 先尝试 capture3D（不含相机侧法向量计算）
@@ -370,7 +373,7 @@ void MechEyeWorker::performCapture(const scan_tracking::mech_eye::CaptureRequest
 
                 if (validCount == 0) {
                     qWarning(LOG_MECHEYE_WORKER)
-                        << "点云全NaN，请检查DepthRange配置和目标物距离；分段 PLY 由 ScanTracking_CaptureCache 落盘";
+                        << QStringLiteral("点云全 NaN，请检查 DepthRange 配置和目标物距离；本段将不会写入内存缓存");
                 }
             }
         } else {
@@ -429,13 +432,13 @@ void MechEyeWorker::performCapture(const scan_tracking::mech_eye::CaptureRequest
         m_busy = false;
         setRuntimeState(CameraRuntimeState::Ready, QStringLiteral("采集成功，等待下一次触发"));
         qInfo(LOG_MECHEYE_WORKER).noquote()
-            << "采集成功"
-            << "requestId=" << result.requestId
-            << "mode=" << static_cast<int>(result.mode)
-            << "pointCount=" << result.pointCloud.pointCount
-            << "texture2D=" << result.texture2D.width << "x" << result.texture2D.height
-            << "normalCount=" << result.pointCloud.normalCount()
-            << "elapsedMs=" << result.elapsedMs;
+            << QStringLiteral("梅卡采集成功")
+            << QStringLiteral(" 请求ID=") << result.requestId
+            << QStringLiteral(" 模式=") << static_cast<int>(result.mode)
+            << QStringLiteral(" 点数=") << result.pointCloud.pointCount
+            << QStringLiteral(" 纹理2D=") << result.texture2D.width << QStringLiteral("x") << result.texture2D.height
+            << QStringLiteral(" 法向数=") << result.pointCloud.normalCount()
+            << QStringLiteral(" 耗时ms=") << result.elapsedMs;
         emit captureFinished(result);
 #if defined(__cpp_exceptions) || defined(_CPPUNWIND)
     } catch (const std::exception& exception) {

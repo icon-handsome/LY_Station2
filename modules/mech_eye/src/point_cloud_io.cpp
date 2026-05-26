@@ -53,7 +53,7 @@ QString buildSegmentPlyPath(
 bool savePointCloudFrameToPly(const PointCloudFrame& frame, const QString& absolutePath)
 {
     if (!frame.isValid() || absolutePath.trimmed().isEmpty()) {
-        qWarning(LOG_POINT_CLOUD_IO) << "savePointCloudFrameToPly: invalid frame or path";
+        qWarning(LOG_POINT_CLOUD_IO) << QStringLiteral("savePointCloudFrameToPly：帧或路径无效");
         return false;
     }
 
@@ -65,7 +65,7 @@ bool savePointCloudFrameToPly(const PointCloudFrame& frame, const QString& absol
     const int availablePointCount = static_cast<int>(points.size() / 3);
     const int count = std::min(pointCount, availablePointCount);
     if (count <= 0) {
-        qWarning(LOG_POINT_CLOUD_IO) << "savePointCloudFrameToPly: no points";
+        qWarning(LOG_POINT_CLOUD_IO) << QStringLiteral("savePointCloudFrameToPly：无有效点");
         return false;
     }
 
@@ -78,7 +78,7 @@ bool savePointCloudFrameToPly(const PointCloudFrame& frame, const QString& absol
     }
 
     if (validCount == 0) {
-        qWarning(LOG_POINT_CLOUD_IO) << "savePointCloudFrameToPly: all points are NaN";
+        qWarning(LOG_POINT_CLOUD_IO) << QStringLiteral("savePointCloudFrameToPly：全部为 NaN 点");
         return false;
     }
 
@@ -88,7 +88,7 @@ bool savePointCloudFrameToPly(const PointCloudFrame& frame, const QString& absol
     std::ofstream ofs(absolutePath.toStdString(), std::ios::binary);
     if (!ofs.is_open()) {
         qWarning(LOG_POINT_CLOUD_IO).noquote()
-            << "savePointCloudFrameToPly: cannot open" << absolutePath;
+            << QStringLiteral("savePointCloudFrameToPly：无法打开") << absolutePath;
         return false;
     }
 
@@ -119,9 +119,9 @@ bool savePointCloudFrameToPly(const PointCloudFrame& frame, const QString& absol
     ofs.close();
 
     qInfo(LOG_POINT_CLOUD_IO).noquote()
-        << "PLY saved:" << absolutePath
-        << "validPoints=" << validCount
-        << "/" << count;
+        << QStringLiteral("PLY 已保存：") << absolutePath
+        << QStringLiteral(" validPoints=") << validCount
+        << QStringLiteral("/") << count;
 
     return true;
 }
@@ -135,14 +135,14 @@ bool loadPointCloudFrameFromPly(const QString& absolutePath, PointCloudFrame* ou
     QFile file(absolutePath);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         qWarning(LOG_POINT_CLOUD_IO).noquote()
-            << "loadPointCloudFrameFromPly: cannot open" << absolutePath;
+            << QStringLiteral("loadPointCloudFrameFromPly：无法打开") << absolutePath;
         return false;
     }
 
     QTextStream stream(&file);
     QString line = stream.readLine().trimmed();
     if (line != QStringLiteral("ply")) {
-        qWarning(LOG_POINT_CLOUD_IO) << "loadPointCloudFrameFromPly: missing ply header";
+        qWarning(LOG_POINT_CLOUD_IO) << QStringLiteral("loadPointCloudFrameFromPly：缺少 PLY 头");
         return false;
     }
 
@@ -162,7 +162,7 @@ bool loadPointCloudFrameFromPly(const QString& absolutePath, PointCloudFrame* ou
     }
 
     if (vertexCount <= 0) {
-        qWarning(LOG_POINT_CLOUD_IO) << "loadPointCloudFrameFromPly: invalid vertex count";
+        qWarning(LOG_POINT_CLOUD_IO) << QStringLiteral("loadPointCloudFrameFromPly：顶点数量无效");
         return false;
     }
 
@@ -213,7 +213,7 @@ bool loadPointCloudFrameFromPly(const QString& absolutePath, PointCloudFrame* ou
 
     if (points->empty()) {
         qWarning(LOG_POINT_CLOUD_IO).noquote()
-            << "loadPointCloudFrameFromPly: no valid points in" << absolutePath;
+            << QStringLiteral("loadPointCloudFrameFromPly：无有效点") << absolutePath;
         return false;
     }
 
@@ -229,9 +229,9 @@ bool loadPointCloudFrameFromPly(const QString& absolutePath, PointCloudFrame* ou
     outFrame->height = 1;
 
     qInfo(LOG_POINT_CLOUD_IO).noquote()
-        << "PLY loaded:" << absolutePath
-        << "pointCount=" << pointCount
-        << "hasNormals=" << outFrame->hasNormals();
+        << QStringLiteral("PLY 已加载：") << absolutePath
+        << QStringLiteral(" pointCount=") << pointCount
+        << QStringLiteral(" hasNormals=") << outFrame->hasNormals();
 
     return true;
 }
@@ -284,12 +284,12 @@ bool saveGrayTextureFrameToPng(const GrayTextureFrame& frame, const QString& abs
     }
 
     if (!image.save(absolutePath, "PNG")) {
-        qWarning(LOG_POINT_CLOUD_IO).noquote() << "saveGrayTextureFrameToPng failed:" << absolutePath;
+        qWarning(LOG_POINT_CLOUD_IO).noquote() << QStringLiteral("saveGrayTextureFrameToPng 失败：") << absolutePath;
         return false;
     }
 
     qInfo(LOG_POINT_CLOUD_IO).noquote()
-        << "Mech 2D PNG saved:" << absolutePath << frame.width << "x" << frame.height;
+        << QStringLiteral("Mech 2D PNG 已保存：") << absolutePath << frame.width << QStringLiteral("x") << frame.height;
     return true;
 }
 

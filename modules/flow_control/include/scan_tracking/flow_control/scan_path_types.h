@@ -14,17 +14,15 @@ namespace flow_control {
  * @brief 单个扫描点位的结果
  * 
  * 包含一个点位的所有采集数据和位姿矩阵。
- * 采用流式处理策略：点云数据保存为 PLY 文件，只缓存文件路径。
+ * 多路径调度预留：当前主流程（PLC 按段触发）在 StateMachine 内存缓存点云与海康帧。
  */
 struct ScanPointResult {
     // 点位标识
     int pathId;                  // 所属路径 ID
     int pointIndex;              // 点位索引（从 1 开始）
 
-    // 点云数据（流式处理：只存文件路径，不缓存点云数据）
-    QString pointCloudPath;      // PLY 文件路径
-    
-    // 海康图像路径（落盘至 hik_mono/camera_a|camera_b/*.bmp 后仅存路径，像素在 bundle 内已释放）
+    // 多路径预留：主流程使用 m_segmentCaptureResults / m_segmentCaptureBundles 内存缓存
+    QString pointCloudPath;
     QString hikMonoPathA;
     QString hikMonoPathB;
     
@@ -65,7 +63,7 @@ struct ScanPointResult {
     /**
      * @brief 检查点位结果是否有效
      * 
-     * @return 点云文件路径非空则认为有效
+     * @return 多路径场景下点云路径非空则认为有效（主流程请查内存缓存）
      */
     bool isValid() const {
         return !pointCloudPath.isEmpty();

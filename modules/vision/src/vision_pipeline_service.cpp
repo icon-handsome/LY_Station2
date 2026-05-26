@@ -162,9 +162,9 @@ quint64 VisionPipelineService::requestCaptureBundle(
     pending.bundle.request = request;
 
     const bool invokeLbn = request.needMechEye2D && m_lbnPoseConfig.enabled;
-    qInfo() << "[VisionPipeline] segment=" << segmentIndex
-            << "needMechEye2D=" << request.needMechEye2D
-            << "mechMode=" << static_cast<int>(mechCaptureMode);
+    qInfo() << QStringLiteral("[VisionPipeline] 段号=") << segmentIndex
+            << QStringLiteral(" 需梅卡2D=") << request.needMechEye2D
+            << QStringLiteral(" 梅卡模式=") << static_cast<int>(mechCaptureMode);
     pending.mechRequestId = m_mechEyeService->requestCapture(
         request.mechEyeCameraKey,
         mechCaptureMode,
@@ -259,9 +259,9 @@ void VisionPipelineService::finishBundleIfReady()
     m_processing = true;
     setState(
         VisionPipelineState::Capturing,
-        QStringLiteral("Mech-Eye 采集完成，正在处理视觉结果（hik=%1, lbn=%2）")
-            .arg(hikReady ? QStringLiteral("ok") : QStringLiteral("skip"))
-            .arg(runLbn ? QStringLiteral("on") : QStringLiteral("off")));
+        QStringLiteral("Mech-Eye 采集完成，正在处理视觉结果（海康=%1, LBN=%2）")
+            .arg(hikReady ? QStringLiteral("就绪") : QStringLiteral("跳过"))
+            .arg(runLbn ? QStringLiteral("开") : QStringLiteral("关")));
 
     const auto lbConfig = m_lbPoseConfig;
     const auto lbnConfig = m_lbnPoseConfig;
@@ -274,16 +274,16 @@ void VisionPipelineService::finishBundleIfReady()
                 completedBundle.lbnPoseResult = makeIdentityLbnBypassResult();
                 qWarning() << "[LBN位姿]" << completedBundle.lbnPoseResult.message;
             } else {
-                qInfo() << "[LBN位姿] 开始检测"
-                        << "texture=" << bundle.mechEyeResult.texture2D.width << "x"
+                qInfo() << QStringLiteral("[LBN位姿] 开始检测")
+                        << QStringLiteral(" 纹理=") << bundle.mechEyeResult.texture2D.width << QStringLiteral("x")
                         << bundle.mechEyeResult.texture2D.height
-                        << "cloud=" << bundle.mechEyeResult.pointCloud.width << "x"
+                        << QStringLiteral(" 点云网格=") << bundle.mechEyeResult.pointCloud.width << QStringLiteral("x")
                         << bundle.mechEyeResult.pointCloud.height;
                 completedBundle.lbnPoseResult = runLbnPoseDetection(bundle.mechEyeResult, lbnConfig);
             }
             const auto& lbn = completedBundle.lbnPoseResult;
-            qInfo() << "[LBN位姿] 完成: invoked=" << lbn.invoked << "success=" << lbn.success
-                    << "message=" << lbn.message << "matched=" << lbn.matchedPointCount;
+            qInfo() << QStringLiteral("[LBN位姿] 完成：已调用=") << lbn.invoked << QStringLiteral(" 成功=") << lbn.success
+                    << QStringLiteral(" 说明=") << lbn.message << QStringLiteral(" 匹配点数=") << lbn.matchedPointCount;
         } else {
             completedBundle.lbnPoseResult.invoked = false;
             completedBundle.lbnPoseResult.message =
@@ -293,9 +293,9 @@ void VisionPipelineService::finishBundleIfReady()
         }
 
         if (hikReady) {
-            qInfo() << "[LB位姿] 开始检测, leftFrame=" << bundle.hikCameraAResult.frame.width << "x"
+            qInfo() << QStringLiteral("[LB位姿] 开始检测，左目=") << bundle.hikCameraAResult.frame.width << QStringLiteral("x")
                     << bundle.hikCameraAResult.frame.height
-                    << "rightFrame=" << bundle.hikCameraBResult.frame.width << "x"
+                    << QStringLiteral(" 右目=") << bundle.hikCameraBResult.frame.width << QStringLiteral("x")
                     << bundle.hikCameraBResult.frame.height;
 
             completedBundle.lbPoseResult = runLbPoseDetection(
@@ -304,10 +304,10 @@ void VisionPipelineService::finishBundleIfReady()
                 lbConfig);
 
             const auto& lr = completedBundle.lbPoseResult;
-            qInfo() << "[LB位姿] 完成: success=" << lr.success << "message=" << lr.message
-                    << "framePointCount=" << lr.framePointCount;
+            qInfo() << QStringLiteral("[LB位姿] 完成：成功=") << lr.success << QStringLiteral(" 说明=") << lr.message
+                    << QStringLiteral(" 帧点数=") << lr.framePointCount;
             if (lr.poseMatrix.valid) {
-                qInfo() << "[LB位姿] Rt矩阵:";
+                qInfo() << QStringLiteral("[LB位姿] Rt 矩阵：");
                 for (int row = 0; row < 4; ++row) {
                     qInfo().noquote() << QString("  [%1, %2, %3, %4]")
                         .arg(static_cast<double>(lr.poseMatrix.values[row * 4 + 0]), 12, 'f', 6)
