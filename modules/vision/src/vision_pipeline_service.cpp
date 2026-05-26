@@ -13,6 +13,22 @@
 namespace scan_tracking {
 namespace vision {
 
+namespace {
+
+LbnPoseResult makeIdentityLbnBypassResult()
+{
+    LbnPoseResult result;
+    result.invoked = true;
+    result.success = true;
+    result.poseMatrix.valid = true;
+    result.matchedPointCount = 0;
+    result.message = QStringLiteral(
+        "TODO(marker): 未安装标记点，useIdentityRtWithoutMarkers=true，Rt 使用 4×4 单位阵。");
+    return result;
+}
+
+}  // namespace
+
 void VisionPipelineService::registerMetaTypes()
 {
     static bool registered = false;
@@ -254,12 +270,17 @@ void VisionPipelineService::finishBundleIfReady()
         auto completedBundle = bundle;
 
         if (runLbn) {
-            qInfo() << "[LBN位姿] 开始检测"
-                    << "texture=" << bundle.mechEyeResult.texture2D.width << "x"
-                    << bundle.mechEyeResult.texture2D.height
-                    << "cloud=" << bundle.mechEyeResult.pointCloud.width << "x"
-                    << bundle.mechEyeResult.pointCloud.height;
-            completedBundle.lbnPoseResult = runLbnPoseDetection(bundle.mechEyeResult, lbnConfig);
+            if (lbnConfig.useIdentityRtWithoutMarkers) {
+                completedBundle.lbnPoseResult = makeIdentityLbnBypassResult();
+                qWarning() << "[LBN位姿]" << completedBundle.lbnPoseResult.message;
+            } else {
+                qInfo() << "[LBN位姿] 开始检测"
+                        << "texture=" << bundle.mechEyeResult.texture2D.width << "x"
+                        << bundle.mechEyeResult.texture2D.height
+                        << "cloud=" << bundle.mechEyeResult.pointCloud.width << "x"
+                        << bundle.mechEyeResult.pointCloud.height;
+                completedBundle.lbnPoseResult = runLbnPoseDetection(bundle.mechEyeResult, lbnConfig);
+            }
             const auto& lbn = completedBundle.lbnPoseResult;
             qInfo() << "[LBN位姿] 完成: invoked=" << lbn.invoked << "success=" << lbn.success
                     << "message=" << lbn.message << "matched=" << lbn.matchedPointCount;

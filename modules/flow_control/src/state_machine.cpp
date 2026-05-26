@@ -2225,14 +2225,26 @@ void StateMachine::applyLbnCalibrationUpdate(
             << "LBN not invoked, keep current T0'";
         return;
     }
+    const bool useIdentityBypass = []() {
+        const auto* cfg = scan_tracking::common::ConfigManager::instance();
+        return cfg && cfg->lbnPoseConfig().useIdentityRtWithoutMarkers;
+    }();
+
     if (!lbn.success || !lbn.poseMatrix.isValid()) {
+        if (!useIdentityBypass) {
+            qWarning(LOG_FLOW).noquote()
+                << "LBN calibration: segment=" << segmentIndex
+                << "LBN failed, keep current T0':" << lbn.message;
+            return;
+        }
         qWarning(LOG_FLOW).noquote()
             << "LBN calibration: segment=" << segmentIndex
-            << "LBN failed, keep current T0':" << lbn.message;
-        return;
+            << "LBN failed, TODO(marker) fallback Rt=I:" << lbn.message;
     }
 
-    const auto rt = poseMatrixToArray(lbn.poseMatrix);
+    const auto rt = (lbn.success && lbn.poseMatrix.isValid())
+        ? poseMatrixToArray(lbn.poseMatrix)
+        : identityMatrix4x4();
     m_currentCalibrationMatrix = multiplyRowMajor4x4(rt, m_currentCalibrationMatrix);
     m_segmentCalibrationMatrices.insert(segmentIndex, m_currentCalibrationMatrix);
 

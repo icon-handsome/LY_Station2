@@ -165,6 +165,7 @@ void ConfigManager::writeDefaults(QSettings& settings)
     // 首次生成 config.ini 时的 [LbnPose] 默认（与 150200 离线验收一致，生产宜再标定）
     settings.beginGroup("LbnPose");
     settings.setValue("enabled", true);
+    settings.setValue("useIdentityRtWithoutMarkers", false);
     settings.setValue("dataRoot", "D:/work/LY/IPC-192.168.110.173_track-main/third_party/LBN/data");
     settings.setValue("templateFile", "D:/work/LY/IPC-192.168.110.173_track-main/third_party/LBN/data/template-3D-ALL-Shift-Cut-Cut.txt");
     settings.setValue("minDistance", 20.0);
@@ -273,6 +274,8 @@ void ConfigManager::load(const QString& filePath)
     // [LbnPose] 默认值与 testdata/test 150200 离线调通一致；上线前请多扫描验证，见 docs/LBN离线调通交接说明.md
     settings.beginGroup("LbnPose");
     m_lbnPoseConfig.enabled = settings.value("enabled", true).toBool();
+    m_lbnPoseConfig.useIdentityRtWithoutMarkers =
+        settings.value("useIdentityRtWithoutMarkers", false).toBool();
     m_lbnPoseConfig.dataRoot = settings.value(
         "dataRoot",
         QStringLiteral("D:/work/LY/IPC-192.168.110.173_track-main/third_party/LBN/data"))
@@ -428,8 +431,6 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
         
         ScanPathConfig pathConfig;
         pathConfig.pathId = pathObj.value("pathId").toInt();
-        pathConfig.pathName = pathObj.value("pathName").toString();
-        pathConfig.description = pathObj.value("description").toString();
         pathConfig.enabled = pathObj.value("enabled").toBool(true);
         pathConfig.totalPoints = pathObj.value("totalPoints").toInt();
         
@@ -443,10 +444,7 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
             
             ScanPointConfig pointConfig;
             pointConfig.pointIndex = pointObj.value("pointIndex").toInt();
-            pointConfig.pointName = pointObj.value("pointName").toString();
             pointConfig.needRotation = pointObj.value("needRotation").toBool(false);
-            pointConfig.rotationAngle = static_cast<float>(pointObj.value("rotationAngle").toDouble(0.0));
-            pointConfig.description = pointObj.value("description").toString();
             
             pathConfig.points.push_back(pointConfig);
         }
@@ -489,7 +487,7 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
     // 输出每条路径的详细信息
     for (const auto& path : m_scanPathsConfig.scanPaths) {
         qInfo(LOG_CONFIG).noquote()
-            << "  路径" << path.pathId << ":" << path.pathName
+            << "  路径" << path.pathId
             << "启用=" << path.enabled
             << "点位数=" << path.points.size();
     }

@@ -20,8 +20,7 @@ struct ScanPointResult {
     // 点位标识
     int pathId;                  // 所属路径 ID
     int pointIndex;              // 点位索引（从 1 开始）
-    QString pointName;           // 点位名称
-    
+
     // 点云数据（流式处理：只存文件路径，不缓存点云数据）
     QString pointCloudPath;      // PLY 文件路径
     
@@ -35,7 +34,6 @@ struct ScanPointResult {
     
     // 元数据
     bool needRotation;           // 是否需要转动转盘
-    float rotationAngle;         // 转盘目标角度（度）
     qint64 timestampMs;          // 采集时间戳（毫秒）
     qint64 elapsedMs;            // 采集耗时（毫秒）
     
@@ -46,7 +44,6 @@ struct ScanPointResult {
         : pathId(-1)
         , pointIndex(-1)
         , needRotation(false)
-        , rotationAngle(0.0f)
         , timestampMs(0)
         , elapsedMs(0)
     {
@@ -82,7 +79,6 @@ struct ScanPointResult {
  */
 struct ScanPathResult {
     int pathId;                  // 路径 ID
-    QString pathName;            // 路径名称
     std::vector<ScanPointResult> pointResults;  // 所有点位的结果
     bool success;                // 路径是否成功完成
     QString errorMessage;        // 失败时的错误信息
@@ -199,9 +195,7 @@ struct ScanPointContext {
     int pathId;                  // 当前路径 ID
     int pathIndex;               // 当前路径索引（从 0 开始）
     int pointIndex;              // 当前点位索引（从 1 开始）
-    QString pointName;           // 当前点位名称
     bool needRotation;           // 是否需要转动
-    float rotationAngle;         // 转动角度
     qint64 startTimestampMs;     // 开始时间戳
     
     /**
@@ -212,7 +206,6 @@ struct ScanPointContext {
         , pathIndex(-1)
         , pointIndex(-1)
         , needRotation(false)
-        , rotationAngle(0.0f)
         , startTimestampMs(0)
     {
     }
@@ -233,9 +226,7 @@ struct ScanPointContext {
         pathId = -1;
         pathIndex = -1;
         pointIndex = -1;
-        pointName.clear();
         needRotation = false;
-        rotationAngle = 0.0f;
         startTimestampMs = 0;
     }
 };

@@ -97,6 +97,8 @@ struct LbPoseConfig {
 /** LBN 位姿检测配置。生产环境请多工况标定，勿仅按单帧离线 success 放大容差。 */
 struct LbnPoseConfig {
     bool enabled = true;
+    /// TODO(marker): 转盘未装标记点联调时 true：跳过 LBN 检测，Rt 用 4×4 单位阵，T0' 不变。
+    bool useIdentityRtWithoutMarkers = false;
     QString dataRoot;
     QString templateFile;
     float minDistance = 30.0f;   // mm，过小易纳入杂点三角形
@@ -112,26 +114,21 @@ struct LbnPoseConfig {
 
 /**
  * @brief 扫描点位配置
- * 
- * 定义单个扫描点位的参数，包括是否需要转动转盘、转动角度等。
+ *
+ * 定义单个扫描点位的参数；转盘角度由 LBN/状态机运行时解算，不在配置中指定。
  */
 struct ScanPointConfig {
     int pointIndex;           // 点位索引（从 1 开始）
-    QString pointName;        // 点位名称
     bool needRotation;        // 是否需要转动转盘（关键标志）
-    float rotationAngle;      // 转盘目标角度（度）
-    QString description;      // 点位描述
 };
 
 /**
  * @brief 扫描路径配置
- * 
+ *
  * 定义一条完整的扫描路径，包含多个点位。
  */
 struct ScanPathConfig {
     int pathId;               // 路径唯一标识符
-    QString pathName;         // 路径名称
-    QString description;      // 路径描述
     bool enabled;             // 是否启用此路径
     int totalPoints;          // 路径包含的点位总数
     std::vector<ScanPointConfig> points;  // 点位配置列表
