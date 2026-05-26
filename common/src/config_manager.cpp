@@ -111,7 +111,7 @@ void ConfigManager::writeDefaults(QSettings& settings)
 
     settings.beginGroup("Logger");
     settings.setValue("level", 0);
-    settings.setValue("rotateDays", 7);
+    settings.setValue("rotateDays", 0);  // 保留项，不触发日志删除/覆盖
     settings.endGroup();
 
     settings.beginGroup("Modbus");

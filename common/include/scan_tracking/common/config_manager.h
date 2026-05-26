@@ -16,6 +16,7 @@ struct AppConfig {
 
 struct LoggerConfig {
     int level;
+    // 保留字段：当前未实现自动清理/轮转，历史日志永久保留。
     int rotateDays;
 };
 

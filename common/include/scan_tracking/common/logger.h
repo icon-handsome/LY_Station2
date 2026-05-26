@@ -9,6 +9,7 @@ class QFile;
 
 namespace scan_tracking::common {
 
+// 按自然日各写一个 txt：logs/scan_tracking_yyyy-MM-dd.txt；跨日自动切换文件，仅追加、不覆盖历史。
 class Logger {
 public:
     static void initialize(const QString& log_dir = QStringLiteral("logs"));

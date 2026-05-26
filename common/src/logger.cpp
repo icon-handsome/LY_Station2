@@ -8,6 +8,16 @@
 #include <iostream>
 namespace scan_tracking::common {
 
+namespace {
+
+QString dailyLogFilePath(const QString& log_dir, const QDate& date)
+{
+    return QDir(log_dir).filePath(
+        QStringLiteral("scan_tracking_%1.txt").arg(date.toString(QStringLiteral("yyyy-MM-dd"))));
+}
+
+}  // namespace
+
 Logger* Logger::instance_ = nullptr;
 QtMessageHandler Logger::previous_handler_ = nullptr;
 
@@ -90,18 +100,36 @@ QString Logger::getLogSeverity(QtMsgType type) {
 }
 
 void Logger::openLogFile(const QDate& target_date) {
-    if (log_file_->isOpen()) {
+    // 仅追加模式：禁止 Truncate，保证同日重启与跨日切换均不覆盖历史日志。
+    static const QIODevice::OpenMode kLogOpenMode =
+        QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text;
+
+    if (!target_date.isValid()) {
+        return;
+    }
+
+    const QString file_path = dailyLogFilePath(log_dir_, target_date);
+
+    const QString previous_path = log_file_->fileName();
+    const bool was_open = log_file_->isOpen();
+    if (was_open) {
         log_file_->close();
     }
 
-    current_date_ = target_date;
-    QString date_str = current_date_.toString("yyyy-MM-dd");
-    QString file_path = QDir(log_dir_).filePath(QString("scan_tracking_%1.log").arg(date_str));
-    
     log_file_->setFileName(file_path);
-    if (!log_file_->open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+    if (!log_file_->open(kLogOpenMode)) {
         std::cerr << "严重错误：Logger 无法打开目标文件：" << file_path.toStdString() << "\n";
+        log_file_->setFileName(previous_path);
+        if (was_open && !previous_path.isEmpty()) {
+            if (!log_file_->open(kLogOpenMode)) {
+                std::cerr << "严重错误：Logger 无法恢复上一日志文件：" << previous_path.toStdString()
+                          << "\n";
+            }
+        }
+        return;
     }
+
+    current_date_ = target_date;
 }
 
 void Logger::messageHandler(QtMsgType type, const QMessageLogContext& context, const QString& msg) {
@@ -143,6 +171,7 @@ void Logger::log(QtMsgType type, const QMessageLogContext& context, const QStrin
     const QByteArray utf8Line = formatted_message.toUtf8() + '\n';
     if (log_file_ && log_file_->isOpen()) {
         log_file_->write(utf8Line);
+        log_file_->flush();
     }
 
     // 避免 QTextStream+iostream 混用导致 Debug 堆损坏；控制台仅写 UTF-8 行
