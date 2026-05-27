@@ -4,9 +4,11 @@
 #include <cmath>
 #include <cstdint>
 #include <exception>
+#include <mutex>
 #include <string>
 #include "log_manager/LogMacros.h"
 #include "detection/first/FirstOutSurfaceDetection.h"
+#include "scan_tracking/mech_eye/point_cloud_processor.h"
 
 namespace scan_tracking {
 namespace vision {
@@ -138,6 +140,8 @@ LanyouSmokeResult runFirstOutDetectionSmoke(
     result.inputPointCount = inputPointCount;
     result.invoked = true;
     try {
+        std::lock_guard<std::mutex> pclGuard(
+            scan_tracking::mech_eye::pointCloudAlgorithmMutex());
         FirstOutSurfaceDetection detector;
         result.success = detector.Detect(cloud);
         if (!result.success) {

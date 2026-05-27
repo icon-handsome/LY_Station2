@@ -338,11 +338,18 @@ private:
     // 将 refinement 结果写回内存缓存
     void applySegmentRefinementOutcome(const SegmentProcessOutcome& outcome);
 
-    void joinAllBackgroundRefinementJobs() const;
+    // maxWaitMs < 0 表示使用默认上限；综合检测会传入「任务超时 - 余量」避免占满 60s
+    void joinAllBackgroundRefinementJobs(int maxWaitMs = -1) const;
 
     // 综合检测前从内存缓存取 [Tracking] 必需的三段点云
     QMap<int, scan_tracking::mech_eye::CaptureResult> loadSegmentCaptureResultsForInspection(
         QString* errorMessage) const;
+
+    /// PLC 联调临时容错：1..scanSegmentTotal 段点云均已入缓存
+    bool hasAllScanSegmentsCached() const;
+
+    /// 从命令块选取下一个待处理触发（含 Scan/Inspection 同时为 1 时的优先级）
+    const protocol::TriggerDefinition* selectPendingTrigger(const QVector<quint16>& commandBlock) const;
 
     // 从 scan_paths_config.json 重新加载 T0，并重置当前标定矩阵
     void reloadCalibrationMatricesFromConfig();
@@ -483,8 +490,15 @@ private:
     std::function<void(const tracking::InspectionResult&)> m_inspectionResultPublisher;
 
     static constexpr int kMaxPointCloudCacheSize = 20;    // 允许的最大点云缓存条目数，防止内存无限增长
+    static constexpr int kMaxReasonableRefinementJobs = 32;  // 并发 refinement 上限（超出视为逻辑错误）
 
-    std::atomic_int m_activeRefinementJobs{0};
+    void registerRefinementJob();
+    void completeRefinementJob();
+    int pendingRefinementJobCount() const;
+    void dispatchSegmentRefinementFinished(SegmentProcessOutcome outcome);
+
+    /// 后台 refinement 在途数（原子计数，避免在 processEvents 重入时锁 std::mutex 崩溃）
+    std::atomic_int m_pendingRefinementJobs{0};
 };
 
 }  // namespace flow_control

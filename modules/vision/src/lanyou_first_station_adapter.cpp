@@ -2,9 +2,11 @@
 
 #include <cmath>
 #include <exception>
+#include <mutex>
 
 #include "detection/first/FirstInlinerSurfaceDetection.h"
 #include "detection/first/FirstOutSurfaceDetection.h"
+#include "scan_tracking/mech_eye/point_cloud_processor.h"
 #include "scan_tracking/vision/lanyou_detection_adapter.h"
 
 namespace scan_tracking::vision::lanyou {
@@ -94,6 +96,10 @@ FirstStationDetectionResult runFirstStationDetection(
     result.invoked = true;
 
     try {
+        // 与后台点云 refinement 共用 PCL 全局锁，避免 Windows 上 aligned_free 崩溃
+        std::lock_guard<std::mutex> pclGuard(
+            scan_tracking::mech_eye::pointCloudAlgorithmMutex());
+
         ResetGlobalFirstPoseParams();
 
         FirstOutSurfaceDetection firstOutDetector;

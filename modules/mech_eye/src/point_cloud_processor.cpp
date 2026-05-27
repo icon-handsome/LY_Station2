@@ -18,17 +18,17 @@ Q_LOGGING_CATEGORY(LOG_POINT_CLOUD_PROC, "mech_eye.point_cloud_processor")
 
 namespace scan_tracking::mech_eye {
 
-namespace {
-
-using Cloud = pcl::PointCloud<pcl::PointXYZ>;
-using CloudPtr = Cloud::Ptr;
-
-// PCL/Eigen 在 Windows 下非线程安全；多段后台 refinement 并发时会偶发 aligned_free 崩溃。
-std::mutex& pointCloudProcessingMutex()
+// PCL/Eigen 在 Windows 下非线程安全；多段后台 refinement 与蓝友检测并发时会偶发 aligned_free 崩溃。
+std::mutex& pointCloudAlgorithmMutex()
 {
     static std::mutex mutex;
     return mutex;
 }
+
+namespace {
+
+using Cloud = pcl::PointCloud<pcl::PointXYZ>;
+using CloudPtr = Cloud::Ptr;
 
 bool isFinitePoint(float x, float y, float z)
 {
@@ -131,7 +131,7 @@ bool processPointCloudFrame(
         return false;
     }
 
-    std::lock_guard<std::mutex> pclLock(pointCloudProcessingMutex());
+    std::lock_guard<std::mutex> pclLock(pointCloudAlgorithmMutex());
 
     PointCloudProcessReport localReport;
     localReport.inputPointCount = input.pointCount;

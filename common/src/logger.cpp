@@ -10,10 +10,62 @@ namespace scan_tracking::common {
 
 namespace {
 
+constexpr char kUtf8Bom[] = "\xEF\xBB\xBF";
+
 QString dailyLogFilePath(const QString& log_dir, const QDate& date)
 {
     return QDir(log_dir).filePath(
         QStringLiteral("scan_tracking_%1.txt").arg(date.toString(QStringLiteral("yyyy-MM-dd"))));
+}
+
+bool hasUtf8Bom(const QByteArray& data)
+{
+    return data.size() >= 3
+        && static_cast<unsigned char>(data.at(0)) == 0xEF
+        && static_cast<unsigned char>(data.at(1)) == 0xBB
+        && static_cast<unsigned char>(data.at(2)) == 0xBF;
+}
+
+struct LogFilePayload {
+    QByteArray content;
+    bool hadLeadingNullPadding = false;
+};
+
+LogFilePayload loadLogFilePayload(const QString& file_path)
+{
+    LogFilePayload payload;
+    QFile in(file_path);
+    if (!in.exists() || !in.open(QIODevice::ReadOnly)) {
+        return payload;
+    }
+
+    const QByteArray raw = in.readAll();
+    in.close();
+
+    int start = 0;
+    while (start < raw.size() && raw.at(start) == '\0') {
+        ++start;
+    }
+    payload.hadLeadingNullPadding = start > 0 && start < raw.size();
+    payload.content = payload.hadLeadingNullPadding ? raw.mid(start) : raw;
+    return payload;
+}
+
+bool rewriteLogFileWithUtf8Bom(const QString& file_path, const QByteArray& content)
+{
+    QFile out(file_path);
+    if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        return false;
+    }
+
+    if (!hasUtf8Bom(content)) {
+        out.write(kUtf8Bom);
+    }
+    if (!content.isEmpty()) {
+        out.write(content);
+    }
+    out.close();
+    return true;
 }
 
 }  // namespace
@@ -100,9 +152,8 @@ QString Logger::getLogSeverity(QtMsgType type) {
 }
 
 void Logger::openLogFile(const QDate& target_date) {
-    // 仅追加模式：禁止 Truncate，保证同日重启与跨日切换均不覆盖历史日志。
-    static const QIODevice::OpenMode kLogOpenMode =
-        QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text;
+    // 二进制追加 + 手写 UTF-8，避免 Windows Text 模式与编码混用；同日重启仅追加不截断。
+    static const QIODevice::OpenMode kLogOpenMode = QIODevice::WriteOnly | QIODevice::Append;
 
     if (!target_date.isValid()) {
         return;
@@ -116,6 +167,15 @@ void Logger::openLogFile(const QDate& target_date) {
         log_file_->close();
     }
 
+    const LogFilePayload existing = loadLogFilePayload(file_path);
+    if (existing.hadLeadingNullPadding
+        || (!existing.content.isEmpty() && !hasUtf8Bom(existing.content))) {
+        if (!rewriteLogFileWithUtf8Bom(file_path, existing.content)) {
+            std::cerr << "严重错误：Logger 无法规范化日志文件：" << file_path.toStdString()
+                      << "\n";
+        }
+    }
+
     log_file_->setFileName(file_path);
     if (!log_file_->open(kLogOpenMode)) {
         std::cerr << "严重错误：Logger 无法打开目标文件：" << file_path.toStdString() << "\n";
@@ -127,6 +187,11 @@ void Logger::openLogFile(const QDate& target_date) {
             }
         }
         return;
+    }
+
+    if (log_file_->size() == 0) {
+        log_file_->write(kUtf8Bom);
+        log_file_->flush();
     }
 
     current_date_ = target_date;
@@ -168,15 +233,16 @@ void Logger::log(QtMsgType type, const QMessageLogContext& context, const QStrin
         }
     }
 
-    const QByteArray utf8Line = formatted_message.toUtf8() + '\n';
+    const QByteArray utf8FileLine = formatted_message.toUtf8() + "\r\n";
+    const QByteArray utf8ConsoleLine = formatted_message.toUtf8() + '\n';
     if (log_file_ && log_file_->isOpen()) {
-        log_file_->write(utf8Line);
+        log_file_->write(utf8FileLine);
         log_file_->flush();
     }
 
     // 避免 QTextStream+iostream 混用导致 Debug 堆损坏；控制台仅写 UTF-8 行
     FILE* out = (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg) ? stderr : stdout;
-    std::fwrite(utf8Line.constData(), 1, static_cast<size_t>(utf8Line.size()), out);
+    std::fwrite(utf8ConsoleLine.constData(), 1, static_cast<size_t>(utf8ConsoleLine.size()), out);
     std::fflush(out);
 }
 

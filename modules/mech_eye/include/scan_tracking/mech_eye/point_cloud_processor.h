@@ -2,10 +2,15 @@
 
 #include <QtCore/QString>
 
+#include <mutex>
+
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/mech_eye/mech_eye_types.h"
 
 namespace scan_tracking::mech_eye {
+
+/// 进程内 PCL/Eigen 全局串行化锁（Windows 下多线程并发会触发 aligned_free 崩溃）
+std::mutex& pointCloudAlgorithmMutex();
 
 struct PointCloudProcessReport {
     int inputPointCount = 0;

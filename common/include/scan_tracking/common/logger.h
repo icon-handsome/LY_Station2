@@ -15,10 +15,10 @@ public:
     static void initialize(const QString& log_dir = QStringLiteral("logs"));
     static void cleanup();
     
-    // Qt 全局捕莽回调转发接口
+    // Qt 全局消息回调转发接口
     static void messageHandler(QtMsgType type, const QMessageLogContext& context, const QString& msg);
 
-    // 可以在任何地方动态获取列厗前侵
+    // 可以在任何地方动态获取单例
     static Logger* instance();
 
     // 动态调整最低输出级别
