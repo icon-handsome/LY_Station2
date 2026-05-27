@@ -219,6 +219,34 @@ QString selectedSegmentTextForInspection(const scan_tracking::common::TrackingCo
         .arg(tracking.firstStationHoleSegmentIndex);
 }
 
+/// 日志中展示 PLC 原始字；若与下游解码值不同则注明（如 16256→段号1）
+QString formatPlcRegisterValueForLog(int modbusIndex, quint16 rawValue)
+{
+    namespace regs = protocol::registers;
+    if (modbusIndex == regs::kScanSegmentIndex) {
+        const quint16 decoded = regs::plcAnalogToUInt16(rawValue, 0);
+        if (rawValue != decoded) {
+            return QStringLiteral("%1 (原始PLC字=%2)").arg(decoded).arg(rawValue);
+        }
+        return QString::number(decoded);
+    }
+    if (modbusIndex == regs::kRequestTimeoutSeconds) {
+        const quint16 decoded = regs::plcAnalogToUInt16(rawValue, 0);
+        if (rawValue != decoded) {
+            return QStringLiteral("%1s (原始PLC字=%2)").arg(decoded).arg(rawValue);
+        }
+        return QStringLiteral("%1").arg(decoded);
+    }
+    return QString::number(rawValue);
+}
+
+QString formatPlcRegisterChangeForLog(int modbusIndex, quint16 oldValue, quint16 newValue)
+{
+    return QStringLiteral("%1 -> %2")
+        .arg(formatPlcRegisterValueForLog(modbusIndex, oldValue))
+        .arg(formatPlcRegisterValueForLog(modbusIndex, newValue));
+}
+
 /**
  * @brief 将浮点数转换为 CDAB 字节序的两个寄存器值
  * 
@@ -624,22 +652,27 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
 
     // 命令块快照：只在首次读取或内容变化时打印
     if (commandBlockChanged) {
+        namespace regs = protocol::registers;
         qInfo(LOG_FLOW).noquote()
             << QStringLiteral("命令块快照：")
-            << "PLC_Start=" << protocol::registers::toPlcAddress(protocol::registers::kCommandBlockStart)
-            << "Flow_Enable=" << values.value(protocol::registers::kFlowEnable)
-            << "Reg04=" << values.value(protocol::registers::kSafetyStatusWord)
-            << "Trig_LoadGrasp=" << values.value(19)
-            << "Trig_StationMaterialCheck=" << values.value(20)
-            << "Trig_PoseCheck=" << values.value(21)
-            << "Trig_ScanSegment=" << values.value(22)
-            << "Trig_Inspection=" << values.value(23)
-            << "Trig_UnloadCalc=" << values.value(24)
-            << "Trig_SelfCheck=" << values.value(25)
-            << "Trig_CodeRead=" << values.value(26)
-            << "Trig_ResultReset=" << values.value(27)
-            << "TaskIdHigh=" << values.value(protocol::registers::kTaskIdHigh)
-            << "TaskIdLow=" << values.value(protocol::registers::kTaskIdLow);
+            << "PLC_Start=" << regs::holdingRegisterAddress(regs::kCommandBlockStart)
+            << "Flow_Enable=" << values.value(regs::kFlowEnable)
+            << "Reg04=" << values.value(regs::kSafetyStatusWord)
+            << "ScanSegmentIndex=" << formatPlcRegisterValueForLog(regs::kScanSegmentIndex,
+                                                                    values.value(regs::kScanSegmentIndex))
+            << "RequestTimeout_s=" << formatPlcRegisterValueForLog(regs::kRequestTimeoutSeconds,
+                                                                   values.value(regs::kRequestTimeoutSeconds))
+            << "Trig_LoadGrasp=" << values.value(regs::modbusIndexFromPlcAddress(40020))
+            << "Trig_StationMaterialCheck=" << values.value(regs::modbusIndexFromPlcAddress(40021))
+            << "Trig_PoseCheck=" << values.value(regs::modbusIndexFromPlcAddress(40022))
+            << "Trig_ScanSegment=" << values.value(regs::modbusIndexFromPlcAddress(40023))
+            << "Trig_Inspection=" << values.value(regs::modbusIndexFromPlcAddress(40024))
+            << "Trig_UnloadCalc=" << values.value(regs::modbusIndexFromPlcAddress(40025))
+            << "Trig_SelfCheck=" << values.value(regs::modbusIndexFromPlcAddress(40026))
+            << "Trig_CodeRead=" << values.value(regs::modbusIndexFromPlcAddress(40027))
+            << "Trig_ResultReset=" << values.value(regs::modbusIndexFromPlcAddress(40028))
+            << "TaskIdHigh=" << values.value(regs::kTaskIdHigh)
+            << "TaskIdLow=" << values.value(regs::kTaskIdLow);
     }
 
     // 命令块原始寄存器值：只在首次读取或内容变化时打印
@@ -661,35 +694,35 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
     // 打印变化字段：只在非首次读取且有字段变化时打印（带 PLC 地址和寄存器名）
     if (!previousCommandBlock.isEmpty()) {
         static const char* const kRegisterNames[] = {
-            "PLC_Heartbeat",           // 0
-            "PLC_SystemState",         // 1
-            "Station_WorkMode",        // 2
-            "Flow_Enable",             // 3
-            "Safety_Status_Word",      // 4
-            "Cmd_StartAuto",           // 5
-            "Cmd_Pause",               // 6
-            "Cmd_Stop",                // 7
-            "Cmd_Reset",               // 8
-            "Cmd_ClearAlarms",         // 9
-            "TaskId_H",                // 10
-            "TaskId_L",                // 11
-            "ProductType",             // 12
-            "RecipeId",                // 13
-            "ScanSegmentIndex",        // 14
-            "ScanSegmentTotal",        // 15
-            "RequestTimeout_s",        // 16
-            "Reserved_17",             // 17
+            "Reserved_0",              // 0
+            "PLC_Heartbeat",           // 1   40001
+            "PLC_SystemState",         // 2
+            "Station_WorkMode",        // 3
+            "Flow_Enable",             // 4
+            "Safety_Status_Word",      // 5
+            "Cmd_StartAuto",           // 6
+            "Cmd_Pause",               // 7
+            "Cmd_Stop",                // 8
+            "Cmd_Reset",               // 9
+            "Cmd_ClearAlarms",         // 10
+            "TaskId_H",                // 11
+            "TaskId_L",                // 12
+            "ProductType",             // 13
+            "RecipeId",                // 14
+            "ScanSegmentIndex",        // 15  40015
+            "Reserved_16",             // 16  40016
+            "RequestTimeout_s",        // 17  40017
             "Reserved_18",             // 18
-            "Trig_LoadGrasp",          // 19
-            "Trig_StationMaterialCheck", // 20
-            "Trig_PoseCheck",          // 21
-            "Trig_ScanSegment",        // 22
-            "Trig_Inspection",         // 23
-            "Trig_UnloadCalc",         // 24
-            "Trig_SelfCheck",          // 25
-            "Trig_CodeRead",           // 26
-            "Trig_ResultReset",        // 27
-            "Reserved_28",             // 28
+            "Reserved_19",             // 19
+            "Trig_LoadGrasp",          // 20  40020
+            "Trig_StationMaterialCheck", // 21
+            "Trig_PoseCheck",          // 22
+            "Trig_ScanSegment",        // 23
+            "Trig_Inspection",         // 24
+            "Trig_UnloadCalc",         // 25
+            "Trig_SelfCheck",          // 26
+            "Trig_CodeRead",           // 27
+            "Trig_ResultReset",        // 28
             "Reserved_29",             // 29
         };
         constexpr int kNameCount = sizeof(kRegisterNames) / sizeof(kRegisterNames[0]);
@@ -705,12 +738,12 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
             }
 
             const char* name = (index < kNameCount) ? kRegisterNames[index] : "?";
-            changedFields << QStringLiteral("  [%1] %2 (offset=%3): %4 -> %5")
-                .arg(index + 40001)
+            changedFields << QStringLiteral("  [%1] %2 (plcOffset=%3, modbusIndex=%4): %5")
+                .arg(protocol::registers::holdingRegisterAddress(index))
                 .arg(QString::fromLatin1(name))
+                .arg(protocol::registers::plcTableOffset(index))
                 .arg(index)
-                .arg(oldValue)
-                .arg(newValue);
+                .arg(formatPlcRegisterChangeForLog(index, oldValue, newValue));
         }
 
         if (!changedFields.isEmpty()) {
@@ -814,10 +847,13 @@ void StateMachine::processTrigger(const protocol::TriggerDefinition& trigger, co
     m_activeTask.definition = &trigger;                                    // 保存触发定义指针
     m_activeTask.taskId = readTaskId(commandBlock);                        // 读取任务 ID
     // 如果 PLC 指定了超时时间则使用，否则使用触发定义的默认超时
-    m_activeTask.timeoutSeconds =
-        commandBlock.value(protocol::registers::kRequestTimeoutSeconds) > 0
-        ? commandBlock.value(protocol::registers::kRequestTimeoutSeconds)
-        : static_cast<quint16>(trigger.defaultTimeoutSeconds);
+    {
+        const quint16 timeoutRaw = commandBlock.value(protocol::registers::kRequestTimeoutSeconds);
+        const quint16 timeoutDecoded = protocol::registers::plcAnalogToUInt16(timeoutRaw, 0);
+        m_activeTask.timeoutSeconds = timeoutDecoded > 0
+            ? timeoutDecoded
+            : static_cast<quint16>(trigger.defaultTimeoutSeconds);
+    }
     m_activeTask.scanSegmentIndex = resolveScanSegmentIndex(commandBlock); // 解析扫描分段索引（32位合并）
     {
         const auto* cfgMgr = scan_tracking::common::ConfigManager::instance();
@@ -873,31 +909,31 @@ void StateMachine::executeActiveTask()
     }
 
     switch (m_activeTask.definition->trigOffset) {
-    case 19:  // Trig_LoadGrasp - 加载抓取任务
+    case 20:  // Trig_LoadGrasp @40020
         executeLoadGraspTask();
         return;
-    case 20:  // Trig_StationMaterialCheck - 工位检材任务
+    case 21:  // Trig_StationMaterialCheck @40021
         executeStationMaterialCheckTask();
         return;
-    case 21:  // Trig_PoseCheck - 位姿检查
+    case 22:  // Trig_PoseCheck @40022
         executePoseCheckTask();
         return;
-    case 22:  // Trig_ScanSegment - 扫描分段任务
+    case 23:  // Trig_ScanSegment @40023
         executeScanSegmentTask();
         return;
-    case 23:  // Trig_Inspection - 综合检测任务
+    case 24:  // Trig_Inspection @40024
         executeInspectionTask();
         return;
-    case 24:  // Trig_UnloadCalc - 卸载计算任务
+    case 25:  // Trig_UnloadCalc @40025
         executeUnloadCalcTask();
         return;
-    case 25:  // Trig_SelfCheck - 自检任务
+    case 26:  // Trig_SelfCheck @40026
         executeSelfCheckTask();
         return;
-    case 26:  // Trig_CodeRead - 条码读取任务
+    case 27:  // Trig_CodeRead @40027
         executeCodeReadTask();
         return;
-    case 27:  // Trig_ResultReset - 结果复位任务
+    case 28:  // Trig_ResultReset @40028
         executeResultResetTask();
         return;
     default:  // 未知触发类型，使用默认响应码完成任务
@@ -2526,20 +2562,16 @@ quint32 StateMachine::readTaskId(const QVector<quint16>& commandBlock) const
  * @brief 解析扫描分段索引
  * 
  * 从命令块中读取当前请求的扫描分段索引。
- * 注意：地址表中 ScanSegmentIndex 是 40015，即 0 基偏移 14；
- * 40024/偏移23 是 Trig_Inspection。这里统一使用协议常量读取，
- * 避免把触发位误当作段号。
- * 
+ * 40015 为段号；PLC 常把 REAL（如 1.0f）以未转字序的原始字写入（如 16256=0x3F80）。
+ * 通过 plcAnalogToUInt16 解码，不再固定按 40015/40016 高低字拼接。
+ *
  * @param commandBlock 命令块寄存器数据
  * @return 扫描分段索引（从1开始）
  */
 quint16 StateMachine::resolveScanSegmentIndex(const QVector<quint16>& commandBlock) const
 {
-    // 40015-40016 合并为 32 位整数（PLC 模拟量格式：高16位在前）
-    const quint16 high = commandBlock.value(protocol::registers::kScanSegmentIndex);
-    const quint16 low = commandBlock.value(protocol::registers::kScanSegmentIndexLow);
-    const quint32 combined = (static_cast<quint32>(high) << 16) | static_cast<quint32>(low);
-    return static_cast<quint16>(combined);  // 段索引不会超过 65535
+    const quint16 rawAt40015 = commandBlock.value(protocol::registers::kScanSegmentIndex);
+    return protocol::registers::plcAnalogToUInt16(rawAt40015, 0);
 }
 
 /**

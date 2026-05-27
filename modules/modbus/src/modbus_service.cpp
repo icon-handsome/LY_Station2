@@ -24,7 +24,7 @@ constexpr int kTotalRegisterCount = 200;
 constexpr int kCommandBlockStart = 0;
 constexpr int kCommandBlockSize = 40;
 /// 结果区（IPC 写入，PLC 读取）：offset 100-183
-constexpr int kResultBlockStart = 100;
+constexpr int kResultBlockStart = 101;  // 40101，与 plc_protocol 一致（40000+下标）
 constexpr int kResultBlockSize = 84;
 }
 
