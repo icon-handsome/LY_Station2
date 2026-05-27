@@ -573,6 +573,7 @@ void ConsoleRuntime::printShutdownStatus()
     }
     if (stateMachine_) {
         stateMachine_->stop();
+        stateMachine_.reset();
     }
     if (visionPipelineService_) {
         visionPipelineService_->stop();

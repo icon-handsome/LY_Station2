@@ -171,16 +171,48 @@ std::array<float, 16> poseMatrixToArray(const scan_tracking::vision::PoseMatrix4
     return pose.isValid() ? pose.values : identityMatrix4x4();
 }
 
-bool lookupNeedRotationForSegment(int segmentIndex)
+QVector<int> enabledScanPathIds()
+{
+    QVector<int> pathIds;
+    const auto* configMgr = scan_tracking::common::ConfigManager::instance();
+    if (configMgr == nullptr) {
+        return pathIds;
+    }
+
+    const auto& pathsConfig = configMgr->scanPathsConfig();
+    if (!pathsConfig.selectedPathIds.empty()) {
+        for (int pathId : pathsConfig.selectedPathIds) {
+            pathIds.push_back(pathId);
+        }
+    } else if (pathsConfig.executeAllPaths) {
+        for (const auto& path : pathsConfig.scanPaths) {
+            if (path.enabled) {
+                pathIds.push_back(path.pathId);
+            }
+        }
+    } else {
+        for (const auto& path : pathsConfig.scanPaths) {
+            if (path.enabled) {
+                pathIds.push_back(path.pathId);
+            }
+        }
+    }
+
+    std::sort(pathIds.begin(), pathIds.end());
+    pathIds.erase(std::unique(pathIds.begin(), pathIds.end()), pathIds.end());
+    return pathIds;
+}
+
+bool lookupNeedRotationForSegment(int pathId, int segmentIndex)
 {
     const auto* configMgr = scan_tracking::common::ConfigManager::instance();
-    if (configMgr == nullptr || segmentIndex <= 0) {
+    if (configMgr == nullptr || pathId <= 0 || segmentIndex <= 0) {
         return false;
     }
 
     const auto& pathsConfig = configMgr->scanPathsConfig();
     for (const auto& path : pathsConfig.scanPaths) {
-        if (!path.enabled) {
+        if (!path.enabled || path.pathId != pathId) {
             continue;
         }
         for (const auto& point : path.points) {
@@ -487,29 +519,57 @@ void StateMachine::start()
  */
 void StateMachine::stop()
 {
-    joinAllBackgroundRefinementJobs();
+    if (m_stopped.exchange(true)) {
+        return;
+    }
+
+    // 先断开外部信号并释放 std::function，避免退出阶段 processEvents 触发已失效回调
+    {
+        tracking::InspectionResultNotifier cleared;
+        m_inspectionResultPublisher.swap(cleared);
+    }
+
+    if (m_modbus != nullptr) {
+        disconnect(m_modbus, nullptr, this, nullptr);
+    }
+    if (m_mechEye != nullptr) {
+        disconnect(m_mechEye, nullptr, this, nullptr);
+    }
+    if (m_visionPipeline != nullptr) {
+        disconnect(m_visionPipeline, nullptr, this, nullptr);
+    }
+
+    if (m_pollTimer != nullptr) {
+        m_pollTimer->stop();
+    }
+    if (m_heartbeatTimer != nullptr) {
+        m_heartbeatTimer->stop();
+    }
+    if (m_timeoutTimer != nullptr) {
+        m_timeoutTimer->stop();
+    }
+
+    m_isPollingPlc = false;
+    clearActiveTask();
+
+    joinAllBackgroundRefinementJobs(kShutdownRefinementJoinTimeoutMs);
     if (pendingRefinementJobCount() != 0) {
         reconcilePendingRefinementJobCounter("stop");
     }
 
-    m_pollTimer->stop();         // 停止 PLC 轮询定时器
-    m_heartbeatTimer->stop();    // 停止心跳定时器
-    m_timeoutTimer->stop();      // 停止超时定时器
-    m_isPollingPlc = false;      // 重置 PLC 轮询标志
-    clearActiveTask();           // 清除当前活动任务
-    resetScanSegmentCache();     // 清空扫描缓存
-    m_consecutiveModbusFailures = 0;  // 重置 Modbus 失败计数器
+    resetScanSegmentCache();
+
+    m_consecutiveModbusFailures = 0;
     m_alarmLevel = 0;
     m_alarmCode = 0;
     m_warnCode = 0;
     m_progress = 0;
     m_dataValid = false;
     m_heartbeatCounter = 0;
-    m_ipcState = protocol::IpcState::Uninitialized;  // 设置 IPC 状态为未初始化
-    m_currentStage = protocol::Stage::Idle;         // 设置当前阶段为空闲
-    resetPlcOutputRegisters();   // 退出时将 IPC→PLC 结果区全部清零
-    setState(AppState::Init);    // 设置应用状态为初始化
-    m_inspectionResultPublisher = nullptr;  // 避免析构已 move 走的 std::function
+    m_ipcState = protocol::IpcState::Uninitialized;
+    m_currentStage = protocol::Stage::Idle;
+    resetPlcOutputRegisters();
+    setState(AppState::Init);
 }
 
 /**
@@ -521,7 +581,9 @@ void StateMachine::setState(AppState newState)
 {
     if (m_state != newState) {
         m_state = newState;
-        emit stateChanged(newState);  // 发出状态变更信号，通知外部监听者
+        if (!m_stopped.load(std::memory_order_acquire)) {
+            emit stateChanged(newState);
+        }
         qInfo(LOG_FLOW) << QStringLiteral("应用状态切换为：") << static_cast<int>(newState);
     }
 }
@@ -614,6 +676,10 @@ void StateMachine::pollPlcState()
  */
 void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>& values)
 {
+    if (m_stopped.load(std::memory_order_acquire)) {
+        return;
+    }
+
     // 验证是否是预期的命令块读取，且数据长度足够
     if (startAddress != protocol::registers::kCommandBlockStart ||
         values.size() < protocol::registers::kCommandBlockSize) {
@@ -747,10 +813,31 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
         }
     }
 
+    namespace regs = protocol::registers;
+    const int scanTrigOffset = regs::modbusIndexFromPlcAddress(40023);
+    const int inspectionTrigOffset = regs::modbusIndexFromPlcAddress(40024);
+    const bool scanPending =
+        scanTrigOffset < values.size() && values[scanTrigOffset] == 1;
+    const bool inspectionPending =
+        inspectionTrigOffset < values.size() && values[inspectionTrigOffset] == 1;
+
     // 如果当前有活动任务且已完成宣告，检查 PLC 是否已释放触发信号
     if (m_activeTask.definition != nullptr && m_activeTask.completionAnnounced) {
-        finalizeCompletedTaskIfTriggerReleased(values);
-        // PLC 联调临时容错：勿 return；释放扫描触发的同轮询内可能已置位 Trig_Inspection。
+        // 多路径：检测已握手完成但 PLC 仍保持 Trig_Inspection=1，同时要继续扫下一路径 → 勿阻塞
+        if (m_activeTask.definition->stage == protocol::Stage::Inspection && scanPending) {
+            qWarning(LOG_FLOW).noquote()
+                << QStringLiteral("[多路径] 检测已完成但 Trig_Inspection 仍为 1，")
+                << QStringLiteral("Trig_ScanSegment=1，强制收尾活动任务以继续扫描。")
+                << multiPathCacheStatusText();
+            clearActiveTask();
+            m_ipcState = protocol::IpcState::Ready;
+            m_currentStage = protocol::Stage::Idle;
+            m_progress = 0;
+            setState(AppState::Ready);
+            publishIpcStatus();
+        } else {
+            finalizeCompletedTaskIfTriggerReleased(values);
+        }
     }
 
     // 如果有活动任务但未完成宣告，等待任务执行完毕
@@ -860,6 +947,35 @@ void StateMachine::processTrigger(const protocol::TriggerDefinition& trigger, co
         }
     }
 
+    if (trigger.stage == protocol::Stage::Inspection) {
+        m_activeTask.inspectionPathId = resolvePathIdForInspection();
+    }
+
+    if (trigger.stage == protocol::Stage::Inspection && m_activeTask.inspectionPathId <= 0) {
+        const QString status = multiPathCacheStatusText();
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("[多路径] 拒绝 Trig_Inspection（当前无已扫满的任一路径），保留已缓存点云。")
+            << status;
+        writeInspectionResult({2, 1u << 4, 0, 0});
+        if (m_inspectionResultPublisher) {
+            tracking::InspectionResult failure;
+            failure.resultCode = 2;
+            failure.ngReasonWord0 = (1u << 4);
+            failure.message = QStringLiteral("综合检测过早：%1").arg(status);
+            m_inspectionResultPublisher(failure);
+        }
+        const quint16 plcRes = inspectionResForPlcHandshake(7);
+        completeActiveTask(plcRes, protocol::AckState::Completed, plcRes == kInspectionResOk);
+        // 过早检测：不等 PLC 释放 Trig_Inspection，立即回到 Ready 以便继续扫下一路径
+        clearActiveTask();
+        m_ipcState = protocol::IpcState::Ready;
+        m_currentStage = protocol::Stage::Idle;
+        m_progress = 0;
+        setState(AppState::Ready);
+        publishIpcStatus();
+        return;
+    }
+
     {
         const auto* cfgMgr = scan_tracking::common::ConfigManager::instance();
         m_activeTask.scanSegmentTotal = cfgMgr ? cfgMgr->trackingConfig().scanSegmentTotal : 1;
@@ -870,7 +986,10 @@ void StateMachine::processTrigger(const protocol::TriggerDefinition& trigger, co
     qInfo(LOG_FLOW).noquote()
         << QStringLiteral("已接受触发") << protocol::triggerName(trigger)
         << QStringLiteral(" 超时s=") << m_activeTask.timeoutSeconds
-        << QStringLiteral(" 段号=") << m_activeTask.scanSegmentIndex;
+        << QStringLiteral(" 段号=") << m_activeTask.scanSegmentIndex
+        << (trigger.stage == protocol::Stage::Inspection
+                ? QStringLiteral(" 检测路径ID=") + QString::number(m_activeTask.inspectionPathId)
+                : QString());
 
     // 清除之前的报警信息
     setAlarm(0, 0, QString());
@@ -1070,7 +1189,8 @@ void StateMachine::executeScanSegmentTask()
         ? static_cast<int>(m_activeTask.timeoutSeconds) * 1000
         : kDefaultScanSegmentCaptureTimeoutMs;
 
-    const bool needMechEye2D = resolveNeedRotationForSegment(m_activeTask.scanSegmentIndex);
+    const int pathIdForCapture = resolvePathIdForIncomingSegment(m_activeTask.scanSegmentIndex);
+    const bool needMechEye2D = resolveNeedRotationForSegment(pathIdForCapture, m_activeTask.scanSegmentIndex);
     qInfo(LOG_FLOW).noquote()
         << QStringLiteral("[ScanSync] 触发") << QDateTime::currentMSecsSinceEpoch();
     const auto mechCaptureMode = needMechEye2D
@@ -1098,6 +1218,7 @@ void StateMachine::executeScanSegmentTask()
 
     qInfo(LOG_FLOW).noquote()
         << QStringLiteral("Trig_ScanSegment 已启动组合采集")
+        << QStringLiteral(" 路径=") << pathIdForCapture
         << QStringLiteral(" 段号=") << m_activeTask.scanSegmentIndex
         << QStringLiteral(" 段总数=") << m_activeTask.scanSegmentTotal
         << QStringLiteral(" 需梅卡2D=") << needMechEye2D
@@ -1107,6 +1228,10 @@ void StateMachine::executeScanSegmentTask()
 
 void StateMachine::onVisionBundleCaptureFinished(scan_tracking::vision::MultiCameraCaptureBundle bundle)
 {
+    if (m_stopped.load(std::memory_order_acquire)) {
+        return;
+    }
+
     if (!m_activeTask.definition
         || m_activeTask.definition->stage != protocol::Stage::ScanSegment) {
         return;
@@ -1154,7 +1279,8 @@ void StateMachine::onVisionBundleCaptureFinished(scan_tracking::vision::MultiCam
     }
 
     const auto& result = bundle.mechEyeResult;
-    const bool needRotation = resolveNeedRotationForSegment(m_activeTask.scanSegmentIndex);
+    const int pathIdForCapture = resolvePathIdForIncomingSegment(m_activeTask.scanSegmentIndex);
+    const bool needRotation = resolveNeedRotationForSegment(pathIdForCapture, m_activeTask.scanSegmentIndex);
     applyLbnCalibrationUpdate(m_activeTask.scanSegmentIndex, needRotation, bundle);
 
     if (!result.pointCloud.isValid()) {
@@ -1174,19 +1300,33 @@ void StateMachine::onVisionBundleCaptureFinished(scan_tracking::vision::MultiCam
             ? scan_tracking::common::ConfigManager::instance()->pointCloudProcessingConfig()
             : scan_tracking::common::PointCloudProcessingConfig{};
 
-    commitScanSegmentCaptureImmediate(segmentIndex, result, bundle);
-    startSegmentBackgroundRefinement(segmentIndex, taskId, processingConfig);
+    const int pathIdForCache = resolvePathIdForIncomingSegment(segmentIndex);
+    commitScanSegmentCaptureImmediate(pathIdForCache, segmentIndex, result, bundle);
+    startSegmentBackgroundRefinement(pathIdForCache, segmentIndex, taskId, processingConfig);
 }
 
 void StateMachine::commitScanSegmentCaptureImmediate(
+    int pathId,
     int segmentIndex,
     const scan_tracking::mech_eye::CaptureResult& result,
     const scan_tracking::vision::MultiCameraCaptureBundle& bundle)
 {
+    if (pathId != m_currentPathId) {
+        qInfo(LOG_FLOW).noquote()
+            << QStringLiteral("[多路径] 切换路径")
+            << QStringLiteral(" 段号=") << segmentIndex
+            << QStringLiteral(" 旧路径ID=") << m_currentPathId
+            << QStringLiteral(" 新路径ID=") << pathId;
+        m_currentPathId = pathId;
+        m_currentPathSegments.clear();
+    }
+
+    m_currentPathSegments.insert(segmentIndex);
+
     {
         std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
-        m_segmentCaptureResults.insert(segmentIndex, cloneCaptureResult(result));
-        m_segmentCaptureBundles.insert(segmentIndex, cloneCaptureBundle(bundle));
+        m_pathSegmentCaptureResults[pathId][segmentIndex] = cloneCaptureResult(result);
+        m_pathSegmentCaptureBundles[pathId][segmentIndex] = cloneCaptureBundle(bundle);
     }
 
     int imageCount = countHikImagesInBundle(bundle);
@@ -1201,10 +1341,10 @@ void StateMachine::commitScanSegmentCaptureImmediate(
 
     qInfo(LOG_FLOW).noquote()
         << QStringLiteral("[SegmentCache] 原始点云已入内存，立即回写 PLC")
-        << QStringLiteral(" 段号=") << segmentIndex
+        << QStringLiteral(" [路径") << pathId << QStringLiteral("][段") << segmentIndex << QStringLiteral("]")
         << QStringLiteral(" 任务ID=") << m_activeTask.taskId
         << QStringLiteral(" 点数=") << result.pointCloud.pointCount
-        << QStringLiteral(" 缓存段数=") << m_segmentCaptureResults.size();
+        << QStringLiteral(" 总缓存=") << totalCachedPointCloudCount();
 
     completeActiveTask(1);
     emit scanFinished(segmentIndex, 1, imageCount, cloudFrameCount);
@@ -1302,7 +1442,7 @@ void StateMachine::dispatchSegmentRefinementFinished(SegmentProcessOutcome outco
     QPointer<StateMachine> self(this);
 
     const auto deliverOnMainThread = [self, outcomeHolder]() {
-        if (!self) {
+        if (!self || self->m_stopped.load(std::memory_order_acquire)) {
             qWarning(LOG_FLOW).noquote()
                 << QStringLiteral("后台 refinement 回调时 StateMachine 已销毁，在途计数将在 stop/reset 时复位");
             return;
@@ -1333,23 +1473,26 @@ void StateMachine::dispatchSegmentRefinementFinished(SegmentProcessOutcome outco
 }
 
 void StateMachine::startSegmentBackgroundRefinement(
+    int pathId,
     int segmentIndex,
     quint32 taskId,
     const scan_tracking::common::PointCloudProcessingConfig& config)
 {
     if (!config.enabled) {
         qInfo(LOG_FLOW).noquote()
-            << QStringLiteral("[ScanSync] 点云后处理已禁用，跳过后台 refinement，段号=") << segmentIndex;
+            << QStringLiteral("[ScanSync] 点云后处理已禁用，跳过后台 refinement，路径=") << pathId
+            << QStringLiteral(" 段号=") << segmentIndex;
         return;
     }
 
     qInfo(LOG_FLOW).noquote()
-        << QStringLiteral("[ScanSync] 后台 refinement 已排队，段号=") << segmentIndex
+        << QStringLiteral("[ScanSync] 后台 refinement 已排队，路径=") << pathId
+        << QStringLiteral(" 段号=") << segmentIndex
         << QStringLiteral(" 任务ID=") << taskId;
 
     QPointer<StateMachine> self(this);
     const qint64 refinementQueuedAtMs = QDateTime::currentMSecsSinceEpoch();
-    std::thread([self, segmentIndex, taskId, config, refinementQueuedAtMs]() {
+    std::thread([self, pathId, segmentIndex, taskId, config, refinementQueuedAtMs]() {
         QElapsedTimer refinementWallTimer;
         refinementWallTimer.start();
 
@@ -1358,7 +1501,7 @@ void StateMachine::startSegmentBackgroundRefinement(
         std::lock_guard<std::mutex> serialGuard(kSegmentRefinementSerialMutex);
         const qint64 queueWaitMs = refinementWallTimer.elapsed();
 
-        if (!self) {
+        if (!self || self->m_stopped.load(std::memory_order_acquire)) {
             return;
         }
 
@@ -1377,12 +1520,14 @@ void StateMachine::startSegmentBackgroundRefinement(
         } pendingGuard{self};
 
         SegmentProcessOutcome outcome;
+        outcome.pathId = pathId;
         outcome.segmentIndex = segmentIndex;
         outcome.taskId = taskId;
 
         const auto logRefinementTiming = [&](const SegmentProcessOutcome& finished) {
             qInfo(LOG_FLOW).noquote()
                 << QStringLiteral("[RefinementTimer] Mech点云后台refinement")
+                << QStringLiteral(" 路径=") << finished.pathId
                 << QStringLiteral(" 段号=") << finished.segmentIndex
                 << QStringLiteral(" 任务ID=") << finished.taskId
                 << QStringLiteral(" 成功=") << (finished.success ? QStringLiteral("是") : QStringLiteral("否"))
@@ -1407,28 +1552,39 @@ void StateMachine::startSegmentBackgroundRefinement(
         };
 
         qInfo(LOG_FLOW).noquote()
-            << QStringLiteral("[ScanSync] 后台 refinement 开始，段号=") << segmentIndex
+            << QStringLiteral("[ScanSync] 后台 refinement 开始，路径=") << pathId
+            << QStringLiteral(" 段号=") << segmentIndex
             << QStringLiteral(" 任务ID=") << taskId
             << QStringLiteral(" 排队等待ms=") << queueWaitMs;
 
         try {
             if (!self) {
                 qWarning(LOG_FLOW).noquote()
-                    << QStringLiteral("后台 refinement 启动时 StateMachine 已销毁，段号=") << segmentIndex;
+                    << QStringLiteral("后台 refinement 启动时 StateMachine 已销毁，路径=") << pathId
+                    << QStringLiteral(" 段号=") << segmentIndex;
                 return;
             }
 
             scan_tracking::mech_eye::PointCloudFrame inputCloud;
             {
                 std::lock_guard<std::mutex> lock(self->m_segmentCacheMutex);
-                const auto it = self->m_segmentCaptureResults.constFind(segmentIndex);
-                if (it == self->m_segmentCaptureResults.cend() || !it->pointCloud.isValid()) {
+                const auto pathIt = self->m_pathSegmentCaptureResults.constFind(pathId);
+                if (pathIt == self->m_pathSegmentCaptureResults.cend()) {
                     outcome.success = false;
                     outcome.errorMessage =
-                        QStringLiteral("后台 refinement 时缓存段不存在或点云无效。");
+                        QStringLiteral("后台 refinement 时路径 %1 不存在。").arg(pathId);
                 } else {
-                    inputCloud = clonePointCloudFrame(it->pointCloud);
-                    outcome.rawPointCount = inputCloud.pointCount;
+                    const auto segIt = pathIt->constFind(segmentIndex);
+                    if (segIt == pathIt->cend() || !segIt->pointCloud.isValid()) {
+                        outcome.success = false;
+                        outcome.errorMessage =
+                            QStringLiteral("后台 refinement 时路径 %1 段 %2 不存在或点云无效。")
+                                .arg(pathId)
+                                .arg(segmentIndex);
+                    } else {
+                        inputCloud = clonePointCloudFrame(segIt->pointCloud);
+                        outcome.rawPointCount = inputCloud.pointCount;
+                    }
                 }
             }
 
@@ -1507,25 +1663,31 @@ void StateMachine::onSegmentBackgroundRefinementFinished(SegmentProcessOutcome o
 void StateMachine::applySegmentRefinementOutcome(const SegmentProcessOutcome& outcome)
 {
     std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
-    auto resultIt = m_segmentCaptureResults.find(outcome.segmentIndex);
-    if (resultIt == m_segmentCaptureResults.end()) {
+
+    const int targetPathId = outcome.pathId > 0 ? outcome.pathId : m_currentPathId;
+    if (!m_pathSegmentCaptureResults.contains(targetPathId) ||
+        !m_pathSegmentCaptureResults[targetPathId].contains(outcome.segmentIndex)) {
         qInfo(LOG_FLOW).noquote()
-            << QStringLiteral("忽略 refinement 结果：缓存段已不存在，段号=") << outcome.segmentIndex;
+            << QStringLiteral("忽略 refinement 结果：缓存不存在，路径=") << targetPathId
+            << QStringLiteral(" 段号=") << outcome.segmentIndex;
         return;
     }
 
-    scan_tracking::mech_eye::releasePointCloudFrameBuffers(&resultIt->pointCloud);
-    resultIt->pointCloud = clonePointCloudFrame(outcome.captureResult.pointCloud);
-
-    auto bundleIt = m_segmentCaptureBundles.find(outcome.segmentIndex);
-    if (bundleIt != m_segmentCaptureBundles.end()) {
-        scan_tracking::mech_eye::releasePointCloudFrameBuffers(&bundleIt->mechEyeResult.pointCloud);
-        bundleIt->mechEyeResult.pointCloud = clonePointCloudFrame(outcome.captureResult.pointCloud);
+    auto& resultRef = m_pathSegmentCaptureResults[targetPathId][outcome.segmentIndex];
+    scan_tracking::mech_eye::releasePointCloudFrameBuffers(&resultRef.pointCloud);
+    resultRef.pointCloud = clonePointCloudFrame(outcome.captureResult.pointCloud);
+    
+    // 更新 bundle 缓存
+    if (m_pathSegmentCaptureBundles.contains(targetPathId) &&
+        m_pathSegmentCaptureBundles[targetPathId].contains(outcome.segmentIndex)) {
+        auto& bundleRef = m_pathSegmentCaptureBundles[targetPathId][outcome.segmentIndex];
+        scan_tracking::mech_eye::releasePointCloudFrameBuffers(&bundleRef.mechEyeResult.pointCloud);
+        bundleRef.mechEyeResult.pointCloud = clonePointCloudFrame(outcome.captureResult.pointCloud);
     }
 
     qInfo(LOG_FLOW).noquote()
         << QStringLiteral("[SegmentCache] refinement 已写回内存")
-        << QStringLiteral(" 段号=") << outcome.segmentIndex
+        << QStringLiteral(" [路径") << targetPathId << QStringLiteral("][段") << outcome.segmentIndex << QStringLiteral("]")
         << QStringLiteral(" 点数=") << outcome.processedPointCount;
 }
 
@@ -1660,12 +1822,84 @@ void StateMachine::setInspectionResultPublisher(
 QVector<int> StateMachine::cachedScanSegmentIndices() const
 {
     QVector<int> indices;
-    indices.reserve(m_segmentCaptureResults.size());
-    for (auto it = m_segmentCaptureResults.cbegin(); it != m_segmentCaptureResults.cend(); ++it) {
-        indices.push_back(it.key());
+    
+    // === 多路径支持：编码为 路径ID*100 + 段号，便于 HMI 显示 ===
+    std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
+    for (auto pathIt = m_pathSegmentCaptureResults.constBegin(); 
+         pathIt != m_pathSegmentCaptureResults.constEnd(); ++pathIt) {
+        const int pathId = pathIt.key();
+        const auto& segments = pathIt.value();
+        
+        for (auto segIt = segments.constBegin(); segIt != segments.constEnd(); ++segIt) {
+            const int segmentIndex = segIt.key();
+            // 编码：路径1段1 → 101，路径2段2 → 202
+            indices.push_back(pathId * 100 + segmentIndex);
+        }
     }
+    
     std::sort(indices.begin(), indices.end());
     return indices;
+}
+
+bool StateMachine::isCurrentPathSegmentSetComplete() const
+{
+    const auto* configManager = scan_tracking::common::ConfigManager::instance();
+    const int scanSegmentTotal =
+        configManager ? configManager->trackingConfig().scanSegmentTotal : 0;
+    if (scanSegmentTotal <= 0) {
+        return false;
+    }
+
+    for (int segmentIndex = 1; segmentIndex <= scanSegmentTotal; ++segmentIndex) {
+        if (!m_currentPathSegments.contains(segmentIndex)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool StateMachine::isPathScanComplete(int pathId) const
+{
+    if (pathId <= 0) {
+        return false;
+    }
+
+    const auto* configManager = scan_tracking::common::ConfigManager::instance();
+    const int scanSegmentTotal =
+        configManager ? configManager->trackingConfig().scanSegmentTotal : 0;
+    if (scanSegmentTotal <= 0) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
+    if (!m_pathSegmentCaptureResults.contains(pathId)) {
+        return false;
+    }
+    const auto& pathSegments = m_pathSegmentCaptureResults[pathId];
+    for (int segmentIndex = 1; segmentIndex <= scanSegmentTotal; ++segmentIndex) {
+        const auto segIt = pathSegments.constFind(segmentIndex);
+        if (segIt == pathSegments.cend() || !segIt->pointCloud.isValid()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool StateMachine::hasPathReadyForInspection() const
+{
+    return resolvePathIdForInspection() > 0;
+}
+
+int StateMachine::resolvePathIdForInspection() const
+{
+    const QVector<int> pathIds = enabledScanPathIds();
+    int latestCompletePathId = -1;
+    for (int pathId : pathIds) {
+        if (isPathScanComplete(pathId)) {
+            latestCompletePathId = pathId;
+        }
+    }
+    return latestCompletePathId;
 }
 
 bool StateMachine::hasAllScanSegmentsCached() const
@@ -1677,14 +1911,95 @@ bool StateMachine::hasAllScanSegmentsCached() const
         return false;
     }
 
+    const QVector<int> pathIds = enabledScanPathIds();
+    if (pathIds.isEmpty()) {
+        return false;
+    }
+
     std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
-    for (int segmentIndex = 1; segmentIndex <= scanSegmentTotal; ++segmentIndex) {
-        const auto it = m_segmentCaptureResults.constFind(segmentIndex);
-        if (it == m_segmentCaptureResults.cend() || !it->pointCloud.isValid()) {
+    for (int pathId : pathIds) {
+        if (!m_pathSegmentCaptureResults.contains(pathId)) {
             return false;
+        }
+        const auto& pathSegments = m_pathSegmentCaptureResults[pathId];
+        for (int segmentIndex = 1; segmentIndex <= scanSegmentTotal; ++segmentIndex) {
+            const auto segIt = pathSegments.constFind(segmentIndex);
+            if (segIt == pathSegments.cend() || !segIt->pointCloud.isValid()) {
+                return false;
+            }
         }
     }
     return true;
+}
+
+QString StateMachine::multiPathCacheStatusText() const
+{
+    const auto* configManager = scan_tracking::common::ConfigManager::instance();
+    const int scanSegmentTotal =
+        configManager ? configManager->trackingConfig().scanSegmentTotal : 0;
+    const QVector<int> pathIds = enabledScanPathIds();
+    const int expectedTotal =
+        scanSegmentTotal > 0 ? pathIds.size() * scanSegmentTotal : 0;
+    const int cachedTotal = totalCachedPointCloudCount();
+
+    QStringList pathParts;
+    {
+        std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
+        for (int pathId : pathIds) {
+            const int count =
+                m_pathSegmentCaptureResults.contains(pathId)
+                    ? m_pathSegmentCaptureResults[pathId].size()
+                    : 0;
+            pathParts << QStringLiteral("路径%1=%2段").arg(pathId).arg(count);
+        }
+    }
+
+    return QStringLiteral("已缓存 %1/%2 段 [%3]，当前路径ID=%4")
+        .arg(cachedTotal)
+        .arg(expectedTotal)
+        .arg(pathParts.join(QLatin1Char(',')))
+        .arg(m_currentPathId);
+}
+
+int StateMachine::resolvePathIdForIncomingSegment(int segmentIndex) const
+{
+    const QVector<int> pathIds = enabledScanPathIds();
+    if (pathIds.isEmpty()) {
+        return m_currentPathId > 0 ? m_currentPathId : 1;
+    }
+
+    if (!m_currentPathSegments.contains(segmentIndex)) {
+        return m_currentPathId > 0 ? m_currentPathId : pathIds.front();
+    }
+
+    if (!isCurrentPathSegmentSetComplete()) {
+        return m_currentPathId;
+    }
+
+    const int currentIndex = pathIds.indexOf(m_currentPathId);
+    if (currentIndex >= 0 && currentIndex + 1 < pathIds.size()) {
+        return pathIds[currentIndex + 1];
+    }
+    return m_currentPathId;
+}
+
+int StateMachine::totalCachedPointCloudCount() const
+{
+    std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
+    int total = 0;
+    for (auto pathIt = m_pathSegmentCaptureResults.constBegin(); 
+         pathIt != m_pathSegmentCaptureResults.constEnd(); ++pathIt) {
+        total += pathIt->size();
+    }
+    return total;
+}
+
+bool StateMachine::hasSegmentInPath(int pathId, int segmentIndex) const
+{
+    std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
+    return m_pathSegmentCaptureResults.contains(pathId) &&
+           m_pathSegmentCaptureResults[pathId].contains(segmentIndex) &&
+           m_pathSegmentCaptureResults[pathId][segmentIndex].pointCloud.isValid();
 }
 
 const protocol::TriggerDefinition* StateMachine::selectPendingTrigger(
@@ -1698,11 +2013,21 @@ const protocol::TriggerDefinition* StateMachine::selectPendingTrigger(
     const bool inspectionPending =
         inspectionTrigOffset < commandBlock.size() && commandBlock[inspectionTrigOffset] == 1;
 
-    // TODO(plc-handshake): PLC 程序应保证 Trig_ScanSegment 与 Trig_Inspection 互斥；全段齐时临时优先检测。
-    if (scanPending && inspectionPending && hasAllScanSegmentsCached()) {
-        qInfo(LOG_FLOW).noquote()
-            << QStringLiteral("[PLC容错] Trig_ScanSegment 与 Trig_Inspection 同时为 1，扫描段已齐，优先综合检测");
-        return protocol::triggerByOffset(inspectionTrigOffset);
+    if (scanPending && inspectionPending) {
+        const int inspectPathId = resolvePathIdForInspection();
+        if (inspectPathId > 0) {
+            const int segmentIndex =
+                protocol::registers::resolveScanSegmentIndexFromBlock(commandBlock);
+            const int upcomingPathId = resolvePathIdForIncomingSegment(segmentIndex);
+            if (upcomingPathId > inspectPathId) {
+                qInfo(LOG_FLOW).noquote()
+                    << QStringLiteral("[多路径] 路径") << inspectPathId
+                    << QStringLiteral(" 已扫满，Trig_ScanSegment 将开始路径") << upcomingPathId
+                    << QStringLiteral("，优先执行本路径综合检测");
+                return protocol::triggerByOffset(inspectionTrigOffset);
+            }
+        }
+        return protocol::triggerByOffset(scanTrigOffset);
     }
 
     for (const auto& trigger : protocol::triggerDefinitions()) {
@@ -1739,14 +2064,6 @@ QMap<int, scan_tracking::mech_eye::CaptureResult> StateMachine::loadSegmentCaptu
         pendingAfterJoin = 0;
     }
 
-    QMap<int, scan_tracking::mech_eye::CaptureResult> loaded;
-    {
-        std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
-        for (auto it = m_segmentCaptureResults.cbegin(); it != m_segmentCaptureResults.cend(); ++it) {
-            loaded.insert(it.key(), cloneCaptureResult(*it));
-        }
-    }
-
     const auto* configManager = scan_tracking::common::ConfigManager::instance();
     if (configManager == nullptr) {
         if (errorMessage != nullptr) {
@@ -1756,29 +2073,82 @@ QMap<int, scan_tracking::mech_eye::CaptureResult> StateMachine::loadSegmentCaptu
     }
 
     const auto& tracking = configManager->trackingConfig();
-    const QVector<int> requiredSegments = {
-        tracking.firstStationOuterSegmentIndex,
-        tracking.firstStationInnerSegmentIndex,
-        tracking.firstStationHoleSegmentIndex,
+
+    int inspectPathId = m_activeTask.inspectionPathId;
+    if (inspectPathId <= 0) {
+        inspectPathId = resolvePathIdForInspection();
+    }
+    if (inspectPathId <= 0) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("综合检测失败：没有已扫满 6 段的可检测路径。");
+        }
+        return {};
+    }
+
+    // 每条路径扫完后各做一次检测：外/内/孔均取自【同一路径】的 1/2/3 段（见 config [Tracking]）
+    struct SegmentMapping {
+        int segmentIndex;
+        QString name;
+        int outputKey;
     };
 
-    for (int segmentIndex : requiredSegments) {
-        const auto metaIt = loaded.constFind(segmentIndex);
-        if (metaIt == loaded.cend() || !metaIt->pointCloud.isValid()) {
+    const SegmentMapping mappings[] = {
+        {tracking.firstStationOuterSegmentIndex, QStringLiteral("外圈"), 1},
+        {tracking.firstStationInnerSegmentIndex, QStringLiteral("内圈"), 2},
+        {tracking.firstStationHoleSegmentIndex, QStringLiteral("孔"), 3},
+    };
+
+    QMap<int, scan_tracking::mech_eye::CaptureResult> loaded;
+
+    {
+        std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
+
+        if (!m_pathSegmentCaptureResults.contains(inspectPathId)) {
             if (errorMessage != nullptr) {
-                QStringList cachedKeys;
-                for (auto it = loaded.cbegin(); it != loaded.cend(); ++it) {
-                    cachedKeys << QString::number(it.key());
-                }
                 *errorMessage = QStringLiteral(
-                    "第一工位检测缺少必需分段 %1，配置段位 %2，已缓存段位 [%3]")
-                                      .arg(segmentIndex)
-                                      .arg(selectedSegmentTextForInspection(tracking))
-                                      .arg(cachedKeys.join(QLatin1Char(',')));
+                    "综合检测失败：路径 %1 不存在（尚未扫描）。").arg(inspectPathId);
             }
             return {};
         }
+
+        const auto& pathSegments = m_pathSegmentCaptureResults[inspectPathId];
+
+        for (const auto& mapping : mappings) {
+            if (!pathSegments.contains(mapping.segmentIndex)) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = QStringLiteral(
+                        "综合检测缺少%1点云：路径%2段%3不存在")
+                        .arg(mapping.name)
+                        .arg(inspectPathId)
+                        .arg(mapping.segmentIndex);
+                }
+                return {};
+            }
+
+            const auto& captureResult = pathSegments[mapping.segmentIndex];
+            if (!captureResult.pointCloud.isValid()) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = QStringLiteral(
+                        "综合检测%1点云无效：路径%2段%3")
+                        .arg(mapping.name)
+                        .arg(inspectPathId)
+                        .arg(mapping.segmentIndex);
+                }
+                return {};
+            }
+
+            loaded.insert(mapping.outputKey, cloneCaptureResult(captureResult));
+        }
     }
+
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("[多路径] 单路径综合检测 pathId=") << inspectPathId
+        << QStringLiteral(" 外圈段") << tracking.firstStationOuterSegmentIndex
+        << QStringLiteral(" 点数=") << loaded[1].pointCloud.pointCount
+        << QStringLiteral(" 内圈段") << tracking.firstStationInnerSegmentIndex
+        << QStringLiteral(" 点数=") << loaded[2].pointCloud.pointCount
+        << QStringLiteral(" 孔段") << tracking.firstStationHoleSegmentIndex
+        << QStringLiteral(" 点数=") << loaded[3].pointCloud.pointCount;
 
     return loaded;
 }
@@ -1794,7 +2164,7 @@ tracking::InspectionResult StateMachine::runDebugInspectionOnCachedSegments() co
         return failure;
     }
 
-    if (m_segmentCaptureResults.isEmpty()) {
+    if (totalCachedPointCloudCount() == 0) {
         failure.ngReasonWord0 = (1u << 4);
         failure.message = QStringLiteral("调试综合检测失败：点云缓存为空，请先完成扫描分段采集。");
         return failure;
@@ -1816,6 +2186,13 @@ tracking::InspectionResult StateMachine::runDebugInspectionOnCachedSegments() co
 
 void StateMachine::executeInspectionTask()
 {
+    if (m_activeTask.inspectionPathId <= 0) {
+        m_activeTask.inspectionPathId = resolvePathIdForInspection();
+    }
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("Trig_Inspection 开始，检测路径ID=") << m_activeTask.inspectionPathId
+        << multiPathCacheStatusText();
+
     // 检查跟踪服务是否可用
     if (m_tracking == nullptr) {
         qWarning(LOG_FLOW) << QStringLiteral("Trig_Inspection：Tracking 服务不可用。");
@@ -1834,14 +2211,15 @@ void StateMachine::executeInspectionTask()
         // TODO(field-commissioning): 真实失败码为 7；PLC 侧临时强制 Res_Inspection=1(OK)
         const quint16 plcRes = inspectionResForPlcHandshake(7);
         completeActiveTask(plcRes, protocol::AckState::Completed, plcRes == kInspectionResOk);
-        resetPointCloudCache();  // 清空点云缓存
         return;
     }
 
     QString loadError;
     const auto segmentsForInspection = loadSegmentCaptureResultsForInspection(&loadError);
     if (segmentsForInspection.isEmpty()) {
-        qWarning(LOG_FLOW).noquote() << QStringLiteral("Trig_Inspection 加载内存点云失败：") << loadError;
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("Trig_Inspection 加载内存点云失败：") << loadError
+            << multiPathCacheStatusText();
         writeInspectionResult({2, 1u << 4, 0, 0});
         if (m_inspectionResultPublisher) {
             tracking::InspectionResult failure;
@@ -1853,9 +2231,15 @@ void StateMachine::executeInspectionTask()
             m_inspectionResultPublisher(failure);
         }
         // TODO(field-commissioning): 真实失败码为 7；PLC 侧临时强制 Res_Inspection=1(OK)
+        // 多路径未齐时保留缓存，便于 PLC 继续扫路径 2/3
         const quint16 plcRes = inspectionResForPlcHandshake(7);
         completeActiveTask(plcRes, protocol::AckState::Completed, plcRes == kInspectionResOk);
-        resetScanSegmentCache();
+        clearActiveTask();
+        m_ipcState = protocol::IpcState::Ready;
+        m_currentStage = protocol::Stage::Idle;
+        m_progress = 0;
+        setState(AppState::Ready);
+        publishIpcStatus();
         return;
     }
 
@@ -1902,7 +2286,7 @@ void StateMachine::executeInspectionTask()
         trackingResult.measurement,
         trackingResult.outlinerErrorLog, trackingResult.inlinerErrorLog,
         trackingResult.message);
-    resetScanSegmentCache();  // 检测完成，清空扫描缓存释放内存
+    // 每条路径检测后保留各路径点云，供后续路径继续扫描；整轮结束由 Trig_ResultReset 清空
 }
 
 /**
@@ -2163,8 +2547,9 @@ void StateMachine::onCaptureFinished(mech_eye::CaptureResult result)
             ? scan_tracking::common::ConfigManager::instance()->pointCloudProcessingConfig()
             : scan_tracking::common::PointCloudProcessingConfig{};
 
-    commitScanSegmentCaptureImmediate(segmentIndex, result, legacyBundle);
-    startSegmentBackgroundRefinement(segmentIndex, taskId, processingConfig);
+    const int pathIdForCache = resolvePathIdForIncomingSegment(segmentIndex);
+    commitScanSegmentCaptureImmediate(pathIdForCache, segmentIndex, result, legacyBundle);
+    startSegmentBackgroundRefinement(pathIdForCache, segmentIndex, taskId, processingConfig);
 }
 
 /**
@@ -2652,43 +3037,46 @@ void StateMachine::writeInspectionResult(const InspectionSummary& summary)
  */
 void StateMachine::resetPointCloudCache()
 {
-    std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
-    const int cacheSize = m_segmentCaptureResults.size();
-    for (auto it = m_segmentCaptureResults.begin(); it != m_segmentCaptureResults.end(); ++it) {
-        scan_tracking::mech_eye::releasePointCloudFrameBuffers(&it->pointCloud);
-    }
-    m_segmentCaptureResults.clear();
-
-    if (cacheSize > 0) {
-        qInfo(LOG_FLOW).noquote()
-            << QStringLiteral("已清空内存点云缓存，条目数=") << cacheSize;
-    }
+    resetScanSegmentCache();
 }
 
 void StateMachine::resetScanSegmentCache()
 {
-    joinAllBackgroundRefinementJobs();
-    if (pendingRefinementJobCount() != 0) {
-        reconcilePendingRefinementJobCounter("resetScanSegmentCache");
+    if (!m_stopped.load(std::memory_order_acquire)) {
+        joinAllBackgroundRefinementJobs();
+    } else if (pendingRefinementJobCount() != 0) {
+        reconcilePendingRefinementJobCounter("resetScanSegmentCache(stop中)");
     }
 
     std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
-    for (auto it = m_segmentCaptureBundles.begin(); it != m_segmentCaptureBundles.end(); ++it) {
-        scan_tracking::vision::releaseHikMonoFrameBuffers(&it->hikCameraAResult.frame);
-        scan_tracking::vision::releaseHikMonoFrameBuffers(&it->hikCameraBResult.frame);
-        scan_tracking::mech_eye::releasePointCloudFrameBuffers(&it->mechEyeResult.pointCloud);
+    
+    // === 多路径支持：清空二维缓存 ===
+    int totalCacheSize = 0;
+    for (auto pathIt = m_pathSegmentCaptureBundles.begin(); pathIt != m_pathSegmentCaptureBundles.end(); ++pathIt) {
+        for (auto segIt = pathIt->begin(); segIt != pathIt->end(); ++segIt) {
+            scan_tracking::vision::releaseHikMonoFrameBuffers(&segIt->hikCameraAResult.frame);
+            scan_tracking::vision::releaseHikMonoFrameBuffers(&segIt->hikCameraBResult.frame);
+            scan_tracking::mech_eye::releasePointCloudFrameBuffers(&segIt->mechEyeResult.pointCloud);
+            totalCacheSize++;
+        }
     }
-    m_segmentCaptureBundles.clear();
+    m_pathSegmentCaptureBundles.clear();
 
-    const int cacheSize = m_segmentCaptureResults.size();
-    for (auto it = m_segmentCaptureResults.begin(); it != m_segmentCaptureResults.end(); ++it) {
-        scan_tracking::mech_eye::releasePointCloudFrameBuffers(&it->pointCloud);
+    for (auto pathIt = m_pathSegmentCaptureResults.begin(); pathIt != m_pathSegmentCaptureResults.end(); ++pathIt) {
+        for (auto segIt = pathIt->begin(); segIt != pathIt->end(); ++segIt) {
+            scan_tracking::mech_eye::releasePointCloudFrameBuffers(&segIt->pointCloud);
+        }
     }
-    m_segmentCaptureResults.clear();
+    m_pathSegmentCaptureResults.clear();
+    
+    // 重置路径上下文
+    m_currentPathId = 1;
+    m_currentPathSegments.clear();
 
-    if (cacheSize > 0) {
+    if (totalCacheSize > 0) {
         qInfo(LOG_FLOW).noquote()
-            << QStringLiteral("已清空内存点云缓存，条目数=") << cacheSize;
+            << QStringLiteral("[多路径] 已清空内存点云缓存，总条目数=") << totalCacheSize
+            << QStringLiteral("，路径ID已重置为1");
     }
 
     m_segmentCalibrationMatrices.clear();
@@ -2724,9 +3112,9 @@ void StateMachine::reloadCalibrationMatricesFromConfig()
     qInfo(LOG_FLOW).noquote() << QStringLiteral("已从 scan_paths_config 加载标定矩阵 T0");
 }
 
-bool StateMachine::resolveNeedRotationForSegment(int segmentIndex) const
+bool StateMachine::resolveNeedRotationForSegment(int pathId, int segmentIndex) const
 {
-    return lookupNeedRotationForSegment(segmentIndex);
+    return lookupNeedRotationForSegment(pathId, segmentIndex);
 }
 
 void StateMachine::applyLbnCalibrationUpdate(
@@ -3003,29 +3391,63 @@ bool StateMachine::validateScanSegmentRequest(const QVector<quint16>& commandBlo
         return false;
     }
 
-    // 检查是否已经采集过该分段（防止重复触发污染缓存）
+    const int targetPathId = resolvePathIdForIncomingSegment(segmentIndex);
+
     {
         std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
-        if (m_segmentCaptureResults.contains(segmentIndex)) {
+
+        if (m_currentPathSegments.contains(segmentIndex) && !isCurrentPathSegmentSetComplete()) {
             if (errorMessage != nullptr) {
-                *errorMessage = QStringLiteral("重复扫描段号：%1").arg(segmentIndex);
+                *errorMessage = QStringLiteral(
+                    "当前路径尚未扫满，拒绝重复段号：段号=%1，路径=%2")
+                                      .arg(segmentIndex)
+                                      .arg(m_currentPathId);
             }
-            qWarning(LOG_FLOW).noquote() << QStringLiteral("拒绝 Trig_ScanSegment：段号已缓存")
-                                         << QStringLiteral(" 段号=") << segmentIndex
-                                         << QStringLiteral(" 当前缓存段数=") << m_segmentCaptureResults.size();
+            qWarning(LOG_FLOW).noquote()
+                << QStringLiteral("拒绝 Trig_ScanSegment：路径内重复段号")
+                << QStringLiteral(" 段号=") << segmentIndex
+                << QStringLiteral(" 路径=") << m_currentPathId;
             return false;
         }
 
-        // P2改进：检查缓存大小是否达到上限，防止内存无限增长
-        if (m_segmentCaptureResults.size() >= kMaxPointCloudCacheSize) {
+        if (m_currentPathSegments.contains(segmentIndex) && isCurrentPathSegmentSetComplete()) {
+            const QVector<int> pathIds = enabledScanPathIds();
+            if (pathIds.isEmpty() || pathIds.indexOf(targetPathId) < 0) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = QStringLiteral("所有配置路径已扫描完成，无法再切换路径。");
+                }
+                return false;
+            }
+            if (targetPathId == m_currentPathId) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = QStringLiteral("无下一路径可切换，段号=%1").arg(segmentIndex);
+                }
+                return false;
+            }
+        }
+
+        if (m_pathSegmentCaptureResults.contains(targetPathId) &&
+            m_pathSegmentCaptureResults[targetPathId].contains(segmentIndex)) {
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral("路径 %1 段 %2 已缓存，拒绝重复扫描。")
+                                    .arg(targetPathId)
+                                    .arg(segmentIndex);
+            }
+            return false;
+        }
+
+        int cachedCount = 0;
+        for (auto pathIt = m_pathSegmentCaptureResults.constBegin();
+             pathIt != m_pathSegmentCaptureResults.constEnd();
+             ++pathIt) {
+            cachedCount += pathIt->size();
+        }
+        if (cachedCount >= kMaxPointCloudCacheSize) {
             if (errorMessage != nullptr) {
                 *errorMessage = QStringLiteral("点云内存缓存已满：当前 %1 段，上限 %2")
-                    .arg(m_segmentCaptureResults.size())
-                    .arg(kMaxPointCloudCacheSize);
+                                    .arg(cachedCount)
+                                    .arg(kMaxPointCloudCacheSize);
             }
-            qWarning(LOG_FLOW).noquote() << QStringLiteral("拒绝 Trig_ScanSegment：内存缓存已满")
-                                         << QStringLiteral(" 当前=") << m_segmentCaptureResults.size()
-                                         << QStringLiteral(" 上限=") << kMaxPointCloudCacheSize;
             return false;
         }
     }

@@ -35,6 +35,7 @@ namespace flow_control {
 /// 分段点云后处理 worker 输出（由主线程 applySegmentProcessOutcome 消费）
 struct SegmentProcessOutcome {
     bool success = false;
+    int pathId = 0;
     int segmentIndex = 0;
     quint32 taskId = 0;
     quint64 captureRequestId = 0;
@@ -213,6 +214,7 @@ private:
         bool completionAnnounced = false;                          // 是否已宣布完成
         int scanSegmentIndex = 0;                                  // 扫描段索引
         int scanSegmentTotal = 0;                                  // 扫描段总数
+        int inspectionPathId = 0;                                  // 本次 Trig_Inspection 对应的路径 ID
         quint64 captureRequestId = 0;                              // 采集请求 ID
     };
 
@@ -326,12 +328,14 @@ private:
 
     // 原始点云一次深拷贝入内存并立即完成 Trig_ScanSegment 握手
     void commitScanSegmentCaptureImmediate(
+        int pathId,
         int segmentIndex,
         const scan_tracking::mech_eye::CaptureResult& result,
         const scan_tracking::vision::MultiCameraCaptureBundle& bundle);
 
     // 后台 PCL 点云 refinement（与 PLC 握手并行；PCL 在 processPointCloudFrame 内串行）
     void startSegmentBackgroundRefinement(
+        int pathId,
         int segmentIndex,
         quint32 taskId,
         const scan_tracking::common::PointCloudProcessingConfig& config);
@@ -346,8 +350,32 @@ private:
     QMap<int, scan_tracking::mech_eye::CaptureResult> loadSegmentCaptureResultsForInspection(
         QString* errorMessage);
 
-    /// PLC 联调临时容错：1..scanSegmentTotal 段点云均已入缓存
+    /// 所有启用路径的 1..scanSegmentTotal 段均已缓存
     bool hasAllScanSegmentsCached() const;
+
+    /// 指定路径是否已缓存 1..scanSegmentTotal 全部段
+    bool isPathScanComplete(int pathId) const;
+
+    /// 是否存在至少一条已扫满、可执行 Trig_Inspection 的路径
+    bool hasPathReadyForInspection() const;
+
+    /// 本次检测应使用的路径 ID（取已扫满的最高路径号）
+    int resolvePathIdForInspection() const;
+
+    /// 当前路径是否已扫满 scanSegmentTotal 段（内存段号集合）
+    bool isCurrentPathSegmentSetComplete() const;
+
+    /// 获取所有路径的总缓存点云数量
+    int totalCachedPointCloudCount() const;
+
+    /// 检查指定路径的指定段号是否已缓存
+    bool hasSegmentInPath(int pathId, int segmentIndex) const;
+
+    /// 本次 Trig_ScanSegment 应写入的路径 ID（段号重复且当前路径已满则切下一路径）
+    int resolvePathIdForIncomingSegment(int segmentIndex) const;
+
+    /// 多路径缓存进度摘要（日志/拒绝过早检测时使用）
+    QString multiPathCacheStatusText() const;
 
     /// 从命令块选取下一个待处理触发（含 Scan/Inspection 同时为 1 时的优先级）
     const protocol::TriggerDefinition* selectPendingTrigger(const QVector<quint16>& commandBlock) const;
@@ -355,8 +383,8 @@ private:
     // 从 scan_paths_config.json 重新加载 T0，并重置当前标定矩阵
     void reloadCalibrationMatricesFromConfig();
 
-    // segmentIndex 与 scan_paths 中 pointIndex 对齐时返回 needRotation
-    bool resolveNeedRotationForSegment(int segmentIndex) const;
+    // pathId + segmentIndex 与 scan_paths 中点位对齐时返回 needRotation
+    bool resolveNeedRotationForSegment(int pathId, int segmentIndex) const;
 
     // 转动点位：用 LBN 的 Rt 更新当前标定矩阵 T0' = Rt × T0
     void applyLbnCalibrationUpdate(
@@ -480,8 +508,12 @@ private:
     QElapsedTimer m_pollRequestTimer;                       // 当前轮询请求耗时计时器
     int m_consecutiveModbusFailures = 0;                    // 连续 Modbus 失败次数
     QVector<quint16> m_lastCommandBlock;                    // 上一次命令块副本
-    QMap<int, scan_tracking::mech_eye::CaptureResult> m_segmentCaptureResults;  // 分段点云（先原始，后台 refinement 后更新）
-    QMap<int, scan_tracking::vision::MultiCameraCaptureBundle> m_segmentCaptureBundles;  // 分段视觉 bundle（含海康帧）
+    
+    // === 多路径支持：二维缓存结构（路径ID → 段号 → 数据） ===
+    QMap<int, QMap<int, scan_tracking::mech_eye::CaptureResult>> m_pathSegmentCaptureResults;  // 多路径点云缓存
+    QMap<int, QMap<int, scan_tracking::vision::MultiCameraCaptureBundle>> m_pathSegmentCaptureBundles;  // 多路径视觉 bundle
+    int m_currentPathId = 1;                                // 当前路径ID（自动递增）
+    QSet<int> m_currentPathSegments;                        // 当前路径已缓存的段号集合（用于检测重复）
     mutable std::mutex m_segmentCacheMutex;
     std::array<float, 16> m_baseCalibrationMatrix{};       // 基准 T0（来自 scan_paths_config.json）
     std::array<float, 16> m_currentCalibrationMatrix{};    // 当前 T0' / T0''（转动点由 LBN 链式更新）
@@ -490,8 +522,11 @@ private:
     /// 综合检测结果推送（与 TrackingService::InspectionResultNotifier 共用同一回调）
     std::function<void(const tracking::InspectionResult&)> m_inspectionResultPublisher;
 
-    static constexpr int kMaxPointCloudCacheSize = 20;    // 允许的最大点云缓存条目数，防止内存无限增长
+    static constexpr int kMaxPointCloudCacheSize = 24;    // 多路径缓存上限（3 路径 × 6 段 = 18，留余量）
     static constexpr int kMaxReasonableRefinementJobs = 32;  // 并发 refinement 上限（超出视为逻辑错误）
+    static constexpr int kShutdownRefinementJoinTimeoutMs = 3000;
+
+    std::atomic_bool m_stopped{false};
 
     void registerRefinementJob();
     void completeRefinementJob();
