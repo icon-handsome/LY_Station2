@@ -13,6 +13,7 @@
 #include <vector>
 
 #include <QtCore/QJsonObject>
+#include <QtCore/QLoggingCategory>
 #include <QtCore/QMetaType>
 
 #include "scan_tracking/common/application_info.h"
@@ -22,7 +23,13 @@
 
 namespace scan_tracking::tracking {
 
+Q_LOGGING_CATEGORY(LOG_TRACKING, "tracking")
+
 namespace {
+
+// TODO(field-commissioning): 蓝友 FirstOut/FirstInliner 现场崩溃，临时 bypass 不调用算法；
+// 联调通过后改为 false，并恢复下方 runFirstStationDetection() 调用。
+constexpr bool kBypassLanyouFirstStationDetection = true;
 
 void ensureInspectionMeasurementMetaTypeRegistered()
 {
@@ -254,6 +261,18 @@ InspectionResult TrackingService::inspectSegments(
         result.message = QStringLiteral(
             "第一工位检测缺少必需分段，当前配置段位为 %1。")
                              .arg(selectedSegmentText(segmentMapping));
+        return deliverInspectionResult(result, notifyListener);
+    }
+
+    if (kBypassLanyouFirstStationDetection) {
+        result.resultCode = 1;
+        result.measureItemCount = 0;
+        result.message = QStringLiteral(
+            "TODO(field-commissioning): 蓝友第一工位算法已临时 bypass，未调用 runFirstStationDetection，"
+            "固定返回 OK(resultCode=1)；段位 %1，总点数 %2。")
+                             .arg(selectedSegmentText(segmentMapping))
+                             .arg(result.totalPointCount);
+        qWarning(LOG_TRACKING).noquote() << result.message;
         return deliverInspectionResult(result, notifyListener);
     }
 

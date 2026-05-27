@@ -16,6 +16,7 @@
 #include <QtCore/QFile>
 #include <QtCore/QLoggingCategory>
 #include <QtCore/QMetaObject>
+#include <QtCore/QPointer>
 #include <QtCore/QSettings>
 #include <QtCore/QString>
 #include <QtCore/QTimer>
@@ -289,10 +290,12 @@ void ConsoleRuntime::initModules()
         hmiTcpServer_->bindServiceSignals();
 
         // 演示初版：蓝友 inspectSegments 返回后立即经 HMI TCP 推送 event.inspection.finished（含失败）
-        const auto publishInspectionToHmi =
-            [this](const scan_tracking::tracking::InspectionResult& inspectionResult) {
-                if (hmiTcpServer_) {
-                    hmiTcpServer_->publishInspectionResult(inspectionResult);
+        // 注意：std::function 不可对同一对象连续 std::move，否则 StateMachine 侧会得到空回调并在析构时崩溃。
+        const QPointer<scan_tracking::hmi_server::HmiTcpServer> hmiWeak(hmiTcpServer_.get());
+        const scan_tracking::tracking::InspectionResultNotifier publishInspectionToHmi =
+            [hmiWeak](const scan_tracking::tracking::InspectionResult& inspectionResult) {
+                if (hmiWeak) {
+                    hmiWeak->publishInspectionResult(inspectionResult);
                 }
             };
         trackingService_->setInspectionResultNotifier(publishInspectionToHmi);

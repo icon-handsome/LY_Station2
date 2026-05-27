@@ -38,7 +38,8 @@ struct SegmentProcessOutcome {
     int segmentIndex = 0;
     quint32 taskId = 0;
     quint64 captureRequestId = 0;
-    qint64 processElapsedMs = 0;
+    qint64 processElapsedMs = 0;       ///< 后台 refinement 总耗时（含排队、克隆、PCL）
+    qint64 pclProcessElapsedMs = 0;    ///< processPointCloudFrame 耗时
     int rawPointCount = 0;
     int processedPointCount = 0;
     QString errorMessage;
@@ -339,11 +340,11 @@ private:
     void applySegmentRefinementOutcome(const SegmentProcessOutcome& outcome);
 
     // maxWaitMs < 0 表示使用默认上限；综合检测会传入「任务超时 - 余量」避免占满 60s
-    void joinAllBackgroundRefinementJobs(int maxWaitMs = -1) const;
+    void joinAllBackgroundRefinementJobs(int maxWaitMs = -1);
 
-    // 综合检测前从内存缓存取 [Tracking] 必需的三段点云
+    // 综合检测前从内存缓存取 [Tracking] 必需的三段点云（会等待后台 refinement，不可 const）
     QMap<int, scan_tracking::mech_eye::CaptureResult> loadSegmentCaptureResultsForInspection(
-        QString* errorMessage) const;
+        QString* errorMessage);
 
     /// PLC 联调临时容错：1..scanSegmentTotal 段点云均已入缓存
     bool hasAllScanSegmentsCached() const;
@@ -495,6 +496,8 @@ private:
     void registerRefinementJob();
     void completeRefinementJob();
     int pendingRefinementJobCount() const;
+    /// 计数越界时强制归零，避免 join 死循环；返回复位前的值
+    int reconcilePendingRefinementJobCounter(const char* reason);
     void dispatchSegmentRefinementFinished(SegmentProcessOutcome outcome);
 
     /// 后台 refinement 在途数（原子计数，避免在 processEvents 重入时锁 std::mutex 崩溃）

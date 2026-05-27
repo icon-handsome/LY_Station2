@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <exception>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -66,6 +67,21 @@ constexpr int kDefaultScanSegmentCaptureTimeoutMs = 30000;
 constexpr int kMaxConsecutiveModbusFailures = 3;
 constexpr int kPollLogEveryN = 20;
 constexpr int kBackgroundRefinementJoinTimeoutMs = 300000;
+
+/// PLC `Res_Inspection`：1=OK，6=超时 NG（与 Modbus 协议一致）
+constexpr quint16 kInspectionResOk = 1;
+constexpr quint16 kInspectionResTimeoutNg = 6;
+
+// TODO(field-commissioning): 现场联调临时策略——仅超时向 PLC 报 NG（Res_Inspection=6）；
+// 算法 NG、缺段、Tracking 不可用等其它情况一律回 Res=1(OK)。日志/HMI 仍保留真实结果码。
+// 联调结束、恢复按蓝友/业务判定写 Res 后，删除本函数并在 executeInspectionTask 中直传 actualResultCode。
+quint16 inspectionResForPlcHandshake(quint16 actualResultCode)
+{
+    if (actualResultCode == kInspectionResTimeoutNg) {
+        return kInspectionResTimeoutNg;
+    }
+    return kInspectionResOk;
+}
 
 int countHikImagesInBundle(const scan_tracking::vision::MultiCameraCaptureBundle& bundle)
 {
@@ -449,6 +465,11 @@ void StateMachine::start()
     m_progress = 0;              // 重置进度
     m_dataValid = false;         // 标记数据无效
     m_consecutiveModbusFailures = 0;  // 重置 Modbus 失败计数器
+    const int stalePending = m_pendingRefinementJobs.exchange(0, std::memory_order_acq_rel);
+    if (stalePending != 0) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("状态机 start：复位后台 refinement 在途计数 stale=") << stalePending;
+    }
     setState(AppState::Init);    // 设置应用状态为初始化
     publishIpcStatus();          // 发布 IPC 状态到 PLC
 
@@ -467,6 +488,9 @@ void StateMachine::start()
 void StateMachine::stop()
 {
     joinAllBackgroundRefinementJobs();
+    if (pendingRefinementJobCount() != 0) {
+        reconcilePendingRefinementJobCounter("stop");
+    }
 
     m_pollTimer->stop();         // 停止 PLC 轮询定时器
     m_heartbeatTimer->stop();    // 停止心跳定时器
@@ -485,6 +509,7 @@ void StateMachine::stop()
     m_currentStage = protocol::Stage::Idle;         // 设置当前阶段为空闲
     resetPlcOutputRegisters();   // 退出时将 IPC→PLC 结果区全部清零
     setState(AppState::Init);    // 设置应用状态为初始化
+    m_inspectionResultPublisher = nullptr;  // 避免析构已 move 走的 std::function
 }
 
 /**
@@ -1082,7 +1107,26 @@ void StateMachine::executeScanSegmentTask()
 
 void StateMachine::onVisionBundleCaptureFinished(scan_tracking::vision::MultiCameraCaptureBundle bundle)
 {
-    if (!m_activeTask.definition || bundle.request.taskId != m_activeTask.taskId) {
+    if (!m_activeTask.definition
+        || m_activeTask.definition->stage != protocol::Stage::ScanSegment) {
+        return;
+    }
+    if (m_activeTask.completionAnnounced) {
+        qInfo(LOG_FLOW).noquote()
+            << QStringLiteral("忽略过期视觉 bundle（Trig_ScanSegment 已握手完成）")
+            << QStringLiteral(" 段号=") << bundle.request.segmentIndex
+            << QStringLiteral(" requestId=") << bundle.request.requestId;
+        return;
+    }
+    if (bundle.request.taskId != m_activeTask.taskId) {
+        return;
+    }
+    if (m_activeTask.captureRequestId != 0
+        && bundle.request.requestId != m_activeTask.captureRequestId) {
+        qInfo(LOG_FLOW).noquote()
+            << QStringLiteral("忽略 requestId 不匹配的视觉 bundle：期望=")
+            << m_activeTask.captureRequestId
+            << QStringLiteral(" 实际=") << bundle.request.requestId;
         return;
     }
 
@@ -1189,28 +1233,39 @@ int StateMachine::pendingRefinementJobCount() const
 {
     const int count = m_pendingRefinementJobs.load(std::memory_order_acquire);
     if (count < 0 || count > kMaxReasonableRefinementJobs) {
-        qCritical(LOG_FLOW).noquote()
-            << QStringLiteral("后台 refinement 在途计数异常 pending=") << count
-            << QStringLiteral("（不复位，继续等待自然收尾）");
+        return -1;
     }
     return count;
 }
 
-void StateMachine::joinAllBackgroundRefinementJobs(int maxWaitMs) const
+int StateMachine::reconcilePendingRefinementJobCounter(const char* reason)
+{
+    const int pending = m_pendingRefinementJobs.exchange(0, std::memory_order_acq_rel);
+    if (pending == 0) {
+        return 0;
+    }
+
+    qCritical(LOG_FLOW).noquote()
+        << QStringLiteral("后台 refinement 在途计数已强制复位 pending=") << pending
+        << QStringLiteral(" 原因=") << (reason != nullptr ? QString::fromUtf8(reason) : QString())
+        << QStringLiteral("（常见根因：旧版 dispatch 对已 move 的 outcome 二次 invoke；"
+                           "或 register/complete 未成对；将用原始点云继续综合检测）");
+    return pending;
+}
+
+void StateMachine::joinAllBackgroundRefinementJobs(int maxWaitMs)
 {
     const int waitLimitMs = maxWaitMs >= 0
         ? maxWaitMs
         : kBackgroundRefinementJoinTimeoutMs;
 
     int remaining = pendingRefinementJobCount();
-    if (remaining <= 0) {
+    if (remaining < 0) {
+        reconcilePendingRefinementJobCounter("join 入口计数异常");
         return;
     }
-
-    if (remaining > kMaxReasonableRefinementJobs || remaining < 0) {
-        qCritical(LOG_FLOW).noquote()
-            << QStringLiteral("后台 refinement 待处理数异常 pending=") << remaining
-            << QStringLiteral("，仍将轮询等待（不复位计数）");
+    if (remaining <= 0) {
+        return;
     }
 
     qInfo(LOG_FLOW).noquote()
@@ -1219,63 +1274,62 @@ void StateMachine::joinAllBackgroundRefinementJobs(int maxWaitMs) const
 
     int waitedMs = 0;
     while (remaining > 0 && waitedMs < waitLimitMs) {
-        QThread::msleep(50);
-        waitedMs += 50;
+        // 先 pump 事件，确保 QueuedConnection 的 refinement 收尾能执行 completeRefinementJob
         if (QCoreApplication::instance() != nullptr) {
             QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
         }
+        QThread::msleep(50);
+        waitedMs += 50;
         remaining = pendingRefinementJobCount();
+        if (remaining < 0) {
+            reconcilePendingRefinementJobCounter("join 轮询计数异常");
+            return;
+        }
     }
 
     if (remaining > 0) {
         qWarning(LOG_FLOW).noquote()
             << QStringLiteral("后台点云 refinement 未在时限内结束，剩余=") << remaining
             << QStringLiteral("；综合检测将使用当前缓存（可能含未 refine 的原始点云）");
+        reconcilePendingRefinementJobCounter("join 超时仍有在途任务");
     }
 }
 
 void StateMachine::dispatchSegmentRefinementFinished(SegmentProcessOutcome outcome)
 {
+    // 使用 shared_ptr 避免 invokeMethod 失败时对已 move 的 outcome 二次 move（UB，可破坏 m_pendingRefinementJobs）
+    const auto outcomeHolder = std::make_shared<SegmentProcessOutcome>(std::move(outcome));
     QPointer<StateMachine> self(this);
-    if (!self || QCoreApplication::instance() == nullptr) {
+
+    const auto deliverOnMainThread = [self, outcomeHolder]() {
+        if (!self) {
+            qWarning(LOG_FLOW).noquote()
+                << QStringLiteral("后台 refinement 回调时 StateMachine 已销毁，在途计数将在 stop/reset 时复位");
+            return;
+        }
+        self->onSegmentBackgroundRefinementFinished(std::move(*outcomeHolder));
+    };
+
+    if (QThread::currentThread() == thread()) {
+        deliverOnMainThread();
+        return;
+    }
+
+    if (QCoreApplication::instance() == nullptr) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("后台 refinement 无法投递到主线程（无 QCoreApplication），仅平衡在途计数");
         completeRefinementJob();
         return;
     }
 
-    const bool queued = QMetaObject::invokeMethod(
-        self,
-        [self, pendingJobs = &m_pendingRefinementJobs, outcome = std::move(outcome)]() mutable {
-            if (!self) {
-                qWarning(LOG_FLOW).noquote()
-                    << QStringLiteral("后台 refinement 回调时 StateMachine 已销毁，仅平衡在途计数");
-                const int previous = pendingJobs->fetch_sub(1, std::memory_order_acq_rel);
-                if (previous <= 0) {
-                    pendingJobs->fetch_add(1, std::memory_order_relaxed);
-                }
-                return;
-            }
-            self->onSegmentBackgroundRefinementFinished(std::move(outcome));
-        },
-        Qt::QueuedConnection);
-    if (queued) {
+    if (QMetaObject::invokeMethod(this, deliverOnMainThread, Qt::QueuedConnection)) {
         return;
     }
 
     qWarning(LOG_FLOW).noquote()
-        << QStringLiteral("后台 refinement 排队到主线程失败，改同步派发 段号=") << outcome.segmentIndex;
-    QMetaObject::invokeMethod(
-        self,
-        [self, pendingJobs = &m_pendingRefinementJobs, outcome = std::move(outcome)]() mutable {
-            if (!self) {
-                const int previous = pendingJobs->fetch_sub(1, std::memory_order_acq_rel);
-                if (previous <= 0) {
-                    pendingJobs->fetch_add(1, std::memory_order_relaxed);
-                }
-                return;
-            }
-            self->onSegmentBackgroundRefinementFinished(std::move(outcome));
-        },
-        Qt::BlockingQueuedConnection);
+        << QStringLiteral("后台 refinement QueuedConnection 失败，改 BlockingQueuedConnection 段号=")
+        << outcomeHolder->segmentIndex;
+    QMetaObject::invokeMethod(this, deliverOnMainThread, Qt::BlockingQueuedConnection);
 }
 
 void StateMachine::startSegmentBackgroundRefinement(
@@ -1289,40 +1343,78 @@ void StateMachine::startSegmentBackgroundRefinement(
         return;
     }
 
-    registerRefinementJob();
-
     qInfo(LOG_FLOW).noquote()
-        << QStringLiteral("[ScanSync] 后台 refinement 开始，段号=") << segmentIndex
+        << QStringLiteral("[ScanSync] 后台 refinement 已排队，段号=") << segmentIndex
         << QStringLiteral(" 任务ID=") << taskId;
 
     QPointer<StateMachine> self(this);
-    std::atomic_int* pendingJobs = &m_pendingRefinementJobs;
-    std::thread([self, pendingJobs, segmentIndex, taskId, config]() {
+    const qint64 refinementQueuedAtMs = QDateTime::currentMSecsSinceEpoch();
+    std::thread([self, segmentIndex, taskId, config, refinementQueuedAtMs]() {
+        QElapsedTimer refinementWallTimer;
+        refinementWallTimer.start();
+
+        // 多段 400 万级点云并行 refinement 会占满内存；与 PCL 全局锁一致，进程内串行执行。
+        static std::mutex kSegmentRefinementSerialMutex;
+        std::lock_guard<std::mutex> serialGuard(kSegmentRefinementSerialMutex);
+        const qint64 queueWaitMs = refinementWallTimer.elapsed();
+
+        if (!self) {
+            return;
+        }
+
+        self->registerRefinementJob();
+
+        struct RefinementPendingGuard {
+            QPointer<StateMachine> owner;
+            bool handedOff = false;
+            void handOff() { handedOff = true; }
+            ~RefinementPendingGuard()
+            {
+                if (!handedOff && owner) {
+                    owner->completeRefinementJob();
+                }
+            }
+        } pendingGuard{self};
+
         SegmentProcessOutcome outcome;
         outcome.segmentIndex = segmentIndex;
         outcome.taskId = taskId;
 
-        const auto releasePendingJob = [&]() {
-            if (pendingJobs == nullptr) {
-                return;
-            }
-            const int previous = pendingJobs->fetch_sub(1, std::memory_order_acq_rel);
-            if (previous <= 0) {
-                pendingJobs->fetch_add(1, std::memory_order_relaxed);
-            }
+        const auto logRefinementTiming = [&](const SegmentProcessOutcome& finished) {
+            qInfo(LOG_FLOW).noquote()
+                << QStringLiteral("[RefinementTimer] Mech点云后台refinement")
+                << QStringLiteral(" 段号=") << finished.segmentIndex
+                << QStringLiteral(" 任务ID=") << finished.taskId
+                << QStringLiteral(" 成功=") << (finished.success ? QStringLiteral("是") : QStringLiteral("否"))
+                << QStringLiteral(" 总耗时ms=") << finished.processElapsedMs
+                << QStringLiteral(" (排队等待ms=") << queueWaitMs
+                << QStringLiteral(" PCL多步处理ms=") << finished.pclProcessElapsedMs
+                << QStringLiteral(" 点数=") << finished.rawPointCount
+                << QStringLiteral("->") << finished.processedPointCount
+                << QStringLiteral(" 入队时刻ms=") << refinementQueuedAtMs;
         };
 
         const auto finishJob = [&](SegmentProcessOutcome finishedOutcome) {
+            finishedOutcome.processElapsedMs = refinementWallTimer.elapsed();
+            logRefinementTiming(finishedOutcome);
             if (self) {
+                pendingGuard.handOff();
                 self->dispatchSegmentRefinementFinished(std::move(finishedOutcome));
             } else {
-                releasePendingJob();
+                qWarning(LOG_FLOW).noquote()
+                    << QStringLiteral("后台 refinement 完成时 StateMachine 已销毁，段号=") << segmentIndex;
             }
         };
 
+        qInfo(LOG_FLOW).noquote()
+            << QStringLiteral("[ScanSync] 后台 refinement 开始，段号=") << segmentIndex
+            << QStringLiteral(" 任务ID=") << taskId
+            << QStringLiteral(" 排队等待ms=") << queueWaitMs;
+
         try {
             if (!self) {
-                releasePendingJob();
+                qWarning(LOG_FLOW).noquote()
+                    << QStringLiteral("后台 refinement 启动时 StateMachine 已销毁，段号=") << segmentIndex;
                 return;
             }
 
@@ -1345,8 +1437,8 @@ void StateMachine::startSegmentBackgroundRefinement(
                 return;
             }
 
-            QElapsedTimer timer;
-            timer.start();
+            QElapsedTimer pclTimer;
+            pclTimer.start();
 
             scan_tracking::mech_eye::PointCloudProcessReport report;
             scan_tracking::mech_eye::PointCloudFrame processedCloud;
@@ -1369,7 +1461,7 @@ void StateMachine::startSegmentBackgroundRefinement(
                     : report.message;
                 outcome.rawPointCount = report.inputPointCount;
             }
-            outcome.processElapsedMs = timer.elapsed();
+            outcome.pclProcessElapsedMs = pclTimer.elapsed();
             finishJob(std::move(outcome));
         } catch (const std::exception& ex) {
             qCritical(LOG_FLOW).noquote()
@@ -1405,7 +1497,8 @@ void StateMachine::onSegmentBackgroundRefinementFinished(SegmentProcessOutcome o
         << QStringLiteral("[ScanSync] 后台 refinement 完成")
         << QStringLiteral(" 段号=") << outcome.segmentIndex
         << QStringLiteral(" 任务ID=") << outcome.taskId
-        << QStringLiteral(" 耗时ms=") << outcome.processElapsedMs
+        << QStringLiteral(" 总耗时ms=") << outcome.processElapsedMs
+        << QStringLiteral(" PCL处理ms=") << outcome.pclProcessElapsedMs
         << QStringLiteral(" 点数=") << outcome.rawPointCount << QStringLiteral("->") << outcome.processedPointCount;
 
     applySegmentRefinementOutcome(outcome);
@@ -1621,7 +1714,7 @@ const protocol::TriggerDefinition* StateMachine::selectPendingTrigger(
 }
 
 QMap<int, scan_tracking::mech_eye::CaptureResult> StateMachine::loadSegmentCaptureResultsForInspection(
-    QString* errorMessage) const
+    QString* errorMessage)
 {
     int maxJoinMs = kBackgroundRefinementJoinTimeoutMs;
     if (m_activeTask.definition != nullptr &&
@@ -1634,11 +1727,16 @@ QMap<int, scan_tracking::mech_eye::CaptureResult> StateMachine::loadSegmentCaptu
     }
     joinAllBackgroundRefinementJobs(maxJoinMs);
 
-    const int pendingAfterJoin = pendingRefinementJobCount();
-    if (pendingAfterJoin > 0) {
+    int pendingAfterJoin = pendingRefinementJobCount();
+    if (pendingAfterJoin < 0) {
+        reconcilePendingRefinementJobCounter("综合检测前计数异常");
+        pendingAfterJoin = 0;
+    } else if (pendingAfterJoin > 0) {
         qWarning(LOG_FLOW).noquote()
-            << QStringLiteral("综合检测开始时仍有后台 refinement 在途=") << pendingAfterJoin
-            << QStringLiteral("；蓝友 PCL 将与 refinement 串行化，请勿并发调用");
+            << QStringLiteral("综合检测 join 超时后仍有 refinement 在途=") << pendingAfterJoin
+            << QStringLiteral("，已强制复位；将使用当前缓存点云（可能为未 refine 的原始点云）");
+        reconcilePendingRefinementJobCounter("综合检测前 join 未清空");
+        pendingAfterJoin = 0;
     }
 
     QMap<int, scan_tracking::mech_eye::CaptureResult> loaded;
@@ -1703,7 +1801,8 @@ tracking::InspectionResult StateMachine::runDebugInspectionOnCachedSegments() co
     }
 
     QString loadError;
-    const auto segmentsForInspection = loadSegmentCaptureResultsForInspection(&loadError);
+    auto* mutableSelf = const_cast<StateMachine*>(this);
+    const auto segmentsForInspection = mutableSelf->loadSegmentCaptureResultsForInspection(&loadError);
     if (segmentsForInspection.isEmpty()) {
         failure.ngReasonWord0 = (1u << 4);
         failure.message = loadError.isEmpty()
@@ -1732,8 +1831,9 @@ void StateMachine::executeInspectionTask()
             m_inspectionResultPublisher(failure);
         }
 
-        // 完成任务，标记为失败，数据无效
-        completeActiveTask(7, protocol::AckState::Failed, false);
+        // TODO(field-commissioning): 真实失败码为 7；PLC 侧临时强制 Res_Inspection=1(OK)
+        const quint16 plcRes = inspectionResForPlcHandshake(7);
+        completeActiveTask(plcRes, protocol::AckState::Completed, plcRes == kInspectionResOk);
         resetPointCloudCache();  // 清空点云缓存
         return;
     }
@@ -1752,7 +1852,9 @@ void StateMachine::executeInspectionTask()
                 : loadError;
             m_inspectionResultPublisher(failure);
         }
-        completeActiveTask(7, protocol::AckState::Failed, false);
+        // TODO(field-commissioning): 真实失败码为 7；PLC 侧临时强制 Res_Inspection=1(OK)
+        const quint16 plcRes = inspectionResForPlcHandshake(7);
+        completeActiveTask(plcRes, protocol::AckState::Completed, plcRes == kInspectionResOk);
         resetScanSegmentCache();
         return;
     }
@@ -1779,13 +1881,20 @@ void StateMachine::executeInspectionTask()
         << QStringLiteral(" 偏移Zmm=") << trackingResult.offsetZmm
         << QStringLiteral(" 说明=") << trackingResult.message;
 
-    // 将检测结果写入 PLC 寄存器
+    // 将检测结果写入 PLC 寄存器（NG 字等仍写真实算法结果，供联调日志/后续恢复）
     writeInspectionResult(summary);
-    // 完成任务：如果 resultCode==1 则数据有效，否则无效
-    completeActiveTask(
-        summary.resultCode,
-        protocol::AckState::Completed,
-        summary.resultCode == 1);
+
+    // TODO(field-commissioning): Res_Inspection 仅超时(6)报 NG，其它一律 OK(1)
+    const quint16 actualResultCode = summary.resultCode;
+    const quint16 plcRes = inspectionResForPlcHandshake(actualResultCode);
+    if (plcRes != actualResultCode) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("TODO(field-commissioning): Res_Inspection 临时强制 OK")
+            << QStringLiteral(" actualResultCode=") << actualResultCode
+            << QStringLiteral(" plcRes=") << plcRes
+            << QStringLiteral(" message=") << trackingResult.message;
+    }
+    completeActiveTask(plcRes, protocol::AckState::Completed, plcRes == kInspectionResOk);
     emit inspectionFinished(
         summary.resultCode, summary.ngReasonWord0, summary.ngReasonWord1,
         summary.measureItemCount, summary.offsetXmm, summary.offsetYmm, summary.offsetZmm,
@@ -1980,6 +2089,16 @@ void StateMachine::onProcessTimeout()
         // 扫描分段超时：写入空结果（0 图像数，0 点云帧数）
         writeScanSegmentResult(m_activeTask.scanSegmentIndex, 0, 0);
         completeActiveTask(6, protocol::AckState::Failed, false);  // Res=6 表示超时
+        return;
+    }
+    if (m_activeTask.definition->stage == protocol::Stage::Inspection) {
+        // TODO(field-commissioning): 综合检测超时为唯一向 PLC 报 NG 的路径（Res_Inspection=6）
+        writeInspectionResult({});
+        completeActiveTask(
+            kInspectionResTimeoutNg,
+            protocol::AckState::Failed,
+            false);
+        resetScanSegmentCache();
         return;
     }
     // 其他任务超时：直接完成，标记为失败
@@ -2549,6 +2668,9 @@ void StateMachine::resetPointCloudCache()
 void StateMachine::resetScanSegmentCache()
 {
     joinAllBackgroundRefinementJobs();
+    if (pendingRefinementJobCount() != 0) {
+        reconcilePendingRefinementJobCounter("resetScanSegmentCache");
+    }
 
     std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
     for (auto it = m_segmentCaptureBundles.begin(); it != m_segmentCaptureBundles.end(); ++it) {
