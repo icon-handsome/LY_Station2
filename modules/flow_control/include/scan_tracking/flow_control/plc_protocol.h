@@ -198,12 +198,25 @@ constexpr int kTaskIdHigh = modbusIndexFromPlcAddress(40011);
 constexpr int kTaskIdLow = modbusIndexFromPlcAddress(40012);
 constexpr int kProductType = modbusIndexFromPlcAddress(40013);
 constexpr int kRecipeId = modbusIndexFromPlcAddress(40014);
-constexpr int kScanSegmentIndex = modbusIndexFromPlcAddress(40015);
+constexpr int kScanSegmentIndex = modbusIndexFromPlcAddress(40015);       ///< 地址表 40015
+constexpr int kScanSegmentIndexRobot = modbusIndexFromPlcAddress(40016);  ///< 机械臂/PLC 实际下发段号
 constexpr int kRequestTimeoutSeconds = modbusIndexFromPlcAddress(40017);
 
-// ==================== 结果区寄存器（IPC → PLC）====================
+/// 从 40015/40016 解析段号：优先非零的 40015，否则读 40016（机械臂经 PLC 转发）
+inline quint16 resolveScanSegmentIndexFromBlock(const QVector<quint16>& commandBlock)
+{
+    const quint16 raw40015 = commandBlock.value(kScanSegmentIndex);
+    const quint16 raw40016 = commandBlock.value(kScanSegmentIndexRobot);
+    if (raw40015 != 0) {
+        return plcAnalogToUInt16(raw40015, 0);
+    }
+    if (raw40016 != 0) {
+        return plcAnalogToUInt16(raw40016, 0);
+    }
+    return 0;
+}
 
-// --- IPC系统状态 ---
+// ==================== 结果区寄存器（IPC → PLC）====================
 constexpr int kIpcHeartbeat = modbusIndexFromPlcAddress(40101);
 constexpr int kIpcSystemState = modbusIndexFromPlcAddress(40102);
 constexpr int kIpcCurrentStage = modbusIndexFromPlcAddress(40103);
@@ -302,7 +315,7 @@ inline const QVector<TriggerDefinition>& triggerDefinitions()
         {"Trig_LoadGrasp", registers::modbusIndexFromPlcAddress(40020), registers::kAckLoadGrasp, registers::kResLoadGrasp, Stage::LoadGrasp, 10},
         {"Trig_StationMaterialCheck", registers::modbusIndexFromPlcAddress(40021), registers::kAckStationMaterialCheck, registers::kResStationMaterialCheck, Stage::StationMaterialCheck, 5},
         {"Trig_PoseCheck", registers::modbusIndexFromPlcAddress(40022), registers::kAckPoseCheck, registers::kResPoseCheck, Stage::PoseCheck, 5},
-        {"Trig_ScanSegment", registers::modbusIndexFromPlcAddress(40023), registers::kAckScanSegment, registers::kResScanSegment, Stage::ScanSegment, 90},
+        {"Trig_ScanSegment", registers::modbusIndexFromPlcAddress(40023), registers::kAckScanSegment, registers::kResScanSegment, Stage::ScanSegment, 600},
         {"Trig_Inspection", registers::modbusIndexFromPlcAddress(40024), registers::kAckInspection, registers::kResInspection, Stage::Inspection, 60},
         {"Trig_UnloadCalc", registers::modbusIndexFromPlcAddress(40025), registers::kAckUnloadCalc, registers::kResUnloadCalc, Stage::UnloadCalc, 10},
         {"Trig_SelfCheck", registers::modbusIndexFromPlcAddress(40026), registers::kAckSelfCheck, registers::kResSelfCheck, Stage::SelfCheck, 10},

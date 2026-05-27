@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <mutex>
 
 #include <pcl/filters/passthrough.h>
 #include <pcl/filters/statistical_outlier_removal.h>
@@ -21,6 +22,13 @@ namespace {
 
 using Cloud = pcl::PointCloud<pcl::PointXYZ>;
 using CloudPtr = Cloud::Ptr;
+
+// PCL/Eigen 在 Windows 下非线程安全；多段后台 refinement 并发时会偶发 aligned_free 崩溃。
+std::mutex& pointCloudProcessingMutex()
+{
+    static std::mutex mutex;
+    return mutex;
+}
 
 bool isFinitePoint(float x, float y, float z)
 {
@@ -122,6 +130,8 @@ bool processPointCloudFrame(
     if (output == nullptr) {
         return false;
     }
+
+    std::lock_guard<std::mutex> pclLock(pointCloudProcessingMutex());
 
     PointCloudProcessReport localReport;
     localReport.inputPointCount = input.pointCount;

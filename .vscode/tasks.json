@@ -2,11 +2,57 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "Configure (Ninja Release)",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "--preset",
+        "win-msvc2019-qtcore-ninja-release"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": [],
+      "group": "build"
+    },
+    {
+      "label": "Build (Ninja Release)",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "--build",
+        "--preset",
+        "win-msvc2019-qtcore-ninja-release"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "dependsOn": [
+        "Configure (Ninja Release)"
+      ],
+      "dependsOrder": "sequence",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": [
+        "$msCompile"
+      ],
+      "group": "build"
+    },
+    {
       "label": "Configure (Ninja Debug)",
       "type": "shell",
-      "command": "${workspaceFolder}/tools/scan_tracking_dev.cmd",
+      "command": "cmake",
       "args": [
-        "configure-debug"
+        "--preset",
+        "win-msvc2019-qtcore-ninja-debug"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
@@ -22,9 +68,11 @@
     {
       "label": "Build (Ninja Debug)",
       "type": "shell",
-      "command": "${workspaceFolder}/tools/scan_tracking_dev.cmd",
+      "command": "cmake",
       "args": [
-        "build-debug"
+        "--build",
+        "--preset",
+        "win-msvc2019-qtcore-ninja-debug"
       ],
       "options": {
         "cwd": "${workspaceFolder}"

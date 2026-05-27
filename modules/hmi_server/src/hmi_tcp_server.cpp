@@ -897,7 +897,7 @@ QJsonObject HmiTcpServer::buildPlcStatusPayload() const
             payload[QLatin1String("productType")]     = cb.value(regs::kProductType);
             payload[QLatin1String("recipeId")]        = cb.value(regs::kRecipeId);
             payload[QLatin1String("scanSegmentIndex")] = static_cast<int>(
-                regs::plcAnalogToUInt16(cb.value(regs::kScanSegmentIndex), 0));
+                regs::resolveScanSegmentIndexFromBlock(cb));
             // scanSegmentTotal 从配置获取，不再从 PLC 读取
             const auto* cfgMgr = scan_tracking::common::ConfigManager::instance();
             payload[QLatin1String("scanSegmentTotal")] = cfgMgr ? cfgMgr->trackingConfig().scanSegmentTotal : 0;

@@ -45,6 +45,9 @@ public:
     bool writeRegister(int startAddress, quint16 value);
     bool writeRegisters(int startAddress, const QVector<quint16>& values);
 
+    /// 程序退出时将 IPC 结果区（40101-40184）全部清零
+    bool resetIpcResultBlock();
+
 signals:
     /// PLC 写入命令区后触发（等同于原 registersRead）
     void registersRead(int startAddress, QVector<quint16> values);

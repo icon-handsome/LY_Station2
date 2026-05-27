@@ -8,6 +8,8 @@
 #include "scan_tracking/vision/hik_mono_io.h"
 #include "scan_tracking/vision/vision_pipeline_service.h"
 
+#include <QtCore/QEventLoop>
+#include <QtCore/QPointer>
 #include <QtCore/QStringList>
 #include <QtCore/QLoggingCategory>
 #include <QtCore/QElapsedTimer>
@@ -62,13 +64,19 @@ constexpr int kDefaultScanSegmentCaptureTimeoutMs = 30000;
 /// 允许的最大连续 Modbus 通信失败次数，超过此值将进入故障状态
 constexpr int kMaxConsecutiveModbusFailures = 3;
 constexpr int kPollLogEveryN = 20;
-struct SegmentProcessInput {
-    int segmentIndex = 0;
-    quint32 taskId = 0;
-    scan_tracking::mech_eye::CaptureResult captureResult;
-    std::unique_ptr<scan_tracking::vision::MultiCameraCaptureBundle> bundle;
-    scan_tracking::common::PointCloudProcessingConfig processingConfig;
-};
+constexpr int kBackgroundRefinementJoinTimeoutMs = 300000;
+
+int countHikImagesInBundle(const scan_tracking::vision::MultiCameraCaptureBundle& bundle)
+{
+    int imageCount = 0;
+    if (bundle.hikCameraAResult.success() && bundle.hikCameraAResult.frame.isValid()) {
+        ++imageCount;
+    }
+    if (bundle.hikCameraBResult.success() && bundle.hikCameraBResult.frame.isValid()) {
+        ++imageCount;
+    }
+    return imageCount;
+}
 
 scan_tracking::mech_eye::PointCloudFrame clonePointCloudFrame(
     const scan_tracking::mech_eye::PointCloudFrame& src)
@@ -113,50 +121,6 @@ scan_tracking::vision::MultiCameraCaptureBundle cloneCaptureBundle(
     dst.hikCameraAResult.frame = cloneHikMonoFrame(src.hikCameraAResult.frame);
     dst.hikCameraBResult.frame = cloneHikMonoFrame(src.hikCameraBResult.frame);
     return dst;
-}
-
-bool finalizeSegmentCaptureInMemoryImpl(
-    const SegmentProcessInput& input,
-    SegmentProcessOutcome* outcome)
-{
-    if (outcome == nullptr) {
-        return false;
-    }
-
-    outcome->segmentIndex = input.segmentIndex;
-    outcome->taskId = input.taskId;
-    outcome->success = false;
-
-    scan_tracking::mech_eye::PointCloudFrame processedCloud;
-    scan_tracking::mech_eye::PointCloudProcessReport report;
-    if (!scan_tracking::mech_eye::processPointCloudFrame(
-            input.captureResult.pointCloud,
-            input.processingConfig,
-            &processedCloud,
-            &report)) {
-        outcome->errorMessage = report.message.isEmpty()
-            ? QStringLiteral("点云后处理失败。")
-            : report.message;
-        qWarning(LOG_FLOW).noquote()
-            << QStringLiteral("分段内存缓存失败：段号=") << input.segmentIndex
-            << QStringLiteral("，原因=") << outcome->errorMessage;
-        return false;
-    }
-
-    outcome->captureResult = input.captureResult;
-    outcome->captureResult.pointCloud = std::move(processedCloud);
-    outcome->rawPointCount = report.inputPointCount;
-    outcome->processedPointCount = report.outputPointCount;
-
-    if (input.bundle != nullptr) {
-        outcome->bundle = std::make_unique<scan_tracking::vision::MultiCameraCaptureBundle>(
-            cloneCaptureBundle(*input.bundle));
-        outcome->bundle->mechEyeResult.pointCloud =
-            clonePointCloudFrame(outcome->captureResult.pointCloud);
-    }
-
-    outcome->success = true;
-    return true;
 }
 
 std::array<float, 16> identityMatrix4x4()
@@ -223,7 +187,7 @@ QString selectedSegmentTextForInspection(const scan_tracking::common::TrackingCo
 QString formatPlcRegisterValueForLog(int modbusIndex, quint16 rawValue)
 {
     namespace regs = protocol::registers;
-    if (modbusIndex == regs::kScanSegmentIndex) {
+    if (modbusIndex == regs::kScanSegmentIndex || modbusIndex == regs::kScanSegmentIndexRobot) {
         const quint16 decoded = regs::plcAnalogToUInt16(rawValue, 0);
         if (rawValue != decoded) {
             return QStringLiteral("%1 (原始PLC字=%2)").arg(decoded).arg(rawValue);
@@ -501,7 +465,7 @@ void StateMachine::start()
  */
 void StateMachine::stop()
 {
-    joinProcessThreadIfRunning();
+    joinAllBackgroundRefinementJobs();
 
     m_pollTimer->stop();         // 停止 PLC 轮询定时器
     m_heartbeatTimer->stop();    // 停止心跳定时器
@@ -510,9 +474,15 @@ void StateMachine::stop()
     clearActiveTask();           // 清除当前活动任务
     resetScanSegmentCache();     // 清空扫描缓存
     m_consecutiveModbusFailures = 0;  // 重置 Modbus 失败计数器
+    m_alarmLevel = 0;
+    m_alarmCode = 0;
+    m_warnCode = 0;
+    m_progress = 0;
+    m_dataValid = false;
+    m_heartbeatCounter = 0;
     m_ipcState = protocol::IpcState::Uninitialized;  // 设置 IPC 状态为未初始化
     m_currentStage = protocol::Stage::Idle;         // 设置当前阶段为空闲
-    publishIpcStatus();          // 发布 IPC 状态到 PLC
+    resetPlcOutputRegisters();   // 退出时将 IPC→PLC 结果区全部清零
     setState(AppState::Init);    // 设置应用状态为初始化
 }
 
@@ -658,8 +628,7 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
             << "PLC_Start=" << regs::holdingRegisterAddress(regs::kCommandBlockStart)
             << "Flow_Enable=" << values.value(regs::kFlowEnable)
             << "Reg04=" << values.value(regs::kSafetyStatusWord)
-            << "ScanSegmentIndex=" << formatPlcRegisterValueForLog(regs::kScanSegmentIndex,
-                                                                    values.value(regs::kScanSegmentIndex))
+            << "ScanSegmentIndex=" << protocol::registers::resolveScanSegmentIndexFromBlock(values)
             << "RequestTimeout_s=" << formatPlcRegisterValueForLog(regs::kRequestTimeoutSeconds,
                                                                    values.value(regs::kRequestTimeoutSeconds))
             << "Trig_LoadGrasp=" << values.value(regs::modbusIndexFromPlcAddress(40020))
@@ -710,7 +679,7 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
             "ProductType",             // 13
             "RecipeId",                // 14
             "ScanSegmentIndex",        // 15  40015
-            "Reserved_16",             // 16  40016
+            "ScanSegmentIndex_Robot",  // 16  40016 机械臂/PLC 实际段号
             "RequestTimeout_s",        // 17  40017
             "Reserved_18",             // 18
             "Reserved_19",             // 19
@@ -854,7 +823,21 @@ void StateMachine::processTrigger(const protocol::TriggerDefinition& trigger, co
             ? timeoutDecoded
             : static_cast<quint16>(trigger.defaultTimeoutSeconds);
     }
-    m_activeTask.scanSegmentIndex = resolveScanSegmentIndex(commandBlock); // 解析扫描分段索引（32位合并）
+    m_activeTask.scanSegmentIndex = resolveScanSegmentIndex(commandBlock); // 解析扫描分段索引
+
+    if (trigger.stage == protocol::Stage::ScanSegment) {
+        QString validationError;
+        if (!validateScanSegmentRequest(commandBlock, &validationError)) {
+            qWarning(LOG_FLOW).noquote()
+                << QStringLiteral("拒绝触发") << protocol::triggerName(trigger)
+                << validationError;
+            m_activeTask.definition = nullptr;
+            sendRes(trigger, 9);
+            sendAck(trigger, protocol::AckState::Failed);
+            return;
+        }
+    }
+
     {
         const auto* cfgMgr = scan_tracking::common::ConfigManager::instance();
         m_activeTask.scanSegmentTotal = cfgMgr ? cfgMgr->trackingConfig().scanSegmentTotal : 1;
@@ -1143,7 +1126,209 @@ void StateMachine::onVisionBundleCaptureFinished(scan_tracking::vision::MultiCam
         return;
     }
 
-    startSegmentProcessAsync(m_activeTask.scanSegmentIndex, result, &bundle);
+    const int segmentIndex = m_activeTask.scanSegmentIndex;
+    const quint32 taskId = m_activeTask.taskId;
+    const scan_tracking::common::PointCloudProcessingConfig processingConfig =
+        scan_tracking::common::ConfigManager::instance()
+            ? scan_tracking::common::ConfigManager::instance()->pointCloudProcessingConfig()
+            : scan_tracking::common::PointCloudProcessingConfig{};
+
+    commitScanSegmentCaptureImmediate(segmentIndex, result, bundle);
+    startSegmentBackgroundRefinement(segmentIndex, taskId, processingConfig);
+}
+
+void StateMachine::commitScanSegmentCaptureImmediate(
+    int segmentIndex,
+    const scan_tracking::mech_eye::CaptureResult& result,
+    const scan_tracking::vision::MultiCameraCaptureBundle& bundle)
+{
+    {
+        std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
+        m_segmentCaptureResults.insert(segmentIndex, cloneCaptureResult(result));
+        m_segmentCaptureBundles.insert(segmentIndex, cloneCaptureBundle(bundle));
+    }
+
+    int imageCount = countHikImagesInBundle(bundle);
+    if (imageCount == 0) {
+        imageCount = 1;
+    }
+    const int cloudFrameCount = result.pointCloud.pointCount > 0 ? 1 : 0;
+
+    writeScanSegmentResult(segmentIndex, imageCount, cloudFrameCount);
+    m_progress = 100;
+    publishIpcStatus();
+
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("[SegmentCache] 原始点云已入内存，立即回写 PLC")
+        << QStringLiteral(" 段号=") << segmentIndex
+        << QStringLiteral(" 任务ID=") << m_activeTask.taskId
+        << QStringLiteral(" 点数=") << result.pointCloud.pointCount
+        << QStringLiteral(" 缓存段数=") << m_segmentCaptureResults.size();
+
+    completeActiveTask(1);
+    emit scanFinished(segmentIndex, 1, imageCount, cloudFrameCount);
+}
+
+void StateMachine::joinAllBackgroundRefinementJobs() const
+{
+    if (m_activeRefinementJobs.load() <= 0) {
+        return;
+    }
+
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("等待后台点云 refinement 结束，剩余任务数=") << m_activeRefinementJobs.load();
+
+    int waitedMs = 0;
+    while (m_activeRefinementJobs.load() > 0 && waitedMs < kBackgroundRefinementJoinTimeoutMs) {
+        QThread::msleep(50);
+        waitedMs += 50;
+        if (QCoreApplication::instance() != nullptr) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        }
+    }
+
+    if (m_activeRefinementJobs.load() > 0) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("后台点云 refinement 未在时限内结束，剩余=") << m_activeRefinementJobs.load();
+    }
+}
+
+void StateMachine::startSegmentBackgroundRefinement(
+    int segmentIndex,
+    quint32 taskId,
+    const scan_tracking::common::PointCloudProcessingConfig& config)
+{
+    if (!config.enabled) {
+        qInfo(LOG_FLOW).noquote()
+            << QStringLiteral("[ScanSync] 点云后处理已禁用，跳过后台 refinement，段号=") << segmentIndex;
+        return;
+    }
+
+    m_activeRefinementJobs.fetch_add(1);
+    std::atomic_int* jobCounter = &m_activeRefinementJobs;
+
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("[ScanSync] 后台 refinement 开始，段号=") << segmentIndex
+        << QStringLiteral(" 任务ID=") << taskId;
+
+    QPointer<StateMachine> self(this);
+    std::thread([self, jobCounter, segmentIndex, taskId, config]() {
+        const auto deliverOutcome = [self, jobCounter](SegmentProcessOutcome outcome) {
+            if (self && QCoreApplication::instance() != nullptr) {
+                QMetaObject::invokeMethod(
+                    self,
+                    [self, outcome = std::move(outcome)]() mutable {
+                        if (self) {
+                            self->onSegmentBackgroundRefinementFinished(std::move(outcome));
+                        }
+                    },
+                    Qt::QueuedConnection);
+            } else {
+                jobCounter->fetch_sub(1);
+            }
+        };
+
+        SegmentProcessOutcome outcome;
+        outcome.segmentIndex = segmentIndex;
+        outcome.taskId = taskId;
+
+        if (!self) {
+            jobCounter->fetch_sub(1);
+            return;
+        }
+
+        scan_tracking::mech_eye::PointCloudFrame inputCloud;
+        {
+            std::lock_guard<std::mutex> lock(self->m_segmentCacheMutex);
+            const auto it = self->m_segmentCaptureResults.constFind(segmentIndex);
+            if (it == self->m_segmentCaptureResults.cend() || !it->pointCloud.isValid()) {
+                outcome.success = false;
+                outcome.errorMessage = QStringLiteral("后台 refinement 时缓存段不存在或点云无效。");
+            } else {
+                inputCloud = clonePointCloudFrame(it->pointCloud);
+                outcome.rawPointCount = inputCloud.pointCount;
+            }
+        }
+
+        if (!outcome.errorMessage.isEmpty()) {
+            deliverOutcome(std::move(outcome));
+            return;
+        }
+
+        QElapsedTimer timer;
+        timer.start();
+
+        scan_tracking::mech_eye::PointCloudProcessReport report;
+        scan_tracking::mech_eye::PointCloudFrame processedCloud;
+        scan_tracking::mech_eye::CaptureResult captureInput;
+        captureInput.pointCloud = std::move(inputCloud);
+
+        if (scan_tracking::mech_eye::processPointCloudFrame(
+                captureInput.pointCloud,
+                config,
+                &processedCloud,
+                &report)) {
+            outcome.success = true;
+            outcome.captureResult.pointCloud = std::move(processedCloud);
+            outcome.processedPointCount = report.outputPointCount;
+            outcome.rawPointCount = report.inputPointCount;
+        } else {
+            outcome.success = false;
+            outcome.errorMessage = report.message.isEmpty()
+                ? QStringLiteral("后台点云 refinement 失败。")
+                : report.message;
+            outcome.rawPointCount = report.inputPointCount;
+        }
+        outcome.processElapsedMs = timer.elapsed();
+        deliverOutcome(std::move(outcome));
+    }).detach();
+}
+
+void StateMachine::onSegmentBackgroundRefinementFinished(SegmentProcessOutcome outcome)
+{
+    m_activeRefinementJobs.fetch_sub(1);
+
+    if (!outcome.success) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("[ScanSync] 后台 refinement 失败，保留原始缓存")
+            << QStringLiteral(" 段号=") << outcome.segmentIndex
+            << QStringLiteral(" 说明=") << outcome.errorMessage;
+        return;
+    }
+
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("[ScanSync] 后台 refinement 完成")
+        << QStringLiteral(" 段号=") << outcome.segmentIndex
+        << QStringLiteral(" 任务ID=") << outcome.taskId
+        << QStringLiteral(" 耗时ms=") << outcome.processElapsedMs
+        << QStringLiteral(" 点数=") << outcome.rawPointCount << QStringLiteral("->") << outcome.processedPointCount;
+
+    applySegmentRefinementOutcome(outcome);
+}
+
+void StateMachine::applySegmentRefinementOutcome(const SegmentProcessOutcome& outcome)
+{
+    std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
+    auto resultIt = m_segmentCaptureResults.find(outcome.segmentIndex);
+    if (resultIt == m_segmentCaptureResults.end()) {
+        qInfo(LOG_FLOW).noquote()
+            << QStringLiteral("忽略 refinement 结果：缓存段已不存在，段号=") << outcome.segmentIndex;
+        return;
+    }
+
+    scan_tracking::mech_eye::releasePointCloudFrameBuffers(&resultIt->pointCloud);
+    resultIt->pointCloud = clonePointCloudFrame(outcome.captureResult.pointCloud);
+
+    auto bundleIt = m_segmentCaptureBundles.find(outcome.segmentIndex);
+    if (bundleIt != m_segmentCaptureBundles.end()) {
+        scan_tracking::mech_eye::releasePointCloudFrameBuffers(&bundleIt->mechEyeResult.pointCloud);
+        bundleIt->mechEyeResult.pointCloud = clonePointCloudFrame(outcome.captureResult.pointCloud);
+    }
+
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("[SegmentCache] refinement 已写回内存")
+        << QStringLiteral(" 段号=") << outcome.segmentIndex
+        << QStringLiteral(" 点数=") << outcome.processedPointCount;
 }
 
 /**
@@ -1285,167 +1470,19 @@ QVector<int> StateMachine::cachedScanSegmentIndices() const
     return indices;
 }
 
-void StateMachine::joinProcessThreadIfRunning()
-{
-    if (m_processThread.joinable()) {
-        qInfo(LOG_FLOW).noquote() << QStringLiteral("等待分段点云后处理线程结束…");
-        m_processThread.join();
-    }
-    m_segmentProcessInFlight = false;
-}
-
-void StateMachine::startSegmentProcessAsync(
-    int segmentIndex,
-    const scan_tracking::mech_eye::CaptureResult& result,
-    const scan_tracking::vision::MultiCameraCaptureBundle* bundle)
-{
-    joinProcessThreadIfRunning();
-
-    const auto* configManager = scan_tracking::common::ConfigManager::instance();
-    SegmentProcessInput input;
-    input.segmentIndex = segmentIndex;
-    input.taskId = m_activeTask.taskId;
-    input.captureResult = cloneCaptureResult(result);
-    if (configManager != nullptr) {
-        input.processingConfig = configManager->pointCloudProcessingConfig();
-    }
-    if (bundle != nullptr) {
-        input.bundle = std::make_unique<scan_tracking::vision::MultiCameraCaptureBundle>(
-            cloneCaptureBundle(*bundle));
-    }
-
-    const quint64 captureRequestId = m_activeTask.captureRequestId;
-    const quint32 taskId = m_activeTask.taskId;
-    const int segmentIndexCopy = segmentIndex;
-
-    m_segmentProcessInFlight = true;
-    m_progress = 85;
-    publishIpcStatus();
-
-    qInfo(LOG_FLOW).noquote()
-        << QStringLiteral("[ScanSync] 后处理开始")
-        << QStringLiteral(" 段号=") << segmentIndexCopy
-        << QStringLiteral(" 任务ID=") << taskId
-        << QStringLiteral(" 采集请求ID=") << captureRequestId
-        << QStringLiteral(" 原始点数=") << result.pointCloud.pointCount;
-
-    StateMachine* self = this;
-    m_processThread = std::thread(
-        [self, input = std::move(input), captureRequestId, segmentIndexCopy, taskId]() mutable {
-            QElapsedTimer timer;
-            timer.start();
-
-            SegmentProcessOutcome outcome;
-            outcome.captureRequestId = captureRequestId;
-            outcome.segmentIndex = segmentIndexCopy;
-            outcome.taskId = taskId;
-            finalizeSegmentCaptureInMemoryImpl(input, &outcome);
-            outcome.processElapsedMs = timer.elapsed();
-
-            QMetaObject::invokeMethod(
-                self,
-                [self, outcome = std::move(outcome)]() mutable {
-                    self->onSegmentProcessFinished(std::move(outcome));
-                },
-                Qt::QueuedConnection);
-        });
-}
-
-void StateMachine::onSegmentProcessFinished(SegmentProcessOutcome outcome)
-{
-    joinProcessThreadIfRunning();
-
-    if (!m_activeTask.definition || m_activeTask.completionAnnounced) {
-        qInfo(LOG_FLOW).noquote()
-            << QStringLiteral("忽略过期后处理完成回调：无活动任务或任务已结束");
-        return;
-    }
-    if (outcome.captureRequestId != m_activeTask.captureRequestId ||
-        outcome.segmentIndex != m_activeTask.scanSegmentIndex) {
-        qInfo(LOG_FLOW).noquote()
-            << QStringLiteral("忽略过期后处理完成回调：采集请求ID/段号不匹配")
-            << QStringLiteral(" 期望请求ID=") << m_activeTask.captureRequestId
-            << QStringLiteral(" 实际=") << outcome.captureRequestId
-            << QStringLiteral(" 期望段号=") << m_activeTask.scanSegmentIndex
-            << QStringLiteral(" 实际=") << outcome.segmentIndex;
-        return;
-    }
-
-    qInfo(LOG_FLOW).noquote()
-        << QStringLiteral("[ScanSync] 后处理完成")
-        << QStringLiteral(" 段号=") << outcome.segmentIndex
-        << QStringLiteral(" 任务ID=") << outcome.taskId
-        << QStringLiteral(" 耗时ms=") << outcome.processElapsedMs
-        << QStringLiteral(" 成功=") << outcome.success
-        << QStringLiteral(" 点数=") << outcome.rawPointCount << QStringLiteral("->") << outcome.processedPointCount;
-
-    if (!outcome.success) {
-        const QString failureMessage = outcome.errorMessage.isEmpty()
-            ? QStringLiteral("分段点云后处理失败")
-            : outcome.errorMessage;
-        finishScanSegmentFailure(7, 3, 722, failureMessage, failureMessage);
-        return;
-    }
-
-    applySegmentProcessOutcome(outcome);
-}
-
-void StateMachine::applySegmentProcessOutcome(const SegmentProcessOutcome& outcome)
-{
-    m_segmentCaptureResults.insert(outcome.segmentIndex, outcome.captureResult);
-    if (outcome.bundle) {
-        m_segmentCaptureBundles.insert(outcome.segmentIndex, *outcome.bundle);
-    }
-
-    const int cloudFrameCount =
-        outcome.captureResult.pointCloud.pointCount > 0 ? 1 : 0;
-    int imageCount = 0;
-    int hikAWidth = 0;
-    int hikAHeight = 0;
-    int hikBWidth = 0;
-    int hikBHeight = 0;
-    if (outcome.bundle) {
-        hikAWidth = outcome.bundle->hikCameraAResult.frame.width;
-        hikAHeight = outcome.bundle->hikCameraAResult.frame.height;
-        hikBWidth = outcome.bundle->hikCameraBResult.frame.width;
-        hikBHeight = outcome.bundle->hikCameraBResult.frame.height;
-        if (outcome.bundle->hikCameraAResult.success() &&
-            outcome.bundle->hikCameraAResult.frame.isValid()) {
-            ++imageCount;
-        }
-        if (outcome.bundle->hikCameraBResult.success() &&
-            outcome.bundle->hikCameraBResult.frame.isValid()) {
-            ++imageCount;
-        }
-    }
-    if (imageCount == 0) {
-        imageCount = 1;
-    }
-    writeScanSegmentResult(outcome.segmentIndex, imageCount, cloudFrameCount);
-    m_progress = 100;
-    publishIpcStatus();
-
-    qInfo(LOG_FLOW).noquote()
-        << QStringLiteral("[SegmentCache] 已写入内存缓存")
-        << QStringLiteral(" 段号=") << outcome.segmentIndex
-        << QStringLiteral(" 任务ID=") << outcome.taskId
-        << QStringLiteral(" 梅卡点云=") << outcome.rawPointCount << QStringLiteral("->") << outcome.processedPointCount
-        << QStringLiteral(" 网格=") << outcome.captureResult.pointCloud.width << QStringLiteral("x")
-        << outcome.captureResult.pointCloud.height
-        << QStringLiteral(" 海康A=") << hikAWidth << QStringLiteral("x") << hikAHeight
-        << (outcome.bundle && outcome.bundle->hikCameraAResult.success() ? QStringLiteral("有效") : QStringLiteral("跳过"))
-        << QStringLiteral(" 海康B=") << hikBWidth << QStringLiteral("x") << hikBHeight
-        << (outcome.bundle && outcome.bundle->hikCameraBResult.success() ? QStringLiteral("有效") : QStringLiteral("跳过"))
-        << QStringLiteral(" 缓存段数=") << m_segmentCaptureResults.size();
-
-    completeActiveTask(1);
-    emit scanFinished(outcome.segmentIndex, 1, imageCount, cloudFrameCount);
-}
-
 QMap<int, scan_tracking::mech_eye::CaptureResult> StateMachine::loadSegmentCaptureResultsForInspection(
     QString* errorMessage) const
 {
-    QMap<int, scan_tracking::mech_eye::CaptureResult> loaded = m_segmentCaptureResults;
+    joinAllBackgroundRefinementJobs();
+
+    QMap<int, scan_tracking::mech_eye::CaptureResult> loaded;
+    {
+        std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
+        loaded.reserve(m_segmentCaptureResults.size());
+        for (auto it = m_segmentCaptureResults.cbegin(); it != m_segmentCaptureResults.cend(); ++it) {
+            loaded.insert(it.key(), cloneCaptureResult(*it));
+        }
+    }
 
     const auto* configManager = scan_tracking::common::ConfigManager::instance();
     if (configManager == nullptr) {
@@ -1463,13 +1500,11 @@ QMap<int, scan_tracking::mech_eye::CaptureResult> StateMachine::loadSegmentCaptu
     };
 
     for (int segmentIndex : requiredSegments) {
-        const auto metaIt = m_segmentCaptureResults.constFind(segmentIndex);
-        if (metaIt == m_segmentCaptureResults.cend() || !metaIt->pointCloud.isValid()) {
+        const auto metaIt = loaded.constFind(segmentIndex);
+        if (metaIt == loaded.cend() || !metaIt->pointCloud.isValid()) {
             if (errorMessage != nullptr) {
                 QStringList cachedKeys;
-                for (auto it = m_segmentCaptureResults.cbegin();
-                     it != m_segmentCaptureResults.cend();
-                     ++it) {
+                for (auto it = loaded.cbegin(); it != loaded.cend(); ++it) {
                     cachedKeys << QString::number(it.key());
                 }
                 *errorMessage = QStringLiteral(
@@ -1480,7 +1515,6 @@ QMap<int, scan_tracking::mech_eye::CaptureResult> StateMachine::loadSegmentCaptu
             }
             return {};
         }
-        loaded[segmentIndex] = metaIt.value();
     }
 
     return loaded;
@@ -1689,6 +1723,22 @@ void StateMachine::sendRes(const protocol::TriggerDefinition& definition, quint1
  * - 设备在线状态字
  * - 当前任务 ID（高16位和低16位）
  */
+void StateMachine::resetPlcOutputRegisters()
+{
+    if (!m_modbus || !m_modbus->isConnected()) {
+        qInfo(LOG_FLOW).noquote() << QStringLiteral("跳过程序退出寄存器复位：Modbus 未连接");
+        return;
+    }
+
+    const bool cleared = m_modbus->resetIpcResultBlock();
+    if (cleared) {
+        qInfo(LOG_FLOW).noquote()
+            << QStringLiteral("程序退出：IPC 结果区已清零（40101-40184，Ack/Res/状态/坐标等全部为 0）");
+    } else {
+        qWarning(LOG_FLOW).noquote() << QStringLiteral("程序退出：IPC 结果区清零失败");
+    }
+}
+
 void StateMachine::publishIpcStatus()
 {
     if (!m_modbus || !m_modbus->isConnected()) {
@@ -1817,11 +1867,24 @@ void StateMachine::onCaptureFinished(mech_eye::CaptureResult result)
         return;
     }
 
-    startSegmentProcessAsync(m_activeTask.scanSegmentIndex, result, nullptr);
+    scan_tracking::vision::MultiCameraCaptureBundle legacyBundle;
+    legacyBundle.mechEyeResult = result;
+    legacyBundle.request.segmentIndex = m_activeTask.scanSegmentIndex;
+    legacyBundle.request.taskId = m_activeTask.taskId;
+
+    const int segmentIndex = m_activeTask.scanSegmentIndex;
+    const quint32 taskId = m_activeTask.taskId;
+    const scan_tracking::common::PointCloudProcessingConfig processingConfig =
+        scan_tracking::common::ConfigManager::instance()
+            ? scan_tracking::common::ConfigManager::instance()->pointCloudProcessingConfig()
+            : scan_tracking::common::PointCloudProcessingConfig{};
+
+    commitScanSegmentCaptureImmediate(segmentIndex, result, legacyBundle);
+    startSegmentBackgroundRefinement(segmentIndex, taskId, processingConfig);
 }
 
 /**
- * @brief 处理 Mech-Eye 相机的致命错误
+ * @brief 处理 Mech-Eye 相机致命错误（legacy 单相机路径）
  * 
  * 当相机发生无法恢复的错误（如硬件故障、驱动崩溃等）时触发此回调。
  * 如果当前正在执行扫描分段任务，立即终止任务并进入故障状态。
@@ -2020,7 +2083,7 @@ bool StateMachine::completeActiveTask(
  * @brief 在 PLC 释放触发信号后 finalize 已完成的任务
  * 
  * 当任务完成后，PLC 需要将对应的 Trig 位清零以确认收到结果。
- * 此方法检测 Trig 位是否已清零，如果是则发送 Idle ACK 并清除活动任务状态，
+ * 此方法检测 Trig 位是否已清零，如果是则回零 Ack/Res 并清除活动任务状态，
  * 使系统回到就绪状态等待下一个触发。
  * 
  * @param commandBlock 最新的命令块寄存器数据
@@ -2039,7 +2102,36 @@ void StateMachine::finalizeCompletedTaskIfTriggerReleased(const QVector<quint16>
 
     qInfo(LOG_FLOW).noquote() << QStringLiteral("PLC 已释放触发：")
                               << protocol::triggerName(*m_activeTask.definition);
-    sendAck(*m_activeTask.definition, protocol::AckState::Idle);  // 发送 Idle ACK
+
+    const protocol::TriggerDefinition& definition = *m_activeTask.definition;
+    if (definition.stage == protocol::Stage::ScanSegment) {
+        writeScanSegmentResult(0, 0, 0);
+    }
+
+    if (m_modbus) {
+        const int ackOffset = definition.ackOffset;
+        const int resOffset = definition.resOffset;
+        bool released = false;
+        if (resOffset == ackOffset + 1) {
+            released = m_modbus->writeRegisters(ackOffset, {
+                static_cast<quint16>(protocol::AckState::Idle),
+                0,
+            });
+        } else {
+            sendRes(definition, 0);
+            sendAck(definition, protocol::AckState::Idle);
+            released = true;
+        }
+        if (!released) {
+            qWarning(LOG_FLOW).noquote()
+                << QStringLiteral("释放触发后回零 Ack/Res 失败：") << protocol::triggerName(definition);
+        } else {
+            qInfo(LOG_FLOW).noquote()
+                << QStringLiteral("握手释放完成") << protocol::triggerName(definition)
+                << QStringLiteral(" Ack=0 Res=0");
+        }
+    }
+
     clearActiveTask();                                            // 清除活动任务
     m_ipcState = protocol::IpcState::Ready;                       // IPC 状态回到就绪
     m_currentStage = protocol::Stage::Idle;                       // 当前阶段回到空闲
@@ -2276,6 +2368,7 @@ void StateMachine::writeInspectionResult(const InspectionSummary& summary)
  */
 void StateMachine::resetPointCloudCache()
 {
+    std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
     const int cacheSize = m_segmentCaptureResults.size();
     for (auto it = m_segmentCaptureResults.begin(); it != m_segmentCaptureResults.end(); ++it) {
         scan_tracking::mech_eye::releasePointCloudFrameBuffers(&it->pointCloud);
@@ -2290,13 +2383,27 @@ void StateMachine::resetPointCloudCache()
 
 void StateMachine::resetScanSegmentCache()
 {
+    joinAllBackgroundRefinementJobs();
+
+    std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
     for (auto it = m_segmentCaptureBundles.begin(); it != m_segmentCaptureBundles.end(); ++it) {
         scan_tracking::vision::releaseHikMonoFrameBuffers(&it->hikCameraAResult.frame);
         scan_tracking::vision::releaseHikMonoFrameBuffers(&it->hikCameraBResult.frame);
         scan_tracking::mech_eye::releasePointCloudFrameBuffers(&it->mechEyeResult.pointCloud);
     }
-    resetPointCloudCache();
     m_segmentCaptureBundles.clear();
+
+    const int cacheSize = m_segmentCaptureResults.size();
+    for (auto it = m_segmentCaptureResults.begin(); it != m_segmentCaptureResults.end(); ++it) {
+        scan_tracking::mech_eye::releasePointCloudFrameBuffers(&it->pointCloud);
+    }
+    m_segmentCaptureResults.clear();
+
+    if (cacheSize > 0) {
+        qInfo(LOG_FLOW).noquote()
+            << QStringLiteral("已清空内存点云缓存，条目数=") << cacheSize;
+    }
+
     m_segmentCalibrationMatrices.clear();
     m_currentCalibrationMatrix = m_baseCalibrationMatrix;
 }
@@ -2570,8 +2677,7 @@ quint32 StateMachine::readTaskId(const QVector<quint16>& commandBlock) const
  */
 quint16 StateMachine::resolveScanSegmentIndex(const QVector<quint16>& commandBlock) const
 {
-    const quint16 rawAt40015 = commandBlock.value(protocol::registers::kScanSegmentIndex);
-    return protocol::registers::plcAnalogToUInt16(rawAt40015, 0);
+    return protocol::registers::resolveScanSegmentIndexFromBlock(commandBlock);
 }
 
 /**
@@ -2611,27 +2717,30 @@ bool StateMachine::validateScanSegmentRequest(const QVector<quint16>& commandBlo
     }
 
     // 检查是否已经采集过该分段（防止重复触发污染缓存）
-    if (m_segmentCaptureResults.contains(segmentIndex)) {
-        if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral("重复扫描段号：%1").arg(segmentIndex);
+    {
+        std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
+        if (m_segmentCaptureResults.contains(segmentIndex)) {
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral("重复扫描段号：%1").arg(segmentIndex);
+            }
+            qWarning(LOG_FLOW).noquote() << QStringLiteral("拒绝 Trig_ScanSegment：段号已缓存")
+                                         << QStringLiteral(" 段号=") << segmentIndex
+                                         << QStringLiteral(" 当前缓存段数=") << m_segmentCaptureResults.size();
+            return false;
         }
-        qWarning(LOG_FLOW).noquote() << QStringLiteral("拒绝 Trig_ScanSegment：段号已缓存")
-                                     << QStringLiteral(" 段号=") << segmentIndex
-                                     << QStringLiteral(" 当前缓存段数=") << m_segmentCaptureResults.size();
-        return false;
-    }
 
-    // P2改进：检查缓存大小是否达到上限，防止内存无限增长
-    if (m_segmentCaptureResults.size() >= kMaxPointCloudCacheSize) {
-        if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral("点云内存缓存已满：当前 %1 段，上限 %2")
-                .arg(m_segmentCaptureResults.size())
-                .arg(kMaxPointCloudCacheSize);
+        // P2改进：检查缓存大小是否达到上限，防止内存无限增长
+        if (m_segmentCaptureResults.size() >= kMaxPointCloudCacheSize) {
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral("点云内存缓存已满：当前 %1 段，上限 %2")
+                    .arg(m_segmentCaptureResults.size())
+                    .arg(kMaxPointCloudCacheSize);
+            }
+            qWarning(LOG_FLOW).noquote() << QStringLiteral("拒绝 Trig_ScanSegment：内存缓存已满")
+                                         << QStringLiteral(" 当前=") << m_segmentCaptureResults.size()
+                                         << QStringLiteral(" 上限=") << kMaxPointCloudCacheSize;
+            return false;
         }
-        qWarning(LOG_FLOW).noquote() << QStringLiteral("拒绝 Trig_ScanSegment：内存缓存已满")
-                                     << QStringLiteral(" 当前=") << m_segmentCaptureResults.size()
-                                     << QStringLiteral(" 上限=") << kMaxPointCloudCacheSize;
-        return false;
     }
 
     return true;  // 验证通过

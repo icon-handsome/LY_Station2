@@ -170,6 +170,14 @@ bool ModbusService::writeRegisters(int startAddress, const QVector<quint16>& val
     return true;
 }
 
+bool ModbusService::resetIpcResultBlock()
+{
+    qInfo(LOG_MODBUS).noquote()
+        << QStringLiteral("正在清零 IPC 结果区寄存器 40101-40184（共 ")
+        << kResultBlockSize << QStringLiteral(" 个）");
+    return writeRegisters(kResultBlockStart, QVector<quint16>(kResultBlockSize, 0));
+}
+
 void ModbusService::onDataWritten(QModbusDataUnit::RegisterType table, int address, int size)
 {
     // 只关心 Holding Registers 的写入

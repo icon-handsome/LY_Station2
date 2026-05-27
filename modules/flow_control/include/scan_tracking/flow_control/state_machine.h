@@ -10,8 +10,10 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <thread>
 
+#include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/flow_control/plc_protocol.h"
 #include "scan_tracking/mech_eye/mech_eye_types.h"
 #include "scan_tracking/modbus/modbus_service.h"
@@ -293,6 +295,9 @@ private:
     // 发布 IPC 状态
     void publishIpcStatus();
 
+    // 程序退出时将 IPC→PLC 结果区寄存器全部清零
+    void resetPlcOutputRegisters();
+
     // 发布心跳
     void publishHeartbeat();
 
@@ -315,19 +320,25 @@ private:
     // 清空扫描分段缓存（点云 + 视觉 bundle）
     void resetScanSegmentCache();
 
-    // 分段后处理工作线程完成（主线程；非 slot，因 SegmentProcessOutcome 含 unique_ptr 不可拷贝）
-    void onSegmentProcessFinished(SegmentProcessOutcome outcome);
+    // 分段后台 refinement 完成（主线程更新缓存，不再触发 PLC 握手）
+    void onSegmentBackgroundRefinementFinished(SegmentProcessOutcome outcome);
 
-    // 后台点云后处理（深拷贝后在 worker 线程执行 PCL 滤波）
-    void startSegmentProcessAsync(
+    // 原始点云一次深拷贝入内存并立即完成 Trig_ScanSegment 握手
+    void commitScanSegmentCaptureImmediate(
         int segmentIndex,
         const scan_tracking::mech_eye::CaptureResult& result,
-        const scan_tracking::vision::MultiCameraCaptureBundle* bundle);
+        const scan_tracking::vision::MultiCameraCaptureBundle& bundle);
 
-    // 将处理结果写入内存缓存并完成 Trig_ScanSegment 握手
-    void applySegmentProcessOutcome(const SegmentProcessOutcome& outcome);
+    // 后台 PCL 点云 refinement（与 PLC 握手并行；PCL 在 processPointCloudFrame 内串行）
+    void startSegmentBackgroundRefinement(
+        int segmentIndex,
+        quint32 taskId,
+        const scan_tracking::common::PointCloudProcessingConfig& config);
 
-    void joinProcessThreadIfRunning();
+    // 将 refinement 结果写回内存缓存
+    void applySegmentRefinementOutcome(const SegmentProcessOutcome& outcome);
+
+    void joinAllBackgroundRefinementJobs() const;
 
     // 综合检测前从内存缓存取 [Tracking] 必需的三段点云
     QMap<int, scan_tracking::mech_eye::CaptureResult> loadSegmentCaptureResultsForInspection(
@@ -461,8 +472,9 @@ private:
     QElapsedTimer m_pollRequestTimer;                       // 当前轮询请求耗时计时器
     int m_consecutiveModbusFailures = 0;                    // 连续 Modbus 失败次数
     QVector<quint16> m_lastCommandBlock;                    // 上一次命令块副本
-    QMap<int, scan_tracking::mech_eye::CaptureResult> m_segmentCaptureResults;  // 分段点云（已后处理）
+    QMap<int, scan_tracking::mech_eye::CaptureResult> m_segmentCaptureResults;  // 分段点云（先原始，后台 refinement 后更新）
     QMap<int, scan_tracking::vision::MultiCameraCaptureBundle> m_segmentCaptureBundles;  // 分段视觉 bundle（含海康帧）
+    mutable std::mutex m_segmentCacheMutex;
     std::array<float, 16> m_baseCalibrationMatrix{};       // 基准 T0（来自 scan_paths_config.json）
     std::array<float, 16> m_currentCalibrationMatrix{};    // 当前 T0' / T0''（转动点由 LBN 链式更新）
     QMap<int, std::array<float, 16>> m_segmentCalibrationMatrices;  // 每段扫描结束时的标定矩阵快照
@@ -472,8 +484,7 @@ private:
 
     static constexpr int kMaxPointCloudCacheSize = 20;    // 允许的最大点云缓存条目数，防止内存无限增长
 
-    std::atomic_bool m_segmentProcessInFlight{false};
-    std::thread m_processThread;
+    std::atomic_int m_activeRefinementJobs{0};
 };
 
 }  // namespace flow_control
