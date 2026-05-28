@@ -1,4 +1,7 @@
 set(SCAN_TRACKING_VISION_SOURCES
+    src/hik_mvs_sdk_runtime.cpp
+    src/hik_cxp_mono_io.cpp
+    src/hik_cxp_camera_service.cpp
     src/hik_mono_io.cpp
     src/hik_camera_service.cpp
     src/hik_camera_c_controller.cpp
@@ -6,6 +9,9 @@ set(SCAN_TRACKING_VISION_SOURCES
     src/hik_smart_camera_ftp_monitor.cpp
     src/vision_pipeline_service.cpp
     include/scan_tracking/vision/vision_types.h
+    include/scan_tracking/vision/hik_mvs_sdk_runtime.h
+    include/scan_tracking/vision/hik_cxp_mono_io.h
+    include/scan_tracking/vision/hik_cxp_camera_service.h
     include/scan_tracking/vision/hik_mono_io.h
     include/scan_tracking/vision/hik_camera_service.h
     include/scan_tracking/vision/hik_camera_c_controller.h
@@ -99,6 +105,26 @@ if(BUILD_TESTING)
         FOLDER "tests"
     )
 endif()
+
+add_executable(scan_tracking_cxp_smoke
+    tests/cxp_smoke_runner.cpp
+)
+
+target_link_libraries(scan_tracking_cxp_smoke
+    PRIVATE
+        Qt5::Core
+        scan_tracking_vision
+        scan_tracking_common
+)
+
+set_target_properties(scan_tracking_cxp_smoke PROPERTIES
+    AUTOMOC ON
+    FOLDER "tests"
+)
+
+scan_tracking_deploy_hik_mvs_runtime(scan_tracking_cxp_smoke)
+scan_tracking_deploy_mech_eye_runtime(scan_tracking_cxp_smoke)
+scan_tracking_deploy_opencv_runtime(scan_tracking_cxp_smoke)
 
 if(SCAN_TRACKING_ENABLE_LANYOU_DETECTION)
     add_library(scan_tracking_lanyou_test_adapter STATIC

@@ -155,6 +155,17 @@ void ConfigManager::writeDefaults(QSettings& settings)
     settings.setValue("hikCameraCTcpListenIp", "192.168.8.13");
     settings.setValue("hikCameraCTcpListenPort", 8999);
     settings.setValue("hikCameraCFtpDirectory", "D:/HikCameraFTP");
+    settings.setValue("hikCxpEnabled", true);
+    settings.setValue("hikCxpCaptureTimeoutMs", 5000);
+    settings.setValue("hikCxpExposureTimeUs", 50000);
+    settings.setValue("hikCxpGain", 0.0);
+    settings.setValue("hikCxpSmokeOutputDir", "D:/CxpSmokeTest");
+    settings.setValue("hikCxpCameraAName", "ch250_a");
+    settings.setValue("hikCxpCameraAKey", "DA9122997");
+    settings.setValue("hikCxpCameraASerial", "DA9122997");
+    settings.setValue("hikCxpCameraBName", "ch250_b");
+    settings.setValue("hikCxpCameraBKey", "DA9122998");
+    settings.setValue("hikCxpCameraBSerial", "DA9122998");
     settings.endGroup();
 
     settings.beginGroup("LbPose");
@@ -267,6 +278,25 @@ void ConfigManager::load(const QString& filePath)
     m_visionConfig.hikCameraCTcpListenIp = settings.value("hikCameraCTcpListenIp", "192.168.8.13").toString();
     m_visionConfig.hikCameraCTcpListenPort = static_cast<quint16>(settings.value("hikCameraCTcpListenPort", 8999).toUInt());
     m_visionConfig.hikCameraCFtpDirectory = settings.value("hikCameraCFtpDirectory", "D:/HikCameraFTP").toString();
+    m_visionConfig.hikCxpEnabled = settings.value("hikCxpEnabled", false).toBool();
+    m_visionConfig.hikCxpCaptureTimeoutMs = settings.value("hikCxpCaptureTimeoutMs", 5000).toInt();
+    m_visionConfig.hikCxpExposureTimeUs =
+        static_cast<float>(settings.value("hikCxpExposureTimeUs", 50000).toDouble());
+    m_visionConfig.hikCxpGain = static_cast<float>(settings.value("hikCxpGain", 0.0).toDouble());
+    m_visionConfig.hikCxpSmokeOutputDir =
+        settings.value("hikCxpSmokeOutputDir", "D:/CxpSmokeTest").toString();
+    m_visionConfig.hikCxpCameraA.logicalName =
+        settings.value("hikCxpCameraAName", "ch250_a").toString();
+    m_visionConfig.hikCxpCameraA.cameraKey =
+        settings.value("hikCxpCameraAKey", "DA9122997").toString();
+    m_visionConfig.hikCxpCameraA.serialNumber =
+        settings.value("hikCxpCameraASerial", "DA9122997").toString();
+    m_visionConfig.hikCxpCameraB.logicalName =
+        settings.value("hikCxpCameraBName", "ch250_b").toString();
+    m_visionConfig.hikCxpCameraB.cameraKey =
+        settings.value("hikCxpCameraBKey", "DA9122998").toString();
+    m_visionConfig.hikCxpCameraB.serialNumber =
+        settings.value("hikCxpCameraBSerial", "DA9122998").toString();
     settings.endGroup();
 
     settings.beginGroup("LbPose");

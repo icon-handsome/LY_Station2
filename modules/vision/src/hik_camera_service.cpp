@@ -1,5 +1,7 @@
 #include "scan_tracking/vision/hik_camera_service.h"
 
+#include "scan_tracking/vision/hik_mvs_sdk_runtime.h"
+
 #include <QtCore/QDateTime>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QMetaObject>
@@ -19,9 +21,6 @@ namespace scan_tracking {
 namespace vision {
 
 namespace {
-
-QMutex g_sdkMutex;
-int g_sdkRefCount = 0;
 
 QString trimSdkString(const unsigned char* raw, std::size_t maxLength)
 {
@@ -108,19 +107,13 @@ void HikCameraService::start(
     m_exposureTimeUs = exposureTimeUs > 0.0f ? exposureTimeUs : 50000.0f;
     m_gain = gain;
 
-    {
-        QMutexLocker locker(&g_sdkMutex);
-        if (!m_impl->sdkReady) {
-            const int result = MV_CC_Initialize();
-            if (MV_OK != result) {
-                emit fatalError(VisionErrorCode::SdkInitFailed,
-                                QStringLiteral("MVS SDK 初始化失败，错误码=0x%1")
-                                    .arg(static_cast<quint32>(result), 8, 16, QLatin1Char('0')));
-                return;
-            }
-            ++g_sdkRefCount;
-            m_impl->sdkReady = true;
+    if (!m_impl->sdkReady) {
+        QString sdkError;
+        if (!acquireHikMvsSdk(&sdkError)) {
+            emit fatalError(VisionErrorCode::SdkInitFailed, sdkError);
+            return;
         }
+        m_impl->sdkReady = true;
     }
 
     m_started = true;
@@ -166,13 +159,7 @@ void HikCameraService::stop()
     closeDevice();
 
     if (m_impl != nullptr && m_impl->sdkReady) {
-        QMutexLocker locker(&g_sdkMutex);
-        if (g_sdkRefCount > 0) {
-            --g_sdkRefCount;
-        }
-        if (g_sdkRefCount == 0) {
-            MV_CC_Finalize();
-        }
+        releaseHikMvsSdk();
         m_impl->sdkReady = false;
     }
 

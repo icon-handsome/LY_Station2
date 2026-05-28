@@ -55,6 +55,13 @@ struct VisionConfig {
     VisionCameraEndpointConfig hikCameraA;
     VisionCameraEndpointConfig hikCameraB;
     VisionCameraEndpointConfig hikCameraC;
+    bool hikCxpEnabled = false;
+    int hikCxpCaptureTimeoutMs = 5000;
+    float hikCxpExposureTimeUs = 50000.0f;
+    float hikCxpGain = 0.0f;
+    QString hikCxpSmokeOutputDir;
+    VisionCameraEndpointConfig hikCxpCameraA;
+    VisionCameraEndpointConfig hikCxpCameraB;
     // 智能相机 C 的 TCP 服务端参数（IPC 作为服务端，相机主动连入）
     QString hikCameraCTcpListenIp;
     quint16 hikCameraCTcpListenPort;
@@ -221,7 +228,7 @@ private:
     AppConfig m_appConfig;
     LoggerConfig m_loggerConfig;
     ModbusConfig m_modbusConfig;
-    CameraConfig m_cameraConfig;
+CameraConfig m_cameraConfig;
     VisionConfig m_visionConfig;
     FlowControlConfig m_flowControlConfig;
     TrackingConfig m_trackingConfig;
