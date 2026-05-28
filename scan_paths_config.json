@@ -1,8 +1,8 @@
 {
   "version": "1.0",
   "description": "封头检测多路径扫描配置文件",
-  "lastModified": "2026-05-25",
-  "_fieldTestNote": "3条路径各6点无转动；PLC 每条路径 ScanSegment 1..6 后 Trig_Inspection，再进入下一路径；IPC 按段号重复自动切 pathId",
+  "lastModified": "2026-05-27",
+  "_fieldTestNote": "单路径联调：段1转盘扫→段2-7封头6点→段8转盘扫→段9-14封头6点；PLC Trig_ScanSegment 段号 1..14 后 Trig_Inspection",
 
   "calibrationMatrix": {
     "_todo": "TODO(calibration): 当前 T0 为临时联调用单位矩阵；正式投产前须替换为现场标定的 Mech-Eye → 机械臂/世界 4×4。",
@@ -20,24 +20,32 @@
   "scanPaths": [
     {
       "pathId": 1,
-      "pathName": "路径1-外圈扫描",
-      "description": "外圈扫描：6点、无转动，仅 Mech 3D + 海康 A/B",
+      "pathName": "单路径-转盘+封头×2",
+      "description": "段1/8转盘(3D+2D+LBN)；段2-7、9-14封头各6点(仅3D)",
       "enabled": true,
-      "totalPoints": 6,
+      "totalPoints": 14,
       "points": [
-        { "pointIndex": 1, "pointName": "外圈点1", "needRotation": false, "rotationAngle": 0, "description": "仅3D" },
-        { "pointIndex": 2, "pointName": "外圈点2", "needRotation": false, "rotationAngle": 0, "description": "仅3D" },
-        { "pointIndex": 3, "pointName": "外圈点3", "needRotation": false, "rotationAngle": 0, "description": "仅3D" },
-        { "pointIndex": 4, "pointName": "外圈点4", "needRotation": false, "rotationAngle": 0, "description": "仅3D" },
-        { "pointIndex": 5, "pointName": "外圈点5", "needRotation": false, "rotationAngle": 0, "description": "仅3D" },
-        { "pointIndex": 6, "pointName": "外圈点6", "needRotation": false, "rotationAngle": 0, "description": "仅3D" }
+        { "pointIndex": 1, "pointName": "转盘-第1次", "needRotation": true, "rotationAngle": 0, "description": "机械臂在转盘上扫，需2D+LBN" },
+        { "pointIndex": 2, "pointName": "封头-1-1", "needRotation": false, "rotationAngle": 0, "description": "封头第1轮点1" },
+        { "pointIndex": 3, "pointName": "封头-1-2", "needRotation": false, "rotationAngle": 0, "description": "封头第1轮点2" },
+        { "pointIndex": 4, "pointName": "封头-1-3", "needRotation": false, "rotationAngle": 0, "description": "封头第1轮点3" },
+        { "pointIndex": 5, "pointName": "封头-1-4", "needRotation": false, "rotationAngle": 0, "description": "封头第1轮点4" },
+        { "pointIndex": 6, "pointName": "封头-1-5", "needRotation": false, "rotationAngle": 0, "description": "封头第1轮点5" },
+        { "pointIndex": 7, "pointName": "封头-1-6", "needRotation": false, "rotationAngle": 0, "description": "封头第1轮点6" },
+        { "pointIndex": 8, "pointName": "转盘-第2次", "needRotation": true, "rotationAngle": 0, "description": "机械臂回转盘再扫，需2D+LBN" },
+        { "pointIndex": 9, "pointName": "封头-2-1", "needRotation": false, "rotationAngle": 0, "description": "封头第2轮点1" },
+        { "pointIndex": 10, "pointName": "封头-2-2", "needRotation": false, "rotationAngle": 0, "description": "封头第2轮点2" },
+        { "pointIndex": 11, "pointName": "封头-2-3", "needRotation": false, "rotationAngle": 0, "description": "封头第2轮点3" },
+        { "pointIndex": 12, "pointName": "封头-2-4", "needRotation": false, "rotationAngle": 0, "description": "封头第2轮点4" },
+        { "pointIndex": 13, "pointName": "封头-2-5", "needRotation": false, "rotationAngle": 0, "description": "封头第2轮点5" },
+        { "pointIndex": 14, "pointName": "封头-2-6", "needRotation": false, "rotationAngle": 0, "description": "封头第2轮点6" }
       ]
     },
     {
       "pathId": 2,
       "pathName": "路径2-内圈扫描",
-      "description": "内圈扫描：6点、无转动，仅 Mech 3D + 海康 A/B",
-      "enabled": true,
+      "description": "本轮单路径联调未启用",
+      "enabled": false,
       "totalPoints": 6,
       "points": [
         { "pointIndex": 1, "pointName": "内圈点1", "needRotation": false, "rotationAngle": 0, "description": "仅3D" },
@@ -51,8 +59,8 @@
     {
       "pathId": 3,
       "pathName": "路径3-焊缝检测",
-      "description": "焊缝检测：6点、无转动，仅 Mech 3D + 海康 A/B",
-      "enabled": true,
+      "description": "本轮单路径联调未启用",
+      "enabled": false,
       "totalPoints": 6,
       "points": [
         { "pointIndex": 1, "pointName": "焊缝点1", "needRotation": false, "rotationAngle": 0, "description": "仅3D" },
@@ -67,15 +75,15 @@
 
   "executionConfig": {
     "executeAllPaths": false,
-    "description": "3条路径配置完成；IPC 当前由 PLC 按段触发，路径切换由 PLC 控制",
-    "selectedPathIds": [1, 2, 3],
+    "description": "单路径联调：仅 pathId=1，PLC 段号 1..14",
+    "selectedPathIds": [1],
     "pathExecutionOrder": "sequential",
     "allowPathSkipOnError": false
   },
 
   "turntableConfig": {
-    "enabled": false,
-    "description": "实测无转动点，转盘标定/LBN 2D 本轮回路不启用"
+    "enabled": true,
+    "description": "段1、段8为转盘位，IPC 采集 3D+2D 并走 LBN（无标记时 config.ini useIdentityRtWithoutMarkers）"
   },
 
   "captureConfig": {
