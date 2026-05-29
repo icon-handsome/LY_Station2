@@ -55,11 +55,13 @@ lbn_pose::AlignedOrganizedCloud toAlignedCloud(const scan_tracking::mech_eye::Po
 
     thread_local std::vector<cv::Point3f> organizedPoints;
     organizedPoints.resize(static_cast<std::size_t>(pointCount));
+    const float* src = cloud.pointsXYZ->data();
+    cv::Point3f* dst = organizedPoints.data();
     for (int index = 0; index < pointCount; ++index) {
-        const float x = (*cloud.pointsXYZ)[static_cast<std::size_t>(index * 3 + 0)];
-        const float y = (*cloud.pointsXYZ)[static_cast<std::size_t>(index * 3 + 1)];
-        const float z = (*cloud.pointsXYZ)[static_cast<std::size_t>(index * 3 + 2)];
-        organizedPoints[static_cast<std::size_t>(index)] = cv::Point3f(x, y, z);
+        const std::size_t base = static_cast<std::size_t>(index * 3);
+        dst[index].x = src[base];
+        dst[index].y = src[base + 1];
+        dst[index].z = src[base + 2];
     }
 
     aligned.points = organizedPoints.data();

@@ -2522,8 +2522,8 @@ void StateMachine::onCaptureFinished(mech_eye::CaptureResult result)
         return;
     }
 
-    // 检查采集是否成功、点云数据是否有效，以及法向量是否齐全
-    if (!result.success() || !result.pointCloud.isValid() || !result.pointCloud.hasNormals()) {
+    // 检查采集是否成功、点云数据是否有效
+    if (!result.success() || !result.pointCloud.isValid()) {
         const QString failureMessage =
             result.errorMessage.isEmpty() ? QStringLiteral("采集失败") : result.errorMessage;
         finishScanSegmentFailure(

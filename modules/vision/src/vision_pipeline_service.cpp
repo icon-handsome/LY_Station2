@@ -2,6 +2,7 @@
 
 #include <QtCore/QMetaType>
 #include <QtCore/QPointer>
+#include <QtCore/QTimer>
 
 #include <thread>
 #include <qdebug.h>
@@ -113,6 +114,8 @@ void VisionPipelineService::stop()
 
 namespace {
 
+constexpr int kMechToHikCaptureDelayMs = 2000;
+
 bool mechCapturePayloadReady(const scan_tracking::mech_eye::CaptureResult& result)
 {
     if (!result.success()) {
@@ -162,10 +165,10 @@ quint64 VisionPipelineService::requestCaptureBundle(
     pending.active = true;
     pending.bundle.request = request;
 
-    const bool invokeLbn = request.needMechEye2D && m_lbnPoseConfig.enabled;
     qInfo() << QStringLiteral("[VisionPipeline] 段号=") << segmentIndex
             << QStringLiteral(" 需梅卡2D=") << request.needMechEye2D
-            << QStringLiteral(" 梅卡模式=") << static_cast<int>(mechCaptureMode);
+            << QStringLiteral(" 梅卡模式=") << static_cast<int>(mechCaptureMode)
+            << QStringLiteral(" CXP延迟ms=") << kMechToHikCaptureDelayMs;
     pending.mechRequestId = m_mechEyeService->requestCapture(
         request.mechEyeCameraKey,
         mechCaptureMode,
@@ -175,27 +178,44 @@ quint64 VisionPipelineService::requestCaptureBundle(
         return 0;
     }
     pending.mechDone = false;
-
-    // CXP 双目 A/B 正式采集
-    pending.hikARequestId = m_hikCameraAService->requestPoseCapture(
-        request.hikCameraAKey, request.hikTimeoutMs);
-    pending.hikBRequestId = m_hikCameraBService->requestPoseCapture(
-        request.hikCameraBKey, request.hikTimeoutMs);
-
-    if (pending.hikARequestId == 0) {
-        emit fatalError(VisionErrorCode::CaptureRejected, QStringLiteral("启动 CXP 双目 A 采集失败。"));
-        return 0;
-    }
-    if (pending.hikBRequestId == 0) {
-        emit fatalError(VisionErrorCode::CaptureRejected, QStringLiteral("启动 CXP 双目 B 采集失败。"));
-        return 0;
-    }
+    pending.hikADone = false;
+    pending.hikBDone = false;
 
     m_pending = pending;
     setState(
         VisionPipelineState::Capturing,
-        QStringLiteral("组合采集请求已发送：requestId=%1").arg(request.requestId));
+        QStringLiteral("梅卡采集已启动（CXP 将在梅卡完成后延迟 %1ms）").arg(kMechToHikCaptureDelayMs));
     return request.requestId;
+}
+
+void VisionPipelineService::startPendingHikCapture()
+{
+    if (!m_pending.active || m_pending.hikARequestId != 0) {
+        return;
+    }
+
+    const auto& request = m_pending.bundle.request;
+    qInfo() << QStringLiteral("[VisionPipeline] 梅卡已完成，启动 CXP 双目采集 段号=")
+            << request.segmentIndex;
+
+    m_pending.hikARequestId = m_hikCameraAService->requestPoseCapture(
+        request.hikCameraAKey, request.hikTimeoutMs);
+    m_pending.hikBRequestId = m_hikCameraBService->requestPoseCapture(
+        request.hikCameraBKey, request.hikTimeoutMs);
+
+    if (m_pending.hikARequestId == 0 || m_pending.hikBRequestId == 0) {
+        m_pending.active = false;
+        m_processing = false;
+        emit fatalError(
+            VisionErrorCode::CaptureRejected,
+            QStringLiteral("梅卡完成后启动 CXP 双目采集失败。"));
+        setState(VisionPipelineState::Error, QStringLiteral("CXP 双目采集启动失败。"));
+        return;
+    }
+
+    setState(
+        VisionPipelineState::Capturing,
+        QStringLiteral("CXP 双目采集已启动：requestId=%1").arg(request.requestId));
 }
 
 void VisionPipelineService::onMechEyeCaptureFinished(scan_tracking::mech_eye::CaptureResult result)
@@ -206,7 +226,12 @@ void VisionPipelineService::onMechEyeCaptureFinished(scan_tracking::mech_eye::Ca
 
     m_pending.bundle.mechEyeResult = result;
     m_pending.mechDone = true;
-    finishBundleIfReady();
+
+    qInfo() << QStringLiteral("[VisionPipeline] 梅卡采集结束，%1ms 后启动 CXP 双目")
+                   .arg(kMechToHikCaptureDelayMs);
+    QTimer::singleShot(kMechToHikCaptureDelayMs, this, [this]() {
+        startPendingHikCapture();
+    });
 }
 
 void VisionPipelineService::onHikPoseCaptureFinished(scan_tracking::vision::HikPoseCaptureResult result)

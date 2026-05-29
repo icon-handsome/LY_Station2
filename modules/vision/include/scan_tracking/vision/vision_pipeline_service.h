@@ -57,6 +57,7 @@ private:
 
     static void registerMetaTypes();
     void setState(VisionPipelineState state, const QString& description);
+    void startPendingHikCapture();
     void finishBundleIfReady();
 
     scan_tracking::mech_eye::MechEyeService* m_mechEyeService = nullptr;

@@ -129,6 +129,7 @@ public:
     QString interfaceId;
     bool sdkReady = false;
     bool connected = false;
+    bool grabbing = false;
 };
 
 void HikCxpCameraService::registerMetaTypes()
@@ -276,13 +277,22 @@ bool HikCxpCameraService::captureMonoFrame(
     const unsigned int waitMs = static_cast<unsigned int>(timeoutMs > 0 ? timeoutMs : m_defaultCaptureTimeoutMs);
     const unsigned int actualWaitMs = waitMs < 5000 ? 5000 : waitMs;
 
-    const int startResult = MV_CC_StartGrabbing(handle);
-    if (startResult != MV_OK && startResult != MV_E_CALLORDER) {
-        if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral("MV_CC_StartGrabbing 失败，错误码=0x%1")
-                                .arg(static_cast<quint32>(startResult), 8, 16, QLatin1Char('0'));
+    bool alreadyGrabbing = false;
+    {
+        QMutexLocker locker(&m_impl->mutex);
+        alreadyGrabbing = m_impl->grabbing;
+    }
+    if (!alreadyGrabbing) {
+        const int startResult = MV_CC_StartGrabbing(handle);
+        if (startResult != MV_OK && startResult != MV_E_CALLORDER) {
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral("MV_CC_StartGrabbing 失败，错误码=0x%1")
+                                    .arg(static_cast<quint32>(startResult), 8, 16, QLatin1Char('0'));
+            }
+            return false;
         }
-        return false;
+        QMutexLocker locker(&m_impl->mutex);
+        m_impl->grabbing = true;
     }
 
     MV_FRAME_OUT frameOut{};
@@ -339,12 +349,15 @@ bool HikCxpCameraService::captureMonoFrame(
         MV_CC_FreeImageBuffer(handle, &frameOut);
     }
 
-    std::vector<unsigned char> buffer(48 * 1024 * 1024);
+    thread_local std::vector<unsigned char> fallbackBuffer;
+    if (fallbackBuffer.size() < 48U * 1024U * 1024U) {
+        fallbackBuffer.resize(48U * 1024U * 1024U);
+    }
     MV_FRAME_OUT_INFO_EX frameInfo{};
     const int grabResult = MV_CC_GetOneFrameTimeout(
         handle,
-        buffer.data(),
-        static_cast<unsigned int>(buffer.size()),
+        fallbackBuffer.data(),
+        static_cast<unsigned int>(fallbackBuffer.size()),
         &frameInfo,
         actualWaitMs);
 
@@ -367,7 +380,7 @@ bool HikCxpCameraService::captureMonoFrame(
     const int width = static_cast<int>(frameInfo.nWidth);
     const int height = static_cast<int>(frameInfo.nHeight);
     const int frameLen = static_cast<int>(frameInfo.nFrameLen);
-    if (width <= 0 || height <= 0 || frameLen <= 0 || frameLen > static_cast<int>(buffer.size())) {
+    if (width <= 0 || height <= 0 || frameLen <= 0 || frameLen > static_cast<int>(fallbackBuffer.size())) {
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("CXP 图像帧信息无效 width=%1 height=%2 len=%3")
                                 .arg(width)
@@ -378,7 +391,7 @@ bool HikCxpCameraService::captureMonoFrame(
     }
 
     auto pixels = std::make_shared<std::vector<std::uint8_t>>();
-    pixels->assign(buffer.begin(), buffer.begin() + frameLen);
+    pixels->assign(fallbackBuffer.begin(), fallbackBuffer.begin() + frameLen);
 
     HikMonoFrame frame;
     frame.pixels = std::move(pixels);
@@ -603,6 +616,7 @@ bool HikCxpCameraService::openMatchedDevice(const QString& preferredCameraKey, Q
         m_impl->deviceId = matchedDeviceId;
         m_impl->interfaceId = matchedInterfaceId;
         m_impl->connected = true;
+        m_impl->grabbing = (ret == MV_OK || ret == MV_E_CALLORDER);
     }
 
     if (errorMessage != nullptr) {
@@ -626,6 +640,7 @@ void HikCxpCameraService::closeDevice()
         m_impl->handle = nullptr;
     }
     m_impl->connected = false;
+    m_impl->grabbing = false;
 }
 
 void HikCxpCameraService::startAsyncConnect()

@@ -52,14 +52,12 @@ bool matchesCameraKey(const QString& key, const mmind::eye::CameraInfo& cameraIn
 }
 
 /**
- * @brief 将梅卡无纹理点云（含法向量）转换为项目内部点云结构
- *
- * 该函数会把 SDK 返回的 XYZ 与 Normal 向量展平到连续数组，
- * 便于跨线程传输和后续算法模块（例如 PCL）直接消费。
+ * @brief 将梅卡无纹理点云（仅 XYZ）转换为项目内部点云结构
  */
-PointCloudFrame ConvertPointCloudWithNormalsToPcl(
-    const mmind::eye::PointCloudWithNormals& cloud,
-    quint64 frameId)
+PointCloudFrame ConvertUntexturedPointCloudToFrame(
+    const mmind::eye::UntexturedPointCloud& cloud,
+    quint64 frameId,
+    std::size_t* validPointCount = nullptr)
 {
     PointCloudFrame pointCloud;
     const std::size_t width = cloud.width();
@@ -73,87 +71,38 @@ PointCloudFrame ConvertPointCloudWithNormalsToPcl(
     pointCloud.frameId = frameId;
     pointCloud.timestampMs = QDateTime::currentMSecsSinceEpoch();
     pointCloud.pointsXYZ = std::make_shared<std::vector<float>>();
-    pointCloud.normalsXYZ = std::make_shared<std::vector<float>>();
-    pointCloud.pointsXYZ->reserve(pointCount * 3);
-    pointCloud.normalsXYZ->reserve(pointCount * 3);
+    pointCloud.normalsXYZ.reset();
 
-    if (data == nullptr) {
+    if (data == nullptr || pointCount == 0) {
         pointCloud.pointCount = 0;
+        if (validPointCount != nullptr) {
+            *validPointCount = 0;
+        }
         return pointCloud;
     }
 
-    const float nanValue = std::numeric_limits<float>::quiet_NaN();
+    pointCloud.pointsXYZ->resize(pointCount * 3);
+    float* points = pointCloud.pointsXYZ->data();
+
+    std::size_t validCount = 0;
     for (std::size_t index = 0; index < pointCount; ++index) {
-        pointCloud.pointsXYZ->push_back(data[index].point.x);
-        pointCloud.pointsXYZ->push_back(data[index].point.y);
-        pointCloud.pointsXYZ->push_back(data[index].point.z);
+        const auto& sample = data[index];
+        const float x = sample.x;
+        const float y = sample.y;
+        const float z = sample.z;
+        const std::size_t base = index * 3;
+        points[base] = x;
+        points[base + 1] = y;
+        points[base + 2] = z;
 
-        const float nx = data[index].normal.x;
-        const float ny = data[index].normal.y;
-        const float nz = data[index].normal.z;
-        pointCloud.normalsXYZ->push_back(nx);
-        pointCloud.normalsXYZ->push_back(ny);
-        pointCloud.normalsXYZ->push_back(nz);
-
-        // 防御性处理：若 SDK 返回非法法向量，用 NaN 占位，保持点/法向索引对齐。
-        if (!(nx == nx) || !(ny == ny) || !(nz == nz)) {
-            (*pointCloud.normalsXYZ)[index * 3] = nanValue;
-            (*pointCloud.normalsXYZ)[index * 3 + 1] = nanValue;
-            (*pointCloud.normalsXYZ)[index * 3 + 2] = nanValue;
+        if (std::isfinite(x) && std::isfinite(y) && std::isfinite(z)) {
+            ++validCount;
         }
     }
 
-    return pointCloud;
-}
-
-/**
- * @brief 将梅卡彩色点云（含法向量）转换为项目内部点云结构
- */
-PointCloudFrame ConvertTexturedPointCloudWithNormalsToPcl(
-    const mmind::eye::TexturedPointCloudWithNormals& cloud,
-    quint64 frameId)
-{
-    PointCloudFrame pointCloud;
-    const std::size_t width = cloud.width();
-    const std::size_t height = cloud.height();
-    const std::size_t pointCount = width * height;
-    const auto* data = cloud.data();
-
-    pointCloud.width = static_cast<int>(width);
-    pointCloud.height = static_cast<int>(height);
-    pointCloud.pointCount = static_cast<int>(pointCount);
-    pointCloud.frameId = frameId;
-    pointCloud.timestampMs = QDateTime::currentMSecsSinceEpoch();
-    pointCloud.pointsXYZ = std::make_shared<std::vector<float>>();
-    pointCloud.normalsXYZ = std::make_shared<std::vector<float>>();
-    pointCloud.pointsXYZ->reserve(pointCount * 3);
-    pointCloud.normalsXYZ->reserve(pointCount * 3);
-
-    if (data == nullptr) {
-        pointCloud.pointCount = 0;
-        return pointCloud;
+    if (validPointCount != nullptr) {
+        *validPointCount = validCount;
     }
-
-    const float nanValue = std::numeric_limits<float>::quiet_NaN();
-    for (std::size_t index = 0; index < pointCount; ++index) {
-        pointCloud.pointsXYZ->push_back(data[index].colorPoint.x);
-        pointCloud.pointsXYZ->push_back(data[index].colorPoint.y);
-        pointCloud.pointsXYZ->push_back(data[index].colorPoint.z);
-
-        const float nx = data[index].normal.x;
-        const float ny = data[index].normal.y;
-        const float nz = data[index].normal.z;
-        pointCloud.normalsXYZ->push_back(nx);
-        pointCloud.normalsXYZ->push_back(ny);
-        pointCloud.normalsXYZ->push_back(nz);
-
-        if (!(nx == nx) || !(ny == ny) || !(nz == nz)) {
-            (*pointCloud.normalsXYZ)[index * 3] = nanValue;
-            (*pointCloud.normalsXYZ)[index * 3 + 1] = nanValue;
-            (*pointCloud.normalsXYZ)[index * 3 + 2] = nanValue;
-        }
-    }
-
     return pointCloud;
 }
 
@@ -175,10 +124,12 @@ GrayTextureFrame ConvertGrayTextureFrame(const mmind::eye::Frame2D& frame2d)
     texture.height = height;
     texture.pixels = std::make_shared<std::vector<uint8_t>>();
     texture.pixels->resize(static_cast<std::size_t>(width * height));
-    for (int row = 0; row < height; ++row) {
-        for (int col = 0; col < width; ++col) {
-            (*texture.pixels)[static_cast<std::size_t>(row * width + col)] = gray.at(row, col).gray;
-        }
+    uint8_t* dst = texture.pixels->data();
+    const std::size_t pixelCount = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+    for (std::size_t index = 0; index < pixelCount; ++index) {
+        const int row = static_cast<int>(index / static_cast<std::size_t>(width));
+        const int col = static_cast<int>(index % static_cast<std::size_t>(width));
+        dst[index] = gray.at(row, col).gray;
     }
     return texture;
 }
@@ -354,22 +305,12 @@ void MechEyeWorker::performCapture(const scan_tracking::mech_eye::CaptureRequest
                 frame3D,
                 static_cast<unsigned int>(normalized.timeoutMs));
             if (status.isOK()) {
-                // 提取点云数据（含法向量，由 IPC 侧计算）
-                const auto cloudWithNormals = frame3D.getUntexturedPointCloudWithNormals();
-                result.pointCloud = ConvertPointCloudWithNormalsToPcl(cloudWithNormals, static_cast<quint64>(frame3D.frameId()));
-
-                const std::size_t totalPoints = cloudWithNormals.width() * cloudWithNormals.height();
-                const auto* pData = cloudWithNormals.data();
-
-                // 统计有效点
+                const auto untexturedCloud = frame3D.getUntexturedPointCloud();
                 std::size_t validCount = 0;
-                if (pData && totalPoints > 0) {
-                    for (std::size_t i = 0; i < totalPoints; ++i) {
-                        if (std::isfinite(pData[i].point.x) && std::isfinite(pData[i].point.y) && std::isfinite(pData[i].point.z)) {
-                            ++validCount;
-                        }
-                    }
-                }
+                result.pointCloud = ConvertUntexturedPointCloudToFrame(
+                    untexturedCloud,
+                    static_cast<quint64>(frame3D.frameId()),
+                    &validCount);
 
                 if (validCount == 0) {
                     qWarning(LOG_MECHEYE_WORKER)
@@ -378,7 +319,7 @@ void MechEyeWorker::performCapture(const scan_tracking::mech_eye::CaptureRequest
             }
         } else {
             mmind::eye::Frame2DAnd3D frame2DAnd3D;
-            status = m_impl->camera.capture2DAnd3DWithNormal(
+            status = m_impl->camera.capture2DAnd3D(
                 frame2DAnd3D,
                 static_cast<unsigned int>(normalized.timeoutMs));
             if (status.isOK()) {
@@ -437,7 +378,6 @@ void MechEyeWorker::performCapture(const scan_tracking::mech_eye::CaptureRequest
             << QStringLiteral(" 模式=") << static_cast<int>(result.mode)
             << QStringLiteral(" 点数=") << result.pointCloud.pointCount
             << QStringLiteral(" 纹理2D=") << result.texture2D.width << QStringLiteral("x") << result.texture2D.height
-            << QStringLiteral(" 法向数=") << result.pointCloud.normalCount()
             << QStringLiteral(" 耗时ms=") << result.elapsedMs;
         emit captureFinished(result);
 #if defined(__cpp_exceptions) || defined(_CPPUNWIND)
@@ -657,15 +597,17 @@ CaptureResult MechEyeWorker::makeFailureResult(
 
 PointCloudFrame MechEyeWorker::buildPointCloud3D(const mmind::eye::Frame3D& frame) const
 {
-    const auto cloudWithNormals = frame.getUntexturedPointCloudWithNormals();
-    return ConvertPointCloudWithNormalsToPcl(cloudWithNormals, static_cast<quint64>(frame.frameId()));
+    const auto untexturedCloud = frame.getUntexturedPointCloud();
+    return ConvertUntexturedPointCloudToFrame(
+        untexturedCloud,
+        static_cast<quint64>(frame.frameId()));
 }
 
 PointCloudFrame MechEyeWorker::buildPointCloud2DAnd3D(const mmind::eye::Frame2DAnd3D& frame) const
 {
-    const auto cloudWithNormals = frame.getTexturedPointCloudWithNormals();
-    return ConvertTexturedPointCloudWithNormalsToPcl(
-        cloudWithNormals,
+    const auto untexturedCloud = frame.frame3D().getUntexturedPointCloud();
+    return ConvertUntexturedPointCloudToFrame(
+        untexturedCloud,
         static_cast<quint64>(frame.frame3D().frameId()));
 }
 
