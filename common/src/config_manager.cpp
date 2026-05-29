@@ -22,11 +22,17 @@ namespace {
 
 QString projectRootConfigPath()
 {
+    const QString exeDirConfig =
+        QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("config.ini"));
+    if (QFileInfo::exists(exeDirConfig)) {
+        return exeDirConfig;
+    }
+
     QDir rootDir(QCoreApplication::applicationDirPath());
     if (rootDir.cdUp() && rootDir.cdUp() && rootDir.cdUp()) {
         return rootDir.filePath(QStringLiteral("config.ini"));
     }
-    return QCoreApplication::applicationDirPath() + QStringLiteral("/config.ini");
+    return exeDirConfig;
 }
 
 /**
@@ -38,7 +44,12 @@ QString projectRootConfigPath()
  */
 QString scanPathsConfigPath()
 {
-    // 优先使用项目根目录
+    const QString exeDirPath =
+        QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("scan_paths_config.json"));
+    if (QFileInfo::exists(exeDirPath)) {
+        return exeDirPath;
+    }
+
     QDir rootDir(QCoreApplication::applicationDirPath());
     if (rootDir.cdUp() && rootDir.cdUp() && rootDir.cdUp()) {
         QString rootPath = rootDir.filePath(QStringLiteral("scan_paths_config.json"));
@@ -46,9 +57,8 @@ QString scanPathsConfigPath()
             return rootPath;
         }
     }
-    
-    // 回退到可执行文件目录
-    return QCoreApplication::applicationDirPath() + QStringLiteral("/scan_paths_config.json");
+
+    return exeDirPath;
 }
 
 }  // namespace

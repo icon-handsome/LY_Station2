@@ -31,6 +31,7 @@ namespace mech_eye { class MechEyeService; }
 namespace tracking { class TrackingService; }
 namespace flow_control { class StateMachine; }
 namespace vision {
+class HikCxpCameraService;
 class HikCameraService;
 class HikCameraCController;
 class VisionPipelineService;
@@ -88,7 +89,7 @@ public:
     void setMechEyeService(mech_eye::MechEyeService* svc);
     void setVisionPipelineService(vision::VisionPipelineService* svc);
     void setTrackingService(tracking::TrackingService* svc);
-    void setHikCameraServices(vision::HikCameraService* hikA, vision::HikCameraService* hikB,
+    void setHikCameraServices(vision::HikCxpCameraService* hikA, vision::HikCxpCameraService* hikB,
                               vision::HikCameraService* hikC = nullptr);
     void setHikCameraCController(vision::HikCameraCController* controller);
 
@@ -289,8 +290,8 @@ private:
     mech_eye::MechEyeService* m_mechEyeService = nullptr;
     vision::VisionPipelineService* m_visionPipeline = nullptr;
     tracking::TrackingService* m_trackingService = nullptr;
-    vision::HikCameraService* m_hikCameraA = nullptr;
-    vision::HikCameraService* m_hikCameraB = nullptr;
+    vision::HikCxpCameraService* m_hikCameraA = nullptr;
+    vision::HikCxpCameraService* m_hikCameraB = nullptr;
     vision::HikCameraService* m_hikCameraC = nullptr;
     vision::HikCameraCController* m_hikCameraCController = nullptr;
     

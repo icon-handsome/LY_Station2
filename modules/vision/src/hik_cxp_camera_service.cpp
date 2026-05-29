@@ -458,6 +458,7 @@ quint64 HikCxpCameraService::requestMonoCapture(const QString& preferredCameraKe
             [this, seedResult]() {
                 m_captureInFlight = false;
                 emit monoCaptureFinished(seedResult);
+                emit poseCaptureFinished(seedResult);
                 emit stateChanged(
                     m_roleName,
                     QStringLiteral("ready"),

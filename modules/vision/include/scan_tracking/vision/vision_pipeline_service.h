@@ -9,7 +9,7 @@
 namespace scan_tracking {
 namespace vision {
 
-class HikCameraService;
+class HikCxpCameraService;
 
 class VisionPipelineService : public QObject {
     Q_OBJECT
@@ -17,8 +17,8 @@ class VisionPipelineService : public QObject {
 public:
     VisionPipelineService(
         scan_tracking::mech_eye::MechEyeService* mechEyeService,
-        HikCameraService* hikCameraAService,
-        HikCameraService* hikCameraBService,
+        HikCxpCameraService* hikCameraAService,
+        HikCxpCameraService* hikCameraBService,
         QObject* parent = nullptr);
     ~VisionPipelineService() override = default;
 
@@ -60,8 +60,8 @@ private:
     void finishBundleIfReady();
 
     scan_tracking::mech_eye::MechEyeService* m_mechEyeService = nullptr;
-    HikCameraService* m_hikCameraAService = nullptr;
-    HikCameraService* m_hikCameraBService = nullptr;
+    HikCxpCameraService* m_hikCameraAService = nullptr;
+    HikCxpCameraService* m_hikCameraBService = nullptr;
     scan_tracking::common::VisionConfig m_config;
     scan_tracking::common::LbPoseConfig m_lbPoseConfig;
     scan_tracking::common::LbnPoseConfig m_lbnPoseConfig;

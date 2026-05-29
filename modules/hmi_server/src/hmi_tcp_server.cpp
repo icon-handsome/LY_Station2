@@ -12,6 +12,7 @@
 #include "scan_tracking/modbus/modbus_service.h"
 #include "scan_tracking/mech_eye/mech_eye_service.h"
 #include "scan_tracking/vision/vision_pipeline_service.h"
+#include "scan_tracking/vision/hik_cxp_camera_service.h"
 #include "scan_tracking/vision/hik_camera_service.h"
 #include "scan_tracking/vision/hik_camera_c_controller.h"
 #include "scan_tracking/tracking/tracking_service.h"  // InspectionMeasurement, appendInspectionMeasurementFields
@@ -229,7 +230,7 @@ void HmiTcpServer::disconnectServiceSignals()
 void HmiTcpServer::setMechEyeService(mech_eye::MechEyeService* svc) { m_mechEyeService = svc; }
 void HmiTcpServer::setVisionPipelineService(vision::VisionPipelineService* svc) { m_visionPipeline = svc; }
 void HmiTcpServer::setTrackingService(tracking::TrackingService* svc) { m_trackingService = svc; }
-void HmiTcpServer::setHikCameraServices(vision::HikCameraService* hikA, vision::HikCameraService* hikB,
+void HmiTcpServer::setHikCameraServices(vision::HikCxpCameraService* hikA, vision::HikCxpCameraService* hikB,
                                         vision::HikCameraService* hikC) {
     m_hikCameraA = hikA;
     m_hikCameraB = hikB;
@@ -502,18 +503,23 @@ void HmiTcpServer::handleCmdGetConfig(const QJsonObject& message)
     visionObj[QLatin1String("hikCaptureTimeoutMs")] = cfgMgr->visionConfig().hikCaptureTimeoutMs; // Hik 捕获超时时间
     visionObj[QLatin1String("hikSdkRoot")] = cfgMgr->visionConfig().hikSdkRoot; // Hik SDK 根目录
 
+    visionObj[QLatin1String("hikCxpEnabled")] = cfgMgr->visionConfig().hikCxpEnabled;
+    visionObj[QLatin1String("hikCxpCaptureTimeoutMs")] = cfgMgr->visionConfig().hikCxpCaptureTimeoutMs;
+
     QJsonObject hikAObj;
-    hikAObj[QLatin1String("logicalName")] = cfgMgr->visionConfig().hikCameraA.logicalName; // 逻辑名称
-    hikAObj[QLatin1String("cameraKey")] = cfgMgr->visionConfig().hikCameraA.cameraKey; // 相机键
-    hikAObj[QLatin1String("ipAddress")] = cfgMgr->visionConfig().hikCameraA.ipAddress; // IP 地址
-    hikAObj[QLatin1String("serialNumber")] = cfgMgr->visionConfig().hikCameraA.serialNumber; // 序列号
+    hikAObj[QLatin1String("logicalName")] = cfgMgr->visionConfig().hikCxpCameraA.logicalName;
+    hikAObj[QLatin1String("cameraKey")] = cfgMgr->visionConfig().hikCxpCameraA.cameraKey;
+    hikAObj[QLatin1String("ipAddress")] = cfgMgr->visionConfig().hikCxpCameraA.ipAddress;
+    hikAObj[QLatin1String("serialNumber")] = cfgMgr->visionConfig().hikCxpCameraA.serialNumber;
+    hikAObj[QLatin1String("cameraType")] = QStringLiteral("cxp");
     visionObj[QLatin1String("hikCameraA")] = hikAObj;
-    
+
     QJsonObject hikBObj;
-    hikBObj[QLatin1String("logicalName")] = cfgMgr->visionConfig().hikCameraB.logicalName; // 逻辑名称
-    hikBObj[QLatin1String("cameraKey")] = cfgMgr->visionConfig().hikCameraB.cameraKey; // 相机键
-    hikBObj[QLatin1String("ipAddress")] = cfgMgr->visionConfig().hikCameraB.ipAddress; // IP 地址
-    hikBObj[QLatin1String("serialNumber")] = cfgMgr->visionConfig().hikCameraB.serialNumber; // 序列号
+    hikBObj[QLatin1String("logicalName")] = cfgMgr->visionConfig().hikCxpCameraB.logicalName;
+    hikBObj[QLatin1String("cameraKey")] = cfgMgr->visionConfig().hikCxpCameraB.cameraKey;
+    hikBObj[QLatin1String("ipAddress")] = cfgMgr->visionConfig().hikCxpCameraB.ipAddress;
+    hikBObj[QLatin1String("serialNumber")] = cfgMgr->visionConfig().hikCxpCameraB.serialNumber;
+    hikBObj[QLatin1String("cameraType")] = QStringLiteral("cxp");
     visionObj[QLatin1String("hikCameraB")] = hikBObj;
 
     QJsonObject hikCObj;
@@ -1283,10 +1289,10 @@ void HmiTcpServer::connectStatusRefreshSignals()
         }
     };
     if (m_hikCameraA) {
-        connect(m_hikCameraA, &vision::HikCameraService::stateChanged, this, refreshCameraOnHik, Qt::UniqueConnection);
+        connect(m_hikCameraA, &vision::HikCxpCameraService::stateChanged, this, refreshCameraOnHik, Qt::UniqueConnection);
     }
     if (m_hikCameraB) {
-        connect(m_hikCameraB, &vision::HikCameraService::stateChanged, this, refreshCameraOnHik, Qt::UniqueConnection);
+        connect(m_hikCameraB, &vision::HikCxpCameraService::stateChanged, this, refreshCameraOnHik, Qt::UniqueConnection);
     }
     if (m_hikCameraC) {
         connect(m_hikCameraC, &vision::HikCameraService::stateChanged, this, refreshCameraOnHik, Qt::UniqueConnection);

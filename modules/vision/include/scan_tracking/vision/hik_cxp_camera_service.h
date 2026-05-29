@@ -31,8 +31,15 @@ public:
 
     quint64 requestMonoCapture(const QString& preferredCameraKey = {}, int timeoutMs = 0);
 
+    /// 与 HikCameraService 对齐，供 VisionPipeline 组合采集调用。
+    quint64 requestPoseCapture(const QString& preferredCameraKey = {}, int timeoutMs = 0)
+    {
+        return requestMonoCapture(preferredCameraKey, timeoutMs);
+    }
+
 signals:
     void monoCaptureFinished(scan_tracking::vision::HikPoseCaptureResult result);
+    void poseCaptureFinished(scan_tracking::vision::HikPoseCaptureResult result);
     void stateChanged(QString roleName, QString stateText, QString description);
     void fatalError(scan_tracking::vision::VisionErrorCode code, QString message);
 

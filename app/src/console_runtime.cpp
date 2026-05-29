@@ -29,6 +29,7 @@
 #include "scan_tracking/mech_eye/mech_eye_types.h"
 #include "scan_tracking/modbus/modbus_service.h"
 #include "scan_tracking/tracking/tracking_service.h"
+#include "scan_tracking/vision/hik_cxp_camera_service.h"
 #include "scan_tracking/vision/hik_camera_service.h"
 #include "scan_tracking/vision/vision_pipeline_service.h"
 #include "scan_tracking/vision/hik_camera_c_controller.h"
@@ -143,35 +144,39 @@ void ConsoleRuntime::initModules()
         ? configManager->visionConfig()
         : scan_tracking::common::VisionConfig{};
 
-    // 两台海康相机当前只接入服务骨架，不落具体 SDK 调用。
-    hikCameraAService_ = std::make_unique<scan_tracking::vision::HikCameraService>(
-        QStringLiteral("hik_camera_a"));
-    hikCameraBService_ = std::make_unique<scan_tracking::vision::HikCameraService>(
-        QStringLiteral("hik_camera_b"));
+    if (!visionConfig.hikCxpEnabled) {
+        qCritical(appLog) << QStringLiteral("hikCxpEnabled=false，CXP 双目未启动；请在 config.ini [Vision] 中启用。");
+    } else {
+        hikCxpCameraAService_ = std::make_unique<scan_tracking::vision::HikCxpCameraService>(
+            QStringLiteral("ch250_a"));
+        hikCxpCameraBService_ = std::make_unique<scan_tracking::vision::HikCxpCameraService>(
+            QStringLiteral("ch250_b"));
 
-    QObject::connect(
-        hikCameraAService_.get(),
-        &scan_tracking::vision::HikCameraService::stateChanged,
-        [](const QString& roleName, const QString& stateText, const QString& description) {
-            qInfo(appLog) << QStringLiteral("[海康]") << roleName << stateText << description;
-        });
-    QObject::connect(
-        hikCameraBService_.get(),
-        &scan_tracking::vision::HikCameraService::stateChanged,
-        [](const QString& roleName, const QString& stateText, const QString& description) {
-            qInfo(appLog) << QStringLiteral("[海康]") << roleName << stateText << description;
-        });
+        QObject::connect(
+            hikCxpCameraAService_.get(),
+            &scan_tracking::vision::HikCxpCameraService::stateChanged,
+            [](const QString& roleName, const QString& stateText, const QString& description) {
+                qInfo(appLog) << QStringLiteral("[CXP]") << roleName << stateText << description;
+            });
+        QObject::connect(
+            hikCxpCameraBService_.get(),
+            &scan_tracking::vision::HikCxpCameraService::stateChanged,
+            [](const QString& roleName, const QString& stateText, const QString& description) {
+                qInfo(appLog) << QStringLiteral("[CXP]") << roleName << stateText << description;
+            });
 
-    hikCameraAService_->start(
-        visionConfig.hikCameraA,
-        visionConfig.hikCaptureTimeoutMs,
-        visionConfig.hikExposureTimeUs,
-        visionConfig.hikGain);
-    hikCameraBService_->start(
-        visionConfig.hikCameraB,
-        visionConfig.hikCaptureTimeoutMs,
-        visionConfig.hikExposureTimeUs,
-        visionConfig.hikGain);
+        hikCxpCameraAService_->start(
+            visionConfig.hikCxpCameraA,
+            visionConfig.hikCxpCaptureTimeoutMs,
+            visionConfig.hikCxpExposureTimeUs,
+            visionConfig.hikCxpGain);
+        hikCxpCameraBService_->start(
+            visionConfig.hikCxpCameraB,
+            visionConfig.hikCxpCaptureTimeoutMs,
+            visionConfig.hikCxpExposureTimeUs,
+            visionConfig.hikCxpGain);
+        qInfo(appLog) << QStringLiteral("CXP 双目相机服务已启动。");
+    }
 
     // 第三台海康相机（独立用途，不同型号 - 读码相机）
     hikCameraCService_ = std::make_unique<scan_tracking::vision::HikCameraService>(
@@ -242,8 +247,8 @@ void ConsoleRuntime::initModules()
     // 统一视觉编排层负责把“1 份点云 + 2 份矩阵”收口为一个算法输入包。
     visionPipelineService_ = std::make_unique<scan_tracking::vision::VisionPipelineService>(
         mechEyeService_.get(),
-        hikCameraAService_.get(),
-        hikCameraBService_.get());
+        hikCxpCameraAService_.get(),
+        hikCxpCameraBService_.get());
 
     QObject::connect(
         visionPipelineService_.get(),
@@ -285,7 +290,7 @@ void ConsoleRuntime::initModules()
         hmiTcpServer_->setVisionPipelineService(visionPipelineService_.get());
         hmiTcpServer_->setTrackingService(trackingService_.get());
         hmiTcpServer_->setHikCameraServices(
-            hikCameraAService_.get(), hikCameraBService_.get(), hikCameraCService_.get());
+            hikCxpCameraAService_.get(), hikCxpCameraBService_.get(), hikCameraCService_.get());
         hmiTcpServer_->setHikCameraCController(hikCameraCController_.get());
         hmiTcpServer_->bindServiceSignals();
 
@@ -581,11 +586,11 @@ void ConsoleRuntime::printShutdownStatus()
     if (hikCameraCController_) {
         hikCameraCController_->stop();
     }
-    if (hikCameraAService_) {
-        hikCameraAService_->stop();
+    if (hikCxpCameraAService_) {
+        hikCxpCameraAService_->stop();
     }
-    if (hikCameraBService_) {
-        hikCameraBService_->stop();
+    if (hikCxpCameraBService_) {
+        hikCxpCameraBService_->stop();
     }
     if (hikCameraCService_) {
         hikCameraCService_->stop();

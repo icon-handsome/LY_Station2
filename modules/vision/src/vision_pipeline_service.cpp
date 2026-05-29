@@ -6,7 +6,7 @@
 #include <thread>
 #include <qdebug.h>
 #include "scan_tracking/common/config_manager.h"
-#include "scan_tracking/vision/hik_camera_service.h"
+#include "scan_tracking/vision/hik_cxp_camera_service.h"
 #include "scan_tracking/vision/lb_pose_detection_adapter.h"
 #include "scan_tracking/vision/lbn_pose_detection_adapter.h"
 
@@ -45,8 +45,8 @@ void VisionPipelineService::registerMetaTypes()
 
 VisionPipelineService::VisionPipelineService(
     scan_tracking::mech_eye::MechEyeService* mechEyeService,
-    HikCameraService* hikCameraAService,
-    HikCameraService* hikCameraBService,
+    HikCxpCameraService* hikCameraAService,
+    HikCxpCameraService* hikCameraBService,
     QObject* parent)
     : QObject(parent)
     , m_mechEyeService(mechEyeService)
@@ -66,7 +66,7 @@ VisionPipelineService::VisionPipelineService(
     if (m_hikCameraAService != nullptr) {
         connect(
             m_hikCameraAService,
-            &HikCameraService::poseCaptureFinished,
+            &HikCxpCameraService::poseCaptureFinished,
             this,
             &VisionPipelineService::onHikPoseCaptureFinished,
             Qt::QueuedConnection);
@@ -74,7 +74,7 @@ VisionPipelineService::VisionPipelineService(
     if (m_hikCameraBService != nullptr) {
         connect(
             m_hikCameraBService,
-            &HikCameraService::poseCaptureFinished,
+            &HikCxpCameraService::poseCaptureFinished,
             this,
             &VisionPipelineService::onHikPoseCaptureFinished,
             Qt::QueuedConnection);
@@ -153,9 +153,10 @@ quint64 VisionPipelineService::requestCaptureBundle(
         mechCaptureMode == scan_tracking::mech_eye::CaptureMode::Capture2DAnd3D;
     request.mechEyeCameraKey = m_config.mechEyeCameraKey;
     request.mechEyeTimeoutMs = m_config.mechCaptureTimeoutMs > 0 ? m_config.mechCaptureTimeoutMs : 5000;
-    request.hikCameraAKey = m_config.hikCameraA.cameraKey;
-    request.hikCameraBKey = m_config.hikCameraB.cameraKey;
-    request.hikTimeoutMs = m_config.hikCaptureTimeoutMs > 0 ? m_config.hikCaptureTimeoutMs : 1000;
+    request.hikCameraAKey = m_config.hikCxpCameraA.cameraKey;
+    request.hikCameraBKey = m_config.hikCxpCameraB.cameraKey;
+    request.hikTimeoutMs =
+        m_config.hikCxpCaptureTimeoutMs > 0 ? m_config.hikCxpCaptureTimeoutMs : 5000;
 
     PendingCaptureContext pending;
     pending.active = true;
@@ -175,18 +176,18 @@ quint64 VisionPipelineService::requestCaptureBundle(
     }
     pending.mechDone = false;
 
-    // 海康 A/B 正式采集
+    // CXP 双目 A/B 正式采集
     pending.hikARequestId = m_hikCameraAService->requestPoseCapture(
         request.hikCameraAKey, request.hikTimeoutMs);
     pending.hikBRequestId = m_hikCameraBService->requestPoseCapture(
         request.hikCameraBKey, request.hikTimeoutMs);
 
     if (pending.hikARequestId == 0) {
-        emit fatalError(VisionErrorCode::CaptureRejected, QStringLiteral("启动海康A采集失败。"));
+        emit fatalError(VisionErrorCode::CaptureRejected, QStringLiteral("启动 CXP 双目 A 采集失败。"));
         return 0;
     }
     if (pending.hikBRequestId == 0) {
-        emit fatalError(VisionErrorCode::CaptureRejected, QStringLiteral("启动海康B采集失败。"));
+        emit fatalError(VisionErrorCode::CaptureRejected, QStringLiteral("启动 CXP 双目 B 采集失败。"));
         return 0;
     }
 
@@ -215,10 +216,10 @@ void VisionPipelineService::onHikPoseCaptureFinished(scan_tracking::vision::HikP
     }
 
     // 用 logicalName 区分来源（两个相机服务的 requestId 可能重复）
-    if (result.logicalName == m_config.hikCameraA.logicalName) {
+    if (result.logicalName == m_config.hikCxpCameraA.logicalName) {
         m_pending.bundle.hikCameraAResult = result;
         m_pending.hikADone = true;
-    } else if (result.logicalName == m_config.hikCameraB.logicalName) {
+    } else if (result.logicalName == m_config.hikCxpCameraB.logicalName) {
         m_pending.bundle.hikCameraBResult = result;
         m_pending.hikBDone = true;
     } else {
@@ -319,7 +320,7 @@ void VisionPipelineService::finishBundleIfReady()
         } else {
             completedBundle.lbPoseResult.invoked = false;
             completedBundle.lbPoseResult.success = false;
-            completedBundle.lbPoseResult.message = QStringLiteral("海康相机未就绪，跳过 LB 位姿检测");
+            completedBundle.lbPoseResult.message = QStringLiteral("CXP 双目未就绪，跳过 LB 位姿检测");
         }
 
         if (!self) {

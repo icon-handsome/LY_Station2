@@ -13,6 +13,7 @@ namespace mech_eye { class MechEyeService; }
 namespace tracking { class TrackingService; }
 namespace flow_control { class StateMachine; }
 namespace vision {
+class HikCxpCameraService;
 class HikCameraService;
 class VisionPipelineService;
 class HikCameraCController;
@@ -51,8 +52,8 @@ private:
     QCoreApplication& application_;
     std::unique_ptr<scan_tracking::modbus::ModbusService> modbusService_;
     std::unique_ptr<scan_tracking::mech_eye::MechEyeService> mechEyeService_;
-    std::unique_ptr<scan_tracking::vision::HikCameraService> hikCameraAService_;
-    std::unique_ptr<scan_tracking::vision::HikCameraService> hikCameraBService_;
+    std::unique_ptr<scan_tracking::vision::HikCxpCameraService> hikCxpCameraAService_;
+    std::unique_ptr<scan_tracking::vision::HikCxpCameraService> hikCxpCameraBService_;
     std::unique_ptr<scan_tracking::vision::HikCameraService> hikCameraCService_;
     std::unique_ptr<scan_tracking::vision::VisionPipelineService> visionPipelineService_;
     std::unique_ptr<scan_tracking::vision::HikCameraCController> hikCameraCController_;
