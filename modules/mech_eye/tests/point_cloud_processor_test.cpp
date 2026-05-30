@@ -12,6 +12,7 @@ class PointCloudProcessorTest : public QObject {
 private slots:
     void filtersDepthOutliersAndDownsample();
     void passthroughWhenDisabled();
+    void transformsPointCloudWithPoseMatrices();
 };
 
 void PointCloudProcessorTest::filtersDepthOutliersAndDownsample()
@@ -80,6 +81,32 @@ void PointCloudProcessorTest::passthroughWhenDisabled()
     QVERIFY(processPointCloudFrame(input, config, &output));
     QCOMPARE(output.pointCount, input.pointCount);
     QCOMPARE(*output.pointsXYZ, *input.pointsXYZ);
+}
+
+void PointCloudProcessorTest::transformsPointCloudWithPoseMatrices()
+{
+    PointCloudFrame input;
+    input.pointCount = 1;
+    input.width = 1;
+    input.height = 1;
+    input.pointsXYZ = std::make_shared<std::vector<float>>(std::vector<float>{1.0f, 2.0f, 3.0f});
+
+    const std::array<float, 16> identity = {
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f,
+    };
+    std::array<float, 16> translation = identity;
+    translation[3] = 10.0f;
+
+    PointCloudFrame output;
+    QString message;
+    QVERIFY(transformPointCloudFrame(input, identity, translation, &output, &message));
+    QCOMPARE(output.pointCount, 1);
+    QCOMPARE((*output.pointsXYZ)[0], 11.0f);
+    QCOMPARE((*output.pointsXYZ)[1], 2.0f);
+    QCOMPARE((*output.pointsXYZ)[2], 3.0f);
 }
 
 QTEST_MAIN(PointCloudProcessorTest)

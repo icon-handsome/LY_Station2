@@ -171,6 +171,79 @@ std::array<float, 16> poseMatrixToArray(const scan_tracking::vision::PoseMatrix4
     return pose.isValid() ? pose.values : identityMatrix4x4();
 }
 
+QString formatRowMajorMatrixBlock(const QString& title, const std::array<float, 16>& matrix)
+{
+    QString text = title + QStringLiteral(":\n");
+    for (int row = 0; row < 4; ++row) {
+        text += QStringLiteral("  [");
+        for (int col = 0; col < 4; ++col) {
+            text += QString::number(
+                static_cast<double>(matrix[static_cast<std::size_t>(row * 4 + col)]),
+                'g',
+                12);
+            if (col + 1 < 4) {
+                text += QStringLiteral(", ");
+            }
+        }
+        text += QStringLiteral("]\n");
+    }
+    return text;
+}
+
+QString poseStitchOutputTimestamp()
+{
+    return QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
+}
+
+QString createPoseStitchRunRootDirectory()
+{
+    const QString runFolderName =
+        QStringLiteral("run_%1").arg(poseStitchOutputTimestamp());
+    const QString runRoot =
+        QDir(QCoreApplication::applicationDirPath()).filePath(
+            QStringLiteral("output/%1").arg(runFolderName));
+    QDir().mkpath(runRoot);
+    QDir().mkpath(QDir(runRoot).filePath(QStringLiteral("matrix")));
+    QDir().mkpath(QDir(runRoot).filePath(QStringLiteral("pointcloud")));
+    return runRoot;
+}
+
+QString poseStitchMatrixOutputDirectory(const QString& runRoot)
+{
+    return QDir(runRoot).filePath(QStringLiteral("matrix"));
+}
+
+QString poseStitchPointCloudOutputDirectory(const QString& runRoot)
+{
+    return QDir(runRoot).filePath(QStringLiteral("pointcloud"));
+}
+
+QString buildPoseStitchRtText(
+    int pathId,
+    int segmentIndex,
+    const std::array<float, 16>& baseCalibrationT0,
+    const std::array<float, 16>& calibrationT0Prime,
+    const std::array<float, 16>& stereoTrackingT,
+    const std::array<float, 16>& combinedOutputRt,
+    bool lbValid)
+{
+    QString text;
+    text += QStringLiteral("# Pose stitch output (row-major 4x4)\n");
+    text += QStringLiteral("# generatedAt=") + QDateTime::currentDateTime().toString(Qt::ISODateWithMs) + QStringLiteral("\n");
+    text += QStringLiteral("pathId=") + QString::number(pathId) + QStringLiteral("\n");
+    text += QStringLiteral("segmentIndex=") + QString::number(segmentIndex) + QStringLiteral("\n");
+    text += QStringLiteral("formula=combined = T0' x T ; p' = p x combined\n");
+    text += QStringLiteral("lbTrackingValid=") + QString(lbValid ? "true" : "false") + QStringLiteral("\n\n");
+    text += formatRowMajorMatrixBlock(QStringLiteral("T0 (base calibration)"), baseCalibrationT0);
+    text += QStringLiteral("\n");
+    text += formatRowMajorMatrixBlock(QStringLiteral("T0' (calibration snapshot)"), calibrationT0Prime);
+    text += QStringLiteral("\n");
+    text += formatRowMajorMatrixBlock(QStringLiteral("T (LB stereo tracking)"), stereoTrackingT);
+    text += QStringLiteral("\n");
+    text += formatRowMajorMatrixBlock(QStringLiteral("combined output Rt = T0' x T"), combinedOutputRt);
+    return text;
+}
+
 QVector<int> enabledScanPathIds()
 {
     QVector<int> pathIds;
@@ -306,7 +379,7 @@ scan_tracking::flow_control::StateMachine::PoseSourceResult parsePoseSource(
         return result;
     }
 
-    const auto tokens = raw.split(QRegExp(QStringLiteral("[,;\\s]+")), QString::SkipEmptyParts);
+    const auto tokens = raw.split(QRegExp(QStringLiteral("[,;\\s]+")), Qt::SkipEmptyParts);
     if (tokens.size() < 6) {
         result.success = false;
         result.message = QStringLiteral("位姿源 %1 需要 6 个值：x,y,z,rx,ry,rz。").arg(QString::fromLatin1(envName));
@@ -503,6 +576,7 @@ void StateMachine::start()
             << QStringLiteral("状态机 start：复位后台 refinement 在途计数 stale=") << stalePending;
     }
     setState(AppState::Init);    // 设置应用状态为初始化
+    initializePoseStitchRunOutputDirectory();
     publishIpcStatus();          // 发布 IPC 状态到 PLC
 
     // 如果 Modbus 已经连接，直接触发连接成功处理
@@ -1280,8 +1354,16 @@ void StateMachine::onVisionBundleCaptureFinished(scan_tracking::vision::MultiCam
 
     const auto& result = bundle.mechEyeResult;
     const int pathIdForCapture = resolvePathIdForIncomingSegment(m_activeTask.scanSegmentIndex);
+    if (pathIdForCapture != m_currentPathId && m_currentPathId > 0) {
+        qInfo(LOG_FLOW).noquote()
+            << QStringLiteral("[多路径] 路径切换，标定矩阵重置为 T0")
+            << QStringLiteral(" 旧路径ID=") << m_currentPathId
+            << QStringLiteral(" 新路径ID=") << pathIdForCapture
+            << QStringLiteral(" 段号=") << m_activeTask.scanSegmentIndex;
+        m_currentCalibrationMatrix = m_baseCalibrationMatrix;
+    }
     const bool needRotation = resolveNeedRotationForSegment(pathIdForCapture, m_activeTask.scanSegmentIndex);
-    applyLbnCalibrationUpdate(m_activeTask.scanSegmentIndex, needRotation, bundle);
+    applyLbnCalibrationUpdate(pathIdForCapture, m_activeTask.scanSegmentIndex, needRotation, bundle);
 
     if (!result.pointCloud.isValid()) {
         finishScanSegmentFailure(
@@ -1302,6 +1384,9 @@ void StateMachine::onVisionBundleCaptureFinished(scan_tracking::vision::MultiCam
 
     const int pathIdForCache = resolvePathIdForIncomingSegment(segmentIndex);
     commitScanSegmentCaptureImmediate(pathIdForCache, segmentIndex, result, bundle);
+    if (!processingConfig.enabled) {
+        applySegmentPoseStitching(pathIdForCache, segmentIndex);
+    }
     startSegmentBackgroundRefinement(pathIdForCache, segmentIndex, taskId, processingConfig);
 }
 
@@ -1689,6 +1774,8 @@ void StateMachine::applySegmentRefinementOutcome(const SegmentProcessOutcome& ou
         << QStringLiteral("[SegmentCache] refinement 已写回内存")
         << QStringLiteral(" [路径") << targetPathId << QStringLiteral("][段") << outcome.segmentIndex << QStringLiteral("]")
         << QStringLiteral(" 点数=") << outcome.processedPointCount;
+
+    applySegmentPoseStitching(targetPathId, outcome.segmentIndex);
 }
 
 /**
@@ -2216,6 +2303,7 @@ void StateMachine::executeInspectionTask()
 
     QString loadError;
     const auto segmentsForInspection = loadSegmentCaptureResultsForInspection(&loadError);
+    persistLastPoseStitchArtifactToDisk();
     if (segmentsForInspection.isEmpty()) {
         qWarning(LOG_FLOW).noquote()
             << QStringLiteral("Trig_Inspection 加载内存点云失败：") << loadError
@@ -3048,10 +3136,11 @@ void StateMachine::resetScanSegmentCache()
         reconcilePendingRefinementJobCounter("resetScanSegmentCache(stop中)");
     }
 
-    std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
-    
-    // === 多路径支持：清空二维缓存 ===
-    int totalCacheSize = 0;
+    {
+        std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
+
+        // === 多路径支持：清空二维缓存 ===
+        int totalCacheSize = 0;
     for (auto pathIt = m_pathSegmentCaptureBundles.begin(); pathIt != m_pathSegmentCaptureBundles.end(); ++pathIt) {
         for (auto segIt = pathIt->begin(); segIt != pathIt->end(); ++segIt) {
             scan_tracking::vision::releaseHikMonoFrameBuffers(&segIt->hikCameraAResult.frame);
@@ -3079,8 +3168,15 @@ void StateMachine::resetScanSegmentCache()
             << QStringLiteral("，路径ID已重置为1");
     }
 
-    m_segmentCalibrationMatrices.clear();
+    m_pathSegmentCalibrationMatrices.clear();
     m_currentCalibrationMatrix = m_baseCalibrationMatrix;
+    }
+
+    {
+        std::lock_guard<std::mutex> poseStitchLock(m_lastPoseStitchMutex);
+        scan_tracking::mech_eye::releasePointCloudFrameBuffers(&m_lastPoseStitchArtifact.stitchedPointCloud);
+        m_lastPoseStitchArtifact = LastPoseStitchArtifact{};
+    }
 }
 
 void StateMachine::reloadCalibrationMatricesFromConfig()
@@ -3118,59 +3214,289 @@ bool StateMachine::resolveNeedRotationForSegment(int pathId, int segmentIndex) c
 }
 
 void StateMachine::applyLbnCalibrationUpdate(
+    int pathId,
     int segmentIndex,
     bool needRotation,
     const scan_tracking::vision::MultiCameraCaptureBundle& bundle)
 {
+    if (pathId <= 0) {
+        pathId = m_currentPathId > 0 ? m_currentPathId : 1;
+    }
+
     if (!needRotation) {
         qInfo(LOG_FLOW).noquote()
-            << QStringLiteral("LBN 标定：段号=") << segmentIndex
+            << QStringLiteral("LBN 标定：路径=") << pathId
+            << QStringLiteral(" 段号=") << segmentIndex
             << QStringLiteral(" 无需转盘，保持当前 T0'");
-        return;
-    }
-
-    const auto& lbn = bundle.lbnPoseResult;
-    if (!lbn.invoked) {
-        qWarning(LOG_FLOW).noquote()
-            << QStringLiteral("LBN 标定：段号=") << segmentIndex
-            << QStringLiteral(" 未调用 LBN，保持当前 T0'");
-        return;
-    }
-    const bool useIdentityBypass = []() {
-        const auto* cfg = scan_tracking::common::ConfigManager::instance();
-        return cfg && cfg->lbnPoseConfig().useIdentityRtWithoutMarkers;
-    }();
-
-    if (!lbn.success || !lbn.poseMatrix.isValid()) {
-        if (!useIdentityBypass) {
+    } else {
+        const auto& lbn = bundle.lbnPoseResult;
+        if (!lbn.invoked) {
             qWarning(LOG_FLOW).noquote()
-                << QStringLiteral("LBN 标定：段号=") << segmentIndex
-                << QStringLiteral(" 失败，保持当前 T0'：") << lbn.message;
+                << QStringLiteral("LBN 标定：路径=") << pathId
+                << QStringLiteral(" 段号=") << segmentIndex
+                << QStringLiteral(" 未调用 LBN，保持当前 T0'");
+        } else {
+            const bool useIdentityBypass = []() {
+                const auto* cfg = scan_tracking::common::ConfigManager::instance();
+                return cfg && cfg->lbnPoseConfig().useIdentityRtWithoutMarkers;
+            }();
+
+            if (!lbn.success || !lbn.poseMatrix.isValid()) {
+                if (!useIdentityBypass) {
+                    qWarning(LOG_FLOW).noquote()
+                        << QStringLiteral("LBN 标定：路径=") << pathId
+                        << QStringLiteral(" 段号=") << segmentIndex
+                        << QStringLiteral(" 失败，保持当前 T0'：") << lbn.message;
+                } else {
+                    qWarning(LOG_FLOW).noquote()
+                        << QStringLiteral("LBN 标定：路径=") << pathId
+                        << QStringLiteral(" 段号=") << segmentIndex
+                        << QStringLiteral(" 失败，TODO(marker) 回退 Rt=单位阵：") << lbn.message;
+                }
+            } else {
+                const auto rt = poseMatrixToArray(lbn.poseMatrix);
+                m_currentCalibrationMatrix = multiplyRowMajor4x4(rt, m_currentCalibrationMatrix);
+
+                qInfo(LOG_FLOW).noquote()
+                    << QStringLiteral("LBN 标定已更新 T0'，路径=") << pathId
+                    << QStringLiteral(" 段号=") << segmentIndex
+                    << QStringLiteral(" 匹配点数=") << lbn.matchedPointCount;
+                for (int row = 0; row < 4; ++row) {
+                    qInfo(LOG_FLOW).noquote()
+                        << QStringLiteral("  T0'[%1] %2 %3 %4 %5")
+                               .arg(row)
+                               .arg(m_currentCalibrationMatrix[static_cast<std::size_t>(row * 4 + 0)], 0, 'g', 6)
+                               .arg(m_currentCalibrationMatrix[static_cast<std::size_t>(row * 4 + 1)], 0, 'g', 6)
+                               .arg(m_currentCalibrationMatrix[static_cast<std::size_t>(row * 4 + 2)], 0, 'g', 6)
+                               .arg(m_currentCalibrationMatrix[static_cast<std::size_t>(row * 4 + 3)], 0, 'g', 6);
+                }
+            }
+        }
+    }
+
+    m_pathSegmentCalibrationMatrices[pathId][segmentIndex] = m_currentCalibrationMatrix;
+}
+
+void StateMachine::applySegmentPoseStitching(int pathId, int segmentIndex)
+{
+    if (pathId <= 0) {
+        pathId = m_currentPathId > 0 ? m_currentPathId : 1;
+    }
+
+    scan_tracking::mech_eye::PointCloudFrame inputCloud;
+    std::array<float, 16> calibrationMatrix = m_baseCalibrationMatrix;
+    std::array<float, 16> stereoMatrix = identityMatrix4x4();
+    bool lbValid = false;
+
+    {
+        std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
+        const auto pathIt = m_pathSegmentCaptureResults.constFind(pathId);
+        if (pathIt == m_pathSegmentCaptureResults.cend() || !pathIt->contains(segmentIndex)) {
+            qWarning(LOG_FLOW).noquote()
+                << QStringLiteral("[PoseStitch] 跳过：路径") << pathId
+                << QStringLiteral(" 段") << segmentIndex << QStringLiteral(" 点云未缓存");
             return;
         }
-        qWarning(LOG_FLOW).noquote()
-            << QStringLiteral("LBN 标定：段号=") << segmentIndex
-            << QStringLiteral(" 失败，TODO(marker) 回退 Rt=单位阵：") << lbn.message;
+
+        inputCloud = clonePointCloudFrame(pathIt.value().value(segmentIndex).pointCloud);
+
+        const auto pathCalibrationIt = m_pathSegmentCalibrationMatrices.constFind(pathId);
+        if (pathCalibrationIt != m_pathSegmentCalibrationMatrices.cend()) {
+            const auto segmentCalibrationIt = pathCalibrationIt->constFind(segmentIndex);
+            if (segmentCalibrationIt != pathCalibrationIt->cend()) {
+                calibrationMatrix = segmentCalibrationIt.value();
+            } else {
+                calibrationMatrix = m_currentCalibrationMatrix;
+            }
+        } else {
+            calibrationMatrix = m_currentCalibrationMatrix;
+        }
+
+        const auto bundlePathIt = m_pathSegmentCaptureBundles.constFind(pathId);
+        if (bundlePathIt != m_pathSegmentCaptureBundles.cend()) {
+            const auto bundleSegmentIt = bundlePathIt->constFind(segmentIndex);
+            if (bundleSegmentIt != bundlePathIt->cend()) {
+                const auto& lb = bundleSegmentIt->lbPoseResult;
+                if (lb.success && lb.poseMatrix.valid) {
+                    stereoMatrix = lb.poseMatrix.values;
+                    lbValid = true;
+                }
+            }
+        }
     }
 
-    const auto rt = (lbn.success && lbn.poseMatrix.isValid())
-        ? poseMatrixToArray(lbn.poseMatrix)
-        : identityMatrix4x4();
-    m_currentCalibrationMatrix = multiplyRowMajor4x4(rt, m_currentCalibrationMatrix);
-    m_segmentCalibrationMatrices.insert(segmentIndex, m_currentCalibrationMatrix);
+    if (!lbValid) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("[PoseStitch] LB 位姿无效，拼接使用单位阵 T，路径=") << pathId
+            << QStringLiteral(" 段号=") << segmentIndex;
+    }
+
+    scan_tracking::mech_eye::PointCloudFrame stitchedCloud;
+    QString stitchMessage;
+    if (!scan_tracking::mech_eye::transformPointCloudFrame(
+            inputCloud,
+            calibrationMatrix,
+            stereoMatrix,
+            &stitchedCloud,
+            &stitchMessage)) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("[PoseStitch] 失败，路径=") << pathId
+            << QStringLiteral(" 段号=") << segmentIndex
+            << QStringLiteral(" 说明=") << stitchMessage;
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
+        if (!m_pathSegmentCaptureResults.contains(pathId) ||
+            !m_pathSegmentCaptureResults[pathId].contains(segmentIndex)) {
+            return;
+        }
+
+        auto& resultRef = m_pathSegmentCaptureResults[pathId][segmentIndex];
+        scan_tracking::mech_eye::releasePointCloudFrameBuffers(&resultRef.pointCloud);
+        resultRef.pointCloud = clonePointCloudFrame(stitchedCloud);
+
+        if (m_pathSegmentCaptureBundles.contains(pathId) &&
+            m_pathSegmentCaptureBundles[pathId].contains(segmentIndex)) {
+            auto& bundleRef = m_pathSegmentCaptureBundles[pathId][segmentIndex];
+            scan_tracking::mech_eye::releasePointCloudFrameBuffers(&bundleRef.mechEyeResult.pointCloud);
+            bundleRef.mechEyeResult.pointCloud = clonePointCloudFrame(stitchedCloud);
+        }
+    }
 
     qInfo(LOG_FLOW).noquote()
-        << QStringLiteral("LBN 标定已更新 T0'，段号=") << segmentIndex
-        << QStringLiteral(" 匹配点数=") << lbn.matchedPointCount;
-    for (int row = 0; row < 4; ++row) {
-        qInfo(LOG_FLOW).noquote()
-            << QStringLiteral("  T0'[%1] %2 %3 %4 %5")
-                   .arg(row)
-                   .arg(m_currentCalibrationMatrix[static_cast<std::size_t>(row * 4 + 0)], 0, 'g', 6)
-                   .arg(m_currentCalibrationMatrix[static_cast<std::size_t>(row * 4 + 1)], 0, 'g', 6)
-                   .arg(m_currentCalibrationMatrix[static_cast<std::size_t>(row * 4 + 2)], 0, 'g', 6)
-                   .arg(m_currentCalibrationMatrix[static_cast<std::size_t>(row * 4 + 3)], 0, 'g', 6);
+        << QStringLiteral("[PoseStitch] 点云已拼接 T0'×T")
+        << QStringLiteral(" 路径=") << pathId
+        << QStringLiteral(" 段号=") << segmentIndex
+        << QStringLiteral(" 点数=") << stitchedCloud.pointCount
+        << QStringLiteral(" LB有效=") << lbValid
+        << QStringLiteral(" 说明=") << stitchMessage;
+
+    const auto combinedOutputRt =
+        scan_tracking::mech_eye::multiplyRowMajor4x4(calibrationMatrix, stereoMatrix);
+    updateLastPoseStitchArtifact(
+        pathId,
+        segmentIndex,
+        lbValid,
+        m_baseCalibrationMatrix,
+        calibrationMatrix,
+        stereoMatrix,
+        combinedOutputRt,
+        stitchedCloud);
+
+    const auto* configManager = scan_tracking::common::ConfigManager::instance();
+    const int scanSegmentTotal =
+        configManager ? configManager->trackingConfig().scanSegmentTotal : 0;
+    if (scanSegmentTotal > 0 && segmentIndex == scanSegmentTotal) {
+        persistLastPoseStitchArtifactToDisk();
     }
+}
+
+void StateMachine::updateLastPoseStitchArtifact(
+    int pathId,
+    int segmentIndex,
+    bool lbTrackingValid,
+    const std::array<float, 16>& baseCalibrationT0,
+    const std::array<float, 16>& calibrationT0Prime,
+    const std::array<float, 16>& stereoTrackingT,
+    const std::array<float, 16>& combinedOutputRt,
+    const scan_tracking::mech_eye::PointCloudFrame& stitchedPointCloud)
+{
+    LastPoseStitchArtifact artifact;
+    artifact.valid = stitchedPointCloud.isValid();
+    artifact.lbTrackingValid = lbTrackingValid;
+    artifact.pathId = pathId;
+    artifact.segmentIndex = segmentIndex;
+    artifact.baseCalibrationT0 = baseCalibrationT0;
+    artifact.calibrationT0Prime = calibrationT0Prime;
+    artifact.stereoTrackingT = stereoTrackingT;
+    artifact.combinedOutputRt = combinedOutputRt;
+    artifact.stitchedPointCloud = clonePointCloudFrame(stitchedPointCloud);
+
+    {
+        std::lock_guard<std::mutex> lock(m_lastPoseStitchMutex);
+        scan_tracking::mech_eye::releasePointCloudFrameBuffers(&m_lastPoseStitchArtifact.stitchedPointCloud);
+        m_lastPoseStitchArtifact = std::move(artifact);
+    }
+}
+
+void StateMachine::initializePoseStitchRunOutputDirectory()
+{
+    m_poseStitchRunRootDirectory = createPoseStitchRunRootDirectory();
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("[PoseStitchOutput] 本次运行输出目录=") << m_poseStitchRunRootDirectory;
+}
+
+void StateMachine::persistLastPoseStitchArtifactToDisk() const
+{
+    LastPoseStitchArtifact artifact;
+    {
+        std::lock_guard<std::mutex> lock(m_lastPoseStitchMutex);
+        if (!m_lastPoseStitchArtifact.valid || !m_lastPoseStitchArtifact.stitchedPointCloud.isValid()) {
+            qWarning(LOG_FLOW).noquote()
+                << QStringLiteral("[PoseStitchOutput] 跳过落盘：尚无有效拼接结果");
+            return;
+        }
+        artifact.pathId = m_lastPoseStitchArtifact.pathId;
+        artifact.segmentIndex = m_lastPoseStitchArtifact.segmentIndex;
+        artifact.lbTrackingValid = m_lastPoseStitchArtifact.lbTrackingValid;
+        artifact.baseCalibrationT0 = m_lastPoseStitchArtifact.baseCalibrationT0;
+        artifact.calibrationT0Prime = m_lastPoseStitchArtifact.calibrationT0Prime;
+        artifact.stereoTrackingT = m_lastPoseStitchArtifact.stereoTrackingT;
+        artifact.combinedOutputRt = m_lastPoseStitchArtifact.combinedOutputRt;
+        artifact.stitchedPointCloud = clonePointCloudFrame(m_lastPoseStitchArtifact.stitchedPointCloud);
+        artifact.valid = true;
+    }
+
+    if (m_poseStitchRunRootDirectory.isEmpty()) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("[PoseStitchOutput] 跳过落盘：运行输出目录未初始化");
+        scan_tracking::mech_eye::releasePointCloudFrameBuffers(&artifact.stitchedPointCloud);
+        return;
+    }
+
+    const QString timestamp = poseStitchOutputTimestamp();
+    const QString baseName = QStringLiteral("%1_path%2_seg%3")
+                                 .arg(timestamp)
+                                 .arg(artifact.pathId)
+                                 .arg(artifact.segmentIndex);
+
+    const QString rtDirectory = poseStitchMatrixOutputDirectory(m_poseStitchRunRootDirectory);
+    const QString cloudDirectory = poseStitchPointCloudOutputDirectory(m_poseStitchRunRootDirectory);
+    const QString rtFilePath = QDir(rtDirectory).filePath(baseName + QStringLiteral("_Rt.txt"));
+    const QString plyFilePath = QDir(cloudDirectory).filePath(baseName + QStringLiteral("_stitched.ply"));
+
+    QFile rtFile(rtFilePath);
+    if (!rtFile.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("[PoseStitchOutput] 写入矩阵失败：") << rtFilePath;
+    } else {
+        QTextStream stream(&rtFile);
+        stream.setCodec("UTF-8");
+        stream << buildPoseStitchRtText(
+            artifact.pathId,
+            artifact.segmentIndex,
+            artifact.baseCalibrationT0,
+            artifact.calibrationT0Prime,
+            artifact.stereoTrackingT,
+            artifact.combinedOutputRt,
+            artifact.lbTrackingValid);
+        rtFile.close();
+        qInfo(LOG_FLOW).noquote()
+            << QStringLiteral("[PoseStitchOutput] 矩阵已写入") << rtFilePath;
+    }
+
+    if (!scan_tracking::mech_eye::savePointCloudFrameToPly(artifact.stitchedPointCloud, plyFilePath)) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("[PoseStitchOutput] 写入点云失败：") << plyFilePath;
+    } else {
+        qInfo(LOG_FLOW).noquote()
+            << QStringLiteral("[PoseStitchOutput] 拼接点云已写入") << plyFilePath
+            << QStringLiteral(" 点数=") << artifact.stitchedPointCloud.pointCount;
+    }
+
+    scan_tracking::mech_eye::releasePointCloudFrameBuffers(&artifact.stitchedPointCloud);
 }
 
 /**

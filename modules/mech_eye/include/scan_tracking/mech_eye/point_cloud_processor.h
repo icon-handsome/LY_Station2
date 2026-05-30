@@ -2,6 +2,7 @@
 
 #include <QtCore/QString>
 
+#include <array>
 #include <mutex>
 
 #include "scan_tracking/common/config_manager.h"
@@ -24,5 +25,18 @@ bool processPointCloudFrame(
     const common::PointCloudProcessingConfig& config,
     PointCloudFrame* output,
     PointCloudProcessReport* report = nullptr);
+
+/// 行优先 4×4 矩阵乘法：out = left × right（与 StateMachine / LBN 链一致）
+std::array<float, 16> multiplyRowMajor4x4(
+    const std::array<float, 16>& left,
+    const std::array<float, 16>& right);
+
+/// 拼接：将点云变换到统一坐标系，等价于 p' = p × (T0' × T)（行向量约定，与文档一致）
+bool transformPointCloudFrame(
+    const PointCloudFrame& input,
+    const std::array<float, 16>& calibrationMatrixT0Prime,
+    const std::array<float, 16>& stereoTrackingMatrixT,
+    PointCloudFrame* output,
+    QString* message = nullptr);
 
 }  // namespace scan_tracking::mech_eye

@@ -7,12 +7,15 @@
 #include <limits>
 #include <mutex>
 
+#include <pcl/common/transforms.h>
 #include <pcl/filters/passthrough.h>
 #include <pcl/filters/statistical_outlier_removal.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/surface/mls.h>
+
+#include <Eigen/Core>
 
 Q_LOGGING_CATEGORY(LOG_POINT_CLOUD_PROC, "mech_eye.point_cloud_processor")
 
@@ -119,7 +122,97 @@ bool checkMinPoints(const CloudPtr& cloud, int minPoints, const QString& stepLab
     return true;
 }
 
+std::array<float, 16> identityMatrix4x4()
+{
+    std::array<float, 16> matrix{};
+    matrix[0] = matrix[5] = matrix[10] = matrix[15] = 1.0f;
+    return matrix;
+}
+
+Eigen::Matrix4f rowMajorToEigen(const std::array<float, 16>& matrix)
+{
+    Eigen::Matrix4f eigenMatrix;
+    for (int row = 0; row < 4; ++row) {
+        for (int col = 0; col < 4; ++col) {
+            eigenMatrix(row, col) = matrix[static_cast<std::size_t>(row * 4 + col)];
+        }
+    }
+    return eigenMatrix;
+}
+
 }  // namespace
+
+std::array<float, 16> multiplyRowMajor4x4(
+    const std::array<float, 16>& left,
+    const std::array<float, 16>& right)
+{
+    std::array<float, 16> out{};
+    for (int row = 0; row < 4; ++row) {
+        for (int col = 0; col < 4; ++col) {
+            float sum = 0.0f;
+            for (int k = 0; k < 4; ++k) {
+                sum += left[static_cast<std::size_t>(row * 4 + k)] *
+                       right[static_cast<std::size_t>(k * 4 + col)];
+            }
+            out[static_cast<std::size_t>(row * 4 + col)] = sum;
+        }
+    }
+    return out;
+}
+
+bool transformPointCloudFrame(
+    const PointCloudFrame& input,
+    const std::array<float, 16>& calibrationMatrixT0Prime,
+    const std::array<float, 16>& stereoTrackingMatrixT,
+    PointCloudFrame* output,
+    QString* message)
+{
+    if (output == nullptr) {
+        if (message != nullptr) {
+            *message = QStringLiteral("点云拼接输出指针为空。");
+        }
+        return false;
+    }
+
+    if (!input.isValid()) {
+        if (message != nullptr) {
+            *message = QStringLiteral("点云拼接输入无效。");
+        }
+        return false;
+    }
+
+    std::lock_guard<std::mutex> pclLock(pointCloudAlgorithmMutex());
+
+    const auto combinedTransform =
+        multiplyRowMajor4x4(calibrationMatrixT0Prime, stereoTrackingMatrixT);
+    const Eigen::Matrix4f eigenTransform = rowMajorToEigen(combinedTransform);
+
+    CloudPtr cloud = toPclCloud(input);
+    if (!cloud || cloud->empty()) {
+        if (message != nullptr) {
+            *message = QStringLiteral("点云拼接时有效点数为 0。");
+        }
+        return false;
+    }
+
+    CloudPtr transformedCloud = pcl::make_shared<Cloud>();
+    pcl::transformPointCloud(*cloud, *transformedCloud, eigenTransform);
+    *output = fromPclCloud(transformedCloud, input);
+
+    if (!output->isValid()) {
+        if (message != nullptr) {
+            *message = QStringLiteral("点云拼接后输出无效。");
+        }
+        return false;
+    }
+
+    if (message != nullptr) {
+        *message = QStringLiteral("点云拼接完成：%1 -> %2 点（T0'×T）")
+                       .arg(input.pointCount)
+                       .arg(output->pointCount);
+    }
+    return true;
+}
 
 bool processPointCloudFrame(
     const PointCloudFrame& input,

@@ -8,6 +8,7 @@
 #include <QtCore/QtGlobal>
 
 #include <atomic>
+#include <array>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -388,9 +389,40 @@ private:
 
     // 转动点位：用 LBN 的 Rt 更新当前标定矩阵 T0' = Rt × T0
     void applyLbnCalibrationUpdate(
+        int pathId,
         int segmentIndex,
         bool needRotation,
         const scan_tracking::vision::MultiCameraCaptureBundle& bundle);
+
+    // 将段点云变换到统一坐标系：p' = p × (T0' × T)，写回内存缓存
+    void applySegmentPoseStitching(int pathId, int segmentIndex);
+
+    struct LastPoseStitchArtifact {
+        bool valid = false;
+        bool lbTrackingValid = false;
+        int pathId = 0;
+        int segmentIndex = 0;
+        std::array<float, 16> baseCalibrationT0{};
+        std::array<float, 16> calibrationT0Prime{};
+        std::array<float, 16> stereoTrackingT{};
+        std::array<float, 16> combinedOutputRt{};
+        scan_tracking::mech_eye::PointCloudFrame stitchedPointCloud;
+    };
+
+    void updateLastPoseStitchArtifact(
+        int pathId,
+        int segmentIndex,
+        bool lbTrackingValid,
+        const std::array<float, 16>& baseCalibrationT0,
+        const std::array<float, 16>& calibrationT0Prime,
+        const std::array<float, 16>& stereoTrackingT,
+        const std::array<float, 16>& combinedOutputRt,
+        const scan_tracking::mech_eye::PointCloudFrame& stitchedPointCloud);
+
+    /// 将最后一次拼接结果写入 exe/output/run_*/matrix 与 pointcloud（按次运行分子目录）
+    void persistLastPoseStitchArtifactToDisk() const;
+
+    void initializePoseStitchRunOutputDirectory();
 
     // 记录 Modbus 故障
     // @param alarmCode 报警代码
@@ -517,7 +549,10 @@ private:
     mutable std::mutex m_segmentCacheMutex;
     std::array<float, 16> m_baseCalibrationMatrix{};       // 基准 T0（来自 scan_paths_config.json）
     std::array<float, 16> m_currentCalibrationMatrix{};    // 当前 T0' / T0''（转动点由 LBN 链式更新）
-    QMap<int, std::array<float, 16>> m_segmentCalibrationMatrices;  // 每段扫描结束时的标定矩阵快照
+    QMap<int, QMap<int, std::array<float, 16>>> m_pathSegmentCalibrationMatrices;  // 每路径每段 T0' 快照
+    LastPoseStitchArtifact m_lastPoseStitchArtifact;
+    mutable std::mutex m_lastPoseStitchMutex;
+    QString m_poseStitchRunRootDirectory;
 
     /// 综合检测结果推送（与 TrackingService::InspectionResultNotifier 共用同一回调）
     std::function<void(const tracking::InspectionResult&)> m_inspectionResultPublisher;
