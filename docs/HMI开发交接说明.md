@@ -1,11 +1,12 @@
 # HMI 显控 TCP 开发交接说明
 
-**文档版本**: v1.3  
-**最后更新**: 2026-05-25  
+**文档版本**: v1.4  
+**最后更新**: 2026-06-01  
 **适用范围**: 本仓库（IPC Core，Windows）— **仅 TCP Server 端**；麒麟 OS Qt 显控为独立 Client 工程。
 
 > **v1.2 变更**：蓝友检测结果经 `publishInspectionResult` 直推 `event.inspection.finished`（含失败）；新增 `cmd.debug_trigger_inspection` 与 `[Hmi] allowDebugTriggerInspection` 配置开关。  
-> **v1.3 变更**：补充分段落盘与调试检测加载 PLY 说明（`ScanTracking_CaptureCache`）。
+> **v1.3 变更**：补充分段落盘与调试检测加载 PLY 说明（`ScanTracking_CaptureCache`）。  
+> **v1.4 变更**：主流程改内存缓存；调试检测从内存读取三段点云；位姿拼接落盘至 `output/run_*`。
 
 > **新接手请先读**：本文 → [`HMI现场联调_阶段0-1.md`](./HMI现场联调_阶段0-1.md) → [`封头检测工位_TCP_IP显控通信协议_v1.0.md`](./封头检测工位_TCP_IP显控通信协议_v1.0.md)
 
@@ -21,7 +22,7 @@
 └─────────────────────┘                  └──────────┬───────────┘
                                                     │ 信号绑定
                     ┌───────────────────────────────┼───────────────────────────────┐
-                    │ StateMachine │ Modbus │ MechEye │ VisionPipeline │ Hik A/B │
+                    │ StateMachine │ Modbus │ MechEye │ VisionPipeline │ CXP A/B │
                     └───────────────────────────────────────────────────────────────┘
 ```
 
@@ -52,9 +53,9 @@ Trig_Inspection / cmd.debug_trigger_inspection
 ```
 
 - 正式 PLC 路径：`console_runtime` 注入 `InspectionResultNotifier`，检测完成即推显控。
-- 调试路径：`cmd.debug_trigger_inspection` 走与正式检测相同的蓝友链路；若内存无点云，会先 **`loadSegmentCaptureResultsForInspection`** 从 `ScanTracking_CaptureCache/pointcloud/` 加载 `[Tracking]` 三段 PLY。**不写 PLC**；是否清缓存取决于状态机复位策略。须 `allowDebugTriggerInspection=true`。
-- **分段缓存**：`event.scan.finished` 等可带 `cachedSegmentIndices`；磁盘路径在 `m_segmentDiskPaths`（HMI 协议**未**暴露 PGM/PLY 路径，复盘请直接看缓存目录）。
-- **多路径**：可落盘多段，蓝友仍只取 `[Tracking]` 三个段位（外/内/孔）；路径级融合见未完成清单 §2.3.2。
+- 调试路径：`cmd.debug_trigger_inspection` 走与正式检测相同的蓝友链路；若内存无点云，会先 **`loadSegmentCaptureResultsForInspection`** 从路径级内存缓存加载 `[Tracking]` 三段点云。**不写 PLC**；是否清缓存取决于状态机复位策略。须 `allowDebugTriggerInspection=true`。
+- **分段缓存**：`event.scan.finished` 等可带 `cachedSegmentIndices`；位姿拼接产物在 `output/run_*/`（HMI 协议**未**暴露路径，复盘请直接看该目录）。
+- **多路径**：可缓存多段，蓝友仍只取 `[Tracking]` 三个段位（外/内/孔）；路径级融合见未完成清单 §2.3.2。
 
 ---
 

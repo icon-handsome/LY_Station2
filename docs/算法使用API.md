@@ -15,7 +15,7 @@
 当前构建方式说明：
 - 蓝优算法以源码方式参与编译。
 - 默认编译为单一静态库 `lanyou_first_detection`。
-- **正式主流程已接入**：`Trig_Inspection` → `lanyou_first_station_adapter::runFirstStationDetection`（外/内/孔三段点云）；分段 PLY 由 `StateMachine` 落盘后按需加载（§10.1、§11）。
+- **正式主流程已接入**：`Trig_Inspection` → `lanyou_first_station_adapter::runFirstStationDetection`（外/内/孔三段点云）；分段数据从内存缓存读取（§10.1、§11）。
 - **仍保留**测试适配层 `lanyou_detection_adapter` 与 smoke test，用于无硬件/极小点云联调。
 
 ## 2. 依赖与编译要求
@@ -412,7 +412,7 @@ Lanyou adapter smoke tests passed
 
 ### 10.1 分段采集内存缓存（`config.ini [PointCloudProcessing]`）
 
-`Trig_ScanSegment` 成功后，后台线程 `processPointCloudFrame` 对点云做深度裁剪 / 离群去除 / MLS 平滑 / 体素降采样，结果写入 `StateMachine::m_segmentCaptureResults`；海康 A/B 帧写入 `m_segmentCaptureBundles`。
+`Trig_ScanSegment` 成功后，后台线程 `processPointCloudFrame` 对点云做深度裁剪 / 离群去除 / MLS 平滑 / 体素降采样，结果写入 `StateMachine::m_segmentCaptureResults`；CXP 双目 A/B 帧写入 `m_segmentCaptureBundles`。
 
 | 键 | 说明 |
 |----|------|
@@ -452,14 +452,16 @@ cannot open config/first_config.cfg
 - PCL 依赖接通。
 - 项目内点云结构到 PCL 的转换适配。
 - 第一工位外/内表面 + 内孔检测适配（`lanyou_first_station_adapter`）。
-- **分段采集磁盘缓存**：`Trig_ScanSegment` 成功后写入 `ScanTracking_CaptureCache/pointcloud/*.ply` 与 `hik_mono/*_hikA/B.pgm`；内存仅保留元数据与路径；`Trig_Inspection` 前按 `[Tracking]` 三个段位从磁盘加载 PLY。
+- **分段采集内存缓存**：`Trig_ScanSegment` 成功后点云与 CXP 帧写入路径级内存缓存；`Trig_Inspection` 前按 `[Tracking]` 三个段位从内存读取点云。
+- **位姿拼接落盘**：`Trig_Inspection` 前将最近一次拼接结果写入 `output/run_*/matrix` 与 `output/run_*/pointcloud`。
 - **正式主流程**：`StateMachine` 点云路径缓存 → `loadSegmentCaptureResultsForInspection` → `TrackingService::inspectSegments` → 蓝友 `runFirstStationDetection`。
 - **HMI 推送**：检测完成（含 NG）经 `publishInspectionResult` 发送 `event.inspection.finished`。
 - 调试命令 `cmd.debug_trigger_inspection`（`allowDebugTriggerInspection` 配置门控）。
 
 **数据流补充**：
-- **分段 LB**：在 `VisionPipeline` 完成 bundle 时使用**内存**海康图；PGM 落盘不参与 LB 重算。
-- **分段落盘**：不影响 LBN/LB 时序；仅降低内存并在 `Trig_Inspection` 前加载 3 段 PLY。
+- **分段 LB**：封头段在 `VisionPipeline` 完成 bundle 时使用**内存** CXP 图；转盘段仅 LBN，跳过 LB。
+- **CXP 主链路**：`HikCxpCameraService` 经 MVS GenTL CXP 枚举/采图，替代原 GigE 海康 A/B；`[Vision] hikCxpEnabled` 必须为 `true`。
+- **废弃项**：`[FlowControl] scanCacheDirectory` / `retainSegmentPly` 不再控制主流程分段落盘（仅 LatencyTest 等调试仍可读）。
 
 当前尚未完成：
 - 多路径点云融合与 `detectMultiPath()`（见未完成清单 §2.3.2）。
@@ -524,12 +526,12 @@ cannot open config/first_config.cfg
 | 算法核心 | `third_party/LBN/`（`lbn_pose_core.*`、`FastGeoHash.*`） | ✅ 已加入 CMake 目标 `lbn_pose` |
 | IPC 适配 | `modules/vision/.../lbn_pose_detection_adapter.*` | ✅ 已实现 |
 | 配置 | `common/.../config_manager` → `[LbnPose]` | ✅ |
-| 视觉流水线 | `vision_pipeline_service.cpp` | ✅ `enabled` 时调用 |
-| 多路径状态机 | `modules/flow_control/.../state_machine.*` | ❌ 未用 `lbnPoseResult` 更新标定矩阵 |
+| 视觉流水线 | `vision_pipeline_service.cpp` | ✅ 转盘段 LBN + 封头段 LB（CXP 双目） |
+| 多路径状态机 | `modules/flow_control/.../state_machine.*` | 🔄 单段 `T0'` 已实现；多路径级仍待 §2.2.1 |
 
 构建开关（根 `CMakeLists.txt`）：
 - `SCAN_TRACKING_ENABLE_LBN_POSE_DETECTION`（默认 ON）
-- 与 LB 互斥：LBN ON 时链接 `LbnPose::lbn_pose`，LB 适配器编译为 stub
+- `SCAN_TRACKING_ENABLE_LB_POSE_DETECTION`（默认 ON；LBN 与 LB 可同时启用，按段分流）
 
 OpenCV：复用 `third_party/LB/opencv-3.4.3-vc14_vc15`（见 `third_party/LBN/CMakeLists.txt`）。
 
@@ -560,8 +562,8 @@ LbnPoseResult runLbnPoseDetection(
 
 1. `ConfigManager` 加载 `[LbnPose]` 与 `scan_paths_config.json`。
 2. `StateMachine::executeScanSegmentTask`：`needMechEye2D = resolveNeedRotationForSegment(segmentIndex)`。
-3. `requestCaptureBundle(segment, taskId, needMechEye2D)`：转动点 → `Capture2DAnd3D` 且后台跑 LBN；非转动点 → 仅 3D。
-4. Mech-Eye 成功即可跑 LBN（海康失败时跳过 LB，不阻断 LBN）。
+3. `requestCaptureBundle(segment, taskId, needMechEye2D)`：转动点 → `Capture2DAnd3D` 且后台跑 LBN；非转动点 → 仅 3D 且跑 LB（CXP 就绪时）。
+4. Mech-Eye 成功即可跑 LBN（CXP 失败时跳过 LB，不阻断 LBN；转盘段本就不跑 LB）。
 5. `onVisionBundleCaptureFinished` → `applyLbnCalibrationUpdate`：`T0' = Rt × T0`（转动点且 LBN 成功）。
 
 HMI 可选 payload 字段 `needMechEye2D`；未传时按 `scan_paths_config.json` 推断。
@@ -585,7 +587,7 @@ CMake 中 `SCAN_TRACKING_SHOW_EIGEN_IN_IDE` / `SCAN_TRACKING_SHOW_MECHEYE_SDK_IN
 | 组织化点云 | `width×height` 个 `float` XYZ，行优先与纹理对齐；可来自 `.ply` 转置或现场导出 | 2D 圆心 lift 到 3D | **必需**（测 LBN 时） |
 | `scan_paths_config.json` | 项目根目录；`pointIndex` 与测试用 `segmentIndex` 一致 | `needRotation` 推断 | 测状态机时必需 |
 | `config.ini` `[LbnPose]` | `enabled=true`，`templateFile` 指向上述 txt | 配置 | 推荐 |
-| 海康双目图 | Mono8 左右图 | LB 双目 | 测 LB 时需要；**测 LBN 可不要** |
+| CXP 双目图 | Mono8 左右图 | LB 双目（封头段） | 测 LB 时需要；**测 LBN 可不要** |
 
 **离线工具 `scan_tracking_lbn_offline_runner`（已实现）**：
 

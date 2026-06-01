@@ -75,8 +75,8 @@ Qt 显控应能解析并展示：
 | 长时间无 `status.camera` | 相机状态未变（正常） | 发 `cmd.get_status` 或拔插相机验证变更推送 |
 | 发调试检测命令被拒绝 | `allowDebugTriggerInspection=false` | 改 `config.ini` 为 true 并重启 Core |
 | 有命令响应但无检测事件 | 显控未订阅 `event.inspection.finished` | 成功/失败均会推送；NG 也要展示 |
-| 调试检测 NG「缺少必需分段」 | 缓存未凑齐外/内/孔三段 | 对照 `[Tracking]` 段号与 `cachedSegmentIndices`；检查 `ScanTracking_CaptureCache/pointcloud/` 是否已有对应 `segment_*` PLY |
-| 扫描成功但无 PLY | `retainSegmentPly=false` 或落盘失败 | 看 Core 日志 `persistSegmentCaptureToDisk`；确认 `[FlowControl] scanCacheDirectory` 可写 |
+| 调试检测 NG「缺少必需分段」 | 缓存未凑齐外/内/孔三段 | 对照 `[Tracking]` 段号与 `cachedSegmentIndices`；确认已按序完成对应 `Trig_ScanSegment` |
+| 检测成功但无 run_* 落盘 | 位姿拼接未执行或目录不可写 | 看 Core 日志 `persistLastPoseStitchArtifactToDisk`；确认 `output/` 可写 |
 
 ---
 
