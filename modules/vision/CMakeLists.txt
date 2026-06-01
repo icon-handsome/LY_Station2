@@ -32,11 +32,9 @@ if(SCAN_TRACKING_ENABLE_LBN_POSE_DETECTION)
     list(APPEND SCAN_TRACKING_VISION_PRIVATE_LIBS
         LbnPose::lbn_pose
     )
-    list(APPEND SCAN_TRACKING_VISION_SOURCES
-        src/lb_pose_detection_adapter_stub.cpp
-        include/scan_tracking/vision/lb_pose_detection_adapter.h
-    )
-elseif(SCAN_TRACKING_ENABLE_LB_POSE_DETECTION)
+endif()
+
+if(SCAN_TRACKING_ENABLE_LB_POSE_DETECTION)
     list(APPEND SCAN_TRACKING_VISION_SOURCES
         src/lb_pose_detection_adapter.cpp
         include/scan_tracking/vision/lb_pose_detection_adapter.h

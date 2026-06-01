@@ -1,71 +1,118 @@
 #include "scan_tracking/common/logger.h"
 
 #include <QtCore/QDateTime>
-#include <QtCore/QDir>
-#include <QtCore/QFile>
-#include <QtCore/QMutexLocker>
+
 #include <cstdio>
+#include <cstring>
+#include <filesystem>
 #include <iostream>
+#include <string>
+#include <system_error>
+
 namespace scan_tracking::common {
 
 namespace {
 
 constexpr char kUtf8Bom[] = "\xEF\xBB\xBF";
 
-QString dailyLogFilePath(const QString& log_dir, const QDate& date)
-{
-    return QDir(log_dir).filePath(
-        QStringLiteral("scan_tracking_%1.txt").arg(date.toString(QStringLiteral("yyyy-MM-dd"))));
-}
+thread_local int g_log_handler_depth = 0;
 
-bool hasUtf8Bom(const QByteArray& data)
+const char* safeCategoryName(const QMessageLogContext& context)
 {
-    return data.size() >= 3
-        && static_cast<unsigned char>(data.at(0)) == 0xEF
-        && static_cast<unsigned char>(data.at(1)) == 0xBB
-        && static_cast<unsigned char>(data.at(2)) == 0xBF;
-}
-
-struct LogFilePayload {
-    QByteArray content;
-    bool hadLeadingNullPadding = false;
-};
-
-LogFilePayload loadLogFilePayload(const QString& file_path)
-{
-    LogFilePayload payload;
-    QFile in(file_path);
-    if (!in.exists() || !in.open(QIODevice::ReadOnly)) {
-        return payload;
+    if (context.category != nullptr && context.category[0] != '\0') {
+        return context.category;
     }
-
-    const QByteArray raw = in.readAll();
-    in.close();
-
-    int start = 0;
-    while (start < raw.size() && raw.at(start) == '\0') {
-        ++start;
-    }
-    payload.hadLeadingNullPadding = start > 0 && start < raw.size();
-    payload.content = payload.hadLeadingNullPadding ? raw.mid(start) : raw;
-    return payload;
+    return "default";
 }
 
-bool rewriteLogFileWithUtf8Bom(const QString& file_path, const QByteArray& content)
+std::string dailyLogFilePath(const std::string& log_dir, const QDate& date)
 {
-    QFile out(file_path);
-    if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+    return log_dir + "/scan_tracking_"
+        + date.toString(QStringLiteral("yyyy-MM-dd")).toStdString() + ".txt";
+}
+
+bool ensureLogDirectory(const std::string& log_dir)
+{
+    if (log_dir.empty()) {
         return false;
     }
 
-    if (!hasUtf8Bom(content)) {
-        out.write(kUtf8Bom);
+    std::error_code ec;
+    std::filesystem::create_directories(log_dir, ec);
+    if (ec) {
+        return false;
     }
-    if (!content.isEmpty()) {
-        out.write(content);
+    return std::filesystem::is_directory(log_dir);
+}
+
+void writeConsoleLine(QtMsgType type, const char* data, std::size_t size)
+{
+    FILE* out = (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg) ? stderr : stdout;
+    std::fwrite(data, 1, size, out);
+    std::fwrite("\n", 1, 1, out);
+    std::fflush(out);
+}
+
+std::string buildLogLine(
+    const char* time_stamp,
+    const char* severity,
+    const char* category,
+    const char* msg_utf8,
+    const char* source_suffix)
+{
+    std::string line;
+    line.reserve(
+        std::strlen(time_stamp) + std::strlen(severity) + std::strlen(category)
+        + std::strlen(msg_utf8) + (source_suffix != nullptr ? std::strlen(source_suffix) : 0) + 32);
+    line += '[';
+    line += time_stamp;
+    line += "] [";
+    line += severity;
+    line += "] [";
+    line += category;
+    line += "] ";
+    line += msg_utf8;
+    if (source_suffix != nullptr && source_suffix[0] != '\0') {
+        line += source_suffix;
     }
-    out.close();
-    return true;
+    return line;
+}
+
+std::string sourceLocationSuffix(const QMessageLogContext& context)
+{
+    if (context.file == nullptr || context.line <= 0) {
+        return {};
+    }
+
+    std::string suffix = " (";
+    suffix += context.file;
+    suffix += ':';
+    suffix += std::to_string(context.line);
+    suffix += ')';
+    return suffix;
+}
+
+void emitMinimalFallback(QtMsgType type, const QMessageLogContext& context, const QByteArray& msg_utf8)
+{
+    const char* severity = "UNK";
+    switch (type) {
+        case QtDebugMsg: severity = "DBG"; break;
+        case QtInfoMsg: severity = "INF"; break;
+        case QtWarningMsg: severity = "WRN"; break;
+        case QtCriticalMsg: severity = "CRT"; break;
+        case QtFatalMsg: severity = "FTL"; break;
+        default: break;
+    }
+    const std::string suffix = (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg)
+        ? sourceLocationSuffix(context)
+        : std::string{};
+    const std::string line = buildLogLine(
+        "reentrant",
+        severity,
+        safeCategoryName(context),
+        msg_utf8.constData(),
+        suffix.empty() ? nullptr : suffix.c_str());
+    writeConsoleLine(type, line.c_str(), line.size());
 }
 
 }  // namespace
@@ -74,39 +121,39 @@ Logger* Logger::instance_ = nullptr;
 QtMessageHandler Logger::previous_handler_ = nullptr;
 
 Logger::Logger(const QString& log_dir)
-    : log_dir_(log_dir),
-      log_file_(new QFile()),
-      min_level_(QtDebugMsg) {
-    QDir dir(log_dir_);
-    if (!dir.exists()) {
-        dir.mkpath(".");
+    : log_dir_(log_dir.toStdString()),
+      min_level_(QtDebugMsg)
+{
+    if (!ensureLogDirectory(log_dir_)) {
+        std::cerr << "严重错误：Logger 无法创建日志目录：" << log_dir_ << "\n";
     }
     openLogFile(QDate::currentDate());
 }
 
-Logger::~Logger() {
-    if (log_file_) {
-        if (log_file_->isOpen()) {
-            log_file_->close();
-        }
-        delete log_file_;
+Logger::~Logger()
+{
+    if (log_file_ != nullptr) {
+        std::fclose(log_file_);
         log_file_ = nullptr;
     }
 }
 
-void Logger::initialize(const QString& log_dir) {
-    if (!instance_) {
-        instance_ = new Logger(log_dir);
-        previous_handler_ = qInstallMessageHandler(Logger::messageHandler);
-    }
-}
-
-void Logger::cleanup() {
-    if (!instance_) {
+void Logger::initialize(const QString& log_dir)
+{
+    if (instance_ != nullptr) {
         return;
     }
 
-    // 先恢复上游 handler，避免析构过程中仍有线程进入已释放的 Logger
+    instance_ = new Logger(log_dir);
+    previous_handler_ = qInstallMessageHandler(Logger::messageHandler);
+}
+
+void Logger::cleanup()
+{
+    if (instance_ == nullptr) {
+        return;
+    }
+
     QtMessageHandler upstream = previous_handler_;
     qInstallMessageHandler(upstream);
     previous_handler_ = nullptr;
@@ -115,135 +162,129 @@ void Logger::cleanup() {
     instance_ = nullptr;
 
     {
-        QMutexLocker locker(&doomed->mutex_);
+        std::lock_guard<std::mutex> lock(doomed->mutex_);
     }
     delete doomed;
 }
 
-Logger* Logger::instance() {
+Logger* Logger::instance()
+{
     return instance_;
 }
 
-void Logger::setMinLevel(QtMsgType level) {
-    QMutexLocker locker(&mutex_);
+void Logger::setMinLevel(QtMsgType level)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
     min_level_ = level;
 }
 
-int Logger::getSeverityLevel(QtMsgType type) {
+int Logger::getSeverityLevel(QtMsgType type)
+{
     switch (type) {
-        case QtDebugMsg:    return 0;
-        case QtInfoMsg:     return 1;
-        case QtWarningMsg:  return 2;
+        case QtDebugMsg: return 0;
+        case QtInfoMsg: return 1;
+        case QtWarningMsg: return 2;
         case QtCriticalMsg: return 3;
-        case QtFatalMsg:    return 4;
-        default:            return 0;
+        case QtFatalMsg: return 4;
+        default: return 0;
     }
 }
 
-QString Logger::getLogSeverity(QtMsgType type) {
+const char* Logger::getLogSeverity(QtMsgType type)
+{
     switch (type) {
-        case QtDebugMsg:    return QStringLiteral("DBG");
-        case QtInfoMsg:     return QStringLiteral("INF");
-        case QtWarningMsg:  return QStringLiteral("WRN");
-        case QtCriticalMsg: return QStringLiteral("CRT");
-        case QtFatalMsg:    return QStringLiteral("FTL");
-        default:            return QStringLiteral("UNK");
+        case QtDebugMsg: return "DBG";
+        case QtInfoMsg: return "INF";
+        case QtWarningMsg: return "WRN";
+        case QtCriticalMsg: return "CRT";
+        case QtFatalMsg: return "FTL";
+        default: return "UNK";
     }
 }
 
-void Logger::openLogFile(const QDate& target_date) {
-    // 二进制追加 + 手写 UTF-8，避免 Windows Text 模式与编码混用；同日重启仅追加不截断。
-    static const QIODevice::OpenMode kLogOpenMode = QIODevice::WriteOnly | QIODevice::Append;
-
+void Logger::openLogFile(const QDate& target_date)
+{
     if (!target_date.isValid()) {
         return;
     }
 
-    const QString file_path = dailyLogFilePath(log_dir_, target_date);
+    const std::string file_path = dailyLogFilePath(log_dir_, target_date);
 
-    const QString previous_path = log_file_->fileName();
-    const bool was_open = log_file_->isOpen();
-    if (was_open) {
-        log_file_->close();
+    if (log_file_ != nullptr) {
+        std::fclose(log_file_);
+        log_file_ = nullptr;
     }
 
-    const LogFilePayload existing = loadLogFilePayload(file_path);
-    if (existing.hadLeadingNullPadding
-        || (!existing.content.isEmpty() && !hasUtf8Bom(existing.content))) {
-        if (!rewriteLogFileWithUtf8Bom(file_path, existing.content)) {
-            std::cerr << "严重错误：Logger 无法规范化日志文件：" << file_path.toStdString()
-                      << "\n";
-        }
-    }
-
-    log_file_->setFileName(file_path);
-    if (!log_file_->open(kLogOpenMode)) {
-        std::cerr << "严重错误：Logger 无法打开目标文件：" << file_path.toStdString() << "\n";
-        log_file_->setFileName(previous_path);
-        if (was_open && !previous_path.isEmpty()) {
-            if (!log_file_->open(kLogOpenMode)) {
-                std::cerr << "严重错误：Logger 无法恢复上一日志文件：" << previous_path.toStdString()
-                          << "\n";
-            }
-        }
+    log_file_ = std::fopen(file_path.c_str(), "ab");
+    if (log_file_ == nullptr) {
+        std::cerr << "严重错误：Logger 无法打开目标文件：" << file_path << "\n";
         return;
     }
 
-    if (log_file_->size() == 0) {
-        log_file_->write(kUtf8Bom);
-        log_file_->flush();
+    std::fseek(log_file_, 0, SEEK_END);
+    if (std::ftell(log_file_) == 0) {
+        std::fwrite(kUtf8Bom, 1, 3, log_file_);
+        std::fflush(log_file_);
     }
 
     current_date_ = target_date;
 }
 
-void Logger::messageHandler(QtMsgType type, const QMessageLogContext& context, const QString& msg) {
+void Logger::messageHandler(QtMsgType type, const QMessageLogContext& context, const QString& msg)
+{
     Logger* logger = instance_;
-    if (logger) {
+    if (logger != nullptr) {
         logger->log(type, context, msg);
         return;
     }
-    if (previous_handler_) {
+    if (previous_handler_ != nullptr) {
         previous_handler_(type, context, msg);
     }
 }
 
-void Logger::log(QtMsgType type, const QMessageLogContext& context, const QString& msg) {
-    QMutexLocker locker(&mutex_);
+void Logger::log(QtMsgType type, const QMessageLogContext& context, const QString& msg)
+{
+    const QByteArray msg_utf8 = msg.toUtf8();
+
+    struct DepthGuard {
+        DepthGuard() { ++g_log_handler_depth; }
+        ~DepthGuard() { --g_log_handler_depth; }
+    } depth_guard;
+
+    if (g_log_handler_depth > 1) {
+        emitMinimalFallback(type, context, msg_utf8);
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
 
     if (getSeverityLevel(type) < getSeverityLevel(min_level_)) {
         return;
     }
 
-    QDateTime now = QDateTime::currentDateTime();
-    
+    const QDateTime now = QDateTime::currentDateTime();
     if (now.date() != current_date_) {
         openLogFile(now.date());
     }
 
-    QString time_stamp = now.toString("yyyy-MM-dd HH:mm:ss.zzz");
-    QString severity = getLogSeverity(type);
-    QString category = QString::fromLatin1(context.category ? context.category : "default");
-    
-    QString formatted_message = QStringLiteral("[%1] [%2] [%3] %4").arg(time_stamp, severity, category, msg);
+    const std::string time_stamp = now.toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz")).toStdString();
+    const std::string suffix = (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg)
+        ? sourceLocationSuffix(context)
+        : std::string{};
+    const std::string line = buildLogLine(
+        time_stamp.c_str(),
+        getLogSeverity(type),
+        safeCategoryName(context),
+        msg_utf8.constData(),
+        suffix.empty() ? nullptr : suffix.c_str());
 
-    if (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg) {
-        if (context.file && context.line > 0) {
-            formatted_message.append(QStringLiteral(" (%1:%2)").arg(QString::fromLatin1(context.file)).arg(context.line));
-        }
+    if (log_file_ != nullptr) {
+        std::fwrite(line.c_str(), 1, line.size(), log_file_);
+        std::fwrite("\r\n", 1, 2, log_file_);
+        std::fflush(log_file_);
     }
 
-    const QByteArray utf8FileLine = formatted_message.toUtf8() + "\r\n";
-    const QByteArray utf8ConsoleLine = formatted_message.toUtf8() + '\n';
-    if (log_file_ && log_file_->isOpen()) {
-        log_file_->write(utf8FileLine);
-        log_file_->flush();
-    }
-
-    // 避免 QTextStream+iostream 混用导致 Debug 堆损坏；控制台仅写 UTF-8 行
-    FILE* out = (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg) ? stderr : stdout;
-    std::fwrite(utf8ConsoleLine.constData(), 1, static_cast<size_t>(utf8ConsoleLine.size()), out);
-    std::fflush(out);
+    writeConsoleLine(type, line.c_str(), line.size());
 }
 
-} // namespace scan_tracking::common
+}  // namespace scan_tracking::common

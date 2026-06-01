@@ -61,6 +61,75 @@ QString scanPathsConfigPath()
     return exeDirPath;
 }
 
+constexpr const char* kLbDefaultLeftIntrinsic3x3 =
+    "5078.851406536548,0.830568826844289,2746.479519311858,"
+    "0,5079.564338697494,1827.274288235361,0,0,1";
+constexpr const char* kLbDefaultLeftDistortion5 =
+    "-0.061121083586165,0.174884596596884,-1.053862530437392e-04,"
+    "-2.625558299490124e-04,-0.174942436164493";
+constexpr const char* kLbDefaultLeftExtrinsic4x4 =
+    "1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1";
+constexpr const char* kLbDefaultRightIntrinsic3x3 =
+    "5088.957721152494,1.694422728104837,2748.597487208202,"
+    "0,5087.725659008389,1818.343109063463,0,0,1";
+constexpr const char* kLbDefaultRightDistortion5 =
+    "-0.061336067087922,0.140736778029161,-2.839150977966796e-04,"
+    "0.001241546114496,-0.079946406594583";
+constexpr const char* kLbDefaultRightExtrinsic4x4 =
+    "0.932342748446725,-0.009472020725314,0.361451629187345,-579.3657636690184,"
+    "-0.014055020969881,0.997951882006392,0.062405909859861,-13.667600451372955,"
+    "-0.361302443673362,-0.063263907745887,0.930300071037500,126.5698817906372,"
+    "0,0,0,1";
+
+QVector<double> readLbDoubleList(const QVariant& value, int expectedCount)
+{
+    QVector<double> values;
+    const QString raw = value.toString().trimmed();
+    if (raw.isEmpty()) {
+        return values;
+    }
+
+    const QStringList parts = raw.split(',', Qt::SkipEmptyParts);
+    values.reserve(parts.size());
+    for (const QString& part : parts) {
+        bool ok = false;
+        const double parsed = part.trimmed().toDouble(&ok);
+        if (!ok) {
+            qWarning(LOG_CONFIG).noquote()
+                << QStringLiteral("LbPose 数值列表解析失败，忽略无效项：") << part.trimmed();
+            continue;
+        }
+        values.push_back(parsed);
+    }
+
+    if (expectedCount > 0 && values.size() != expectedCount) {
+        qWarning(LOG_CONFIG).noquote()
+            << QStringLiteral("LbPose 数值列表长度不符，期望=") << expectedCount
+            << QStringLiteral(" 实际=") << values.size();
+    }
+    return values;
+}
+
+QVector<double> readLbDoubleListOrDefault(
+    QSettings& settings,
+    const char* key,
+    const char* defaultCsv,
+    int expectedCount)
+{
+    QVector<double> values = readLbDoubleList(settings.value(key, defaultCsv), expectedCount);
+    if (values.size() == expectedCount) {
+        return values;
+    }
+
+    values = readLbDoubleList(QString::fromLatin1(defaultCsv), expectedCount);
+    if (values.size() != expectedCount) {
+        qWarning(LOG_CONFIG).noquote()
+            << QStringLiteral("LbPose 内置默认值无效：") << key;
+        values.clear();
+    }
+    return values;
+}
+
 }  // namespace
 
 void ConfigManager::initialize()
@@ -310,7 +379,10 @@ void ConfigManager::load(const QString& filePath)
     settings.endGroup();
 
     settings.beginGroup("LbPose");
-    m_lbPoseConfig.dataRoot = settings.value("dataRoot", "D:/work/scan-tracking/third_party/lb_pose_detection/data").toString();
+    m_lbPoseConfig.dataRoot = settings.value(
+        "dataRoot",
+        QStringLiteral("D:/work/LY/IPC-192.168.110.173_track-main/third_party/LB/Data"))
+        .toString();
     m_lbPoseConfig.leftPattern = settings.value("leftPattern", "").toString();
     m_lbPoseConfig.rightPattern = settings.value("rightPattern", "").toString();
     m_lbPoseConfig.templateFile = settings.value("templateFile", "").toString();
@@ -318,6 +390,23 @@ void ConfigManager::load(const QString& filePath)
     m_lbPoseConfig.maxDistance = settings.value("maxDistance", 650.0).toFloat();
     m_lbPoseConfig.cosTolerance = settings.value("cosTolerance", 0.015).toFloat();
     m_lbPoseConfig.minPercent = settings.value("minPercent", 0.5).toFloat();
+    m_lbPoseConfig.epipolarThreshold = settings.value("epipolarThreshold", 15.5).toDouble();
+    m_lbPoseConfig.minZRange = settings.value("minZRange", 1200.0).toFloat();
+    m_lbPoseConfig.maxZRange = settings.value("maxZRange", 5000.0).toFloat();
+    m_lbPoseConfig.maxReprojErr = settings.value("maxReprojErr", 5.5).toDouble();
+    m_lbPoseConfig.maxRatio = settings.value("maxRatio", 0.7).toDouble();
+    m_lbPoseConfig.leftIntrinsic3x3 =
+        readLbDoubleListOrDefault(settings, "leftIntrinsic3x3", kLbDefaultLeftIntrinsic3x3, 9);
+    m_lbPoseConfig.leftDistortion5 =
+        readLbDoubleListOrDefault(settings, "leftDistortion5", kLbDefaultLeftDistortion5, 5);
+    m_lbPoseConfig.leftExtrinsic4x4 =
+        readLbDoubleListOrDefault(settings, "leftExtrinsic4x4", kLbDefaultLeftExtrinsic4x4, 16);
+    m_lbPoseConfig.rightIntrinsic3x3 =
+        readLbDoubleListOrDefault(settings, "rightIntrinsic3x3", kLbDefaultRightIntrinsic3x3, 9);
+    m_lbPoseConfig.rightDistortion5 =
+        readLbDoubleListOrDefault(settings, "rightDistortion5", kLbDefaultRightDistortion5, 5);
+    m_lbPoseConfig.rightExtrinsic4x4 =
+        readLbDoubleListOrDefault(settings, "rightExtrinsic4x4", kLbDefaultRightExtrinsic4x4, 16);
     settings.endGroup();
 
     // [LbnPose] 默认值与 testdata/test 150200 离线调通一致；上线前请多扫描验证，见 docs/LBN离线调通交接说明.md

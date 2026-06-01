@@ -58,7 +58,7 @@
 | 序号 | 待完善项 | 当前状态 | 优先级 |
 |------|----------|----------|--------|
 | 1 | 海康相机 A/B 真实 4x4 位姿矩阵生成 | 当前返回单位矩阵占位 | 高 |
-| 2 | VisionPipeline 中 LB 位姿检测 | 默认启用 LBN 时 LB 走 stub；改 `SCAN_TRACKING_ENABLE_LBN_POSE_DETECTION=OFF` 可恢复 LB 实装 | 中 |
+| 2 | VisionPipeline 中 LB 位姿检测 | LBN+LB 可同时启用（`SCAN_TRACKING_ENABLE_LB_POSE_DETECTION=ON`）；封头段 CXP 双目走 LB，转盘段走 LBN | 中 |
 | 2b | LBN 位姿检测（Mech-Eye） | 适配层已接入；**单段**转动点 `T0'=Rt×T0` 已实现；**多路径级**标定重置与循环仍待 §2.2.1 | 中 |
 | 3 | 海康相机 C（智能相机）SDK 采图 | 不支持 GigE 数据流输出，只能走 TCP+FTP | 已确认限制 |
 | 4 | MechEye 3D 相机真实点云质量验证 | 框架已通；落盘 `ScanTracking_CaptureCache/pointcloud/`（`retainSegmentPly=true` 长期保留），需现场验证点云完整性 | 中 |

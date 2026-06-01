@@ -410,19 +410,20 @@ private:
     };
 
     void updateLastPoseStitchArtifact(
-        int pathId,
-        int segmentIndex,
+        int pathId,     
+        int segmentIndex,       
         bool lbTrackingValid,
-        const std::array<float, 16>& baseCalibrationT0,
-        const std::array<float, 16>& calibrationT0Prime,
-        const std::array<float, 16>& stereoTrackingT,
-        const std::array<float, 16>& combinedOutputRt,
+        const std::array<float, 16>& baseCalibrationT0,   // 基准 T0    
+        const std::array<float, 16>& calibrationT0Prime,  // T0'
+        const std::array<float, 16>& stereoTrackingT,     // T_N
+        const std::array<float, 16>& combinedOutputRt,    // T0' × T_N
         const scan_tracking::mech_eye::PointCloudFrame& stitchedPointCloud);
 
-    /// 将最后一次拼接结果写入 exe/output/run_*/matrix 与 pointcloud（按次运行分子目录）
+    /// 将最后一次拼接结果写到 exe/output/run_*/matrix 与 pointcloud（Trig_Inspection 时落盘一次）
     void persistLastPoseStitchArtifactToDisk() const;
 
     void initializePoseStitchRunOutputDirectory();
+    bool ensurePoseStitchRunRootDirectory();
 
     // 记录 Modbus 故障
     // @param alarmCode 报警代码

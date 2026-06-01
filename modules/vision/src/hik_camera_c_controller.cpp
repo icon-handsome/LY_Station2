@@ -215,11 +215,11 @@ void HikCameraCController::initializeFtpMonitor()
     connect(m_ftpMonitor, &HikSmartCameraFtpMonitor::error,
             this, &HikCameraCController::onFtpError);
 
-    // 启动 FTP 监控器
+    // 启动 FTP 监控器（失败不阻断 TCP 模式，仅告警）
     if (!m_ftpMonitor->start(m_ftpDirectory)) {
-        qCritical(hikCControllerLog) << QStringLiteral("FTP 监控器启动失败，目录：") << m_ftpDirectory;
-        emit fatalError(VisionErrorCode::InvalidConfig,
-                      QStringLiteral("FTP 监控器启动失败，目录：%1").arg(m_ftpDirectory));
+        qWarning(hikCControllerLog).noquote()
+            << QStringLiteral("FTP 监控器启动失败，目录：") << m_ftpDirectory
+            << QStringLiteral("（海康 C 仍可通过 TCP 通信）");
     } else {
         qInfo(hikCControllerLog) << "FTP 监控器启动成功，监控目录：" << m_ftpDirectory;
     }

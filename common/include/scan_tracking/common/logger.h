@@ -3,9 +3,9 @@
 #include <QtCore/QString>
 #include <QtCore/QtMessageHandler>
 #include <QtCore/QDate>
-#include <QtCore/QMutex>
 
-class QFile;
+#include <cstdio>
+#include <mutex>
 
 namespace scan_tracking::common {
 
@@ -14,17 +14,13 @@ class Logger {
 public:
     static void initialize(const QString& log_dir = QStringLiteral("logs"));
     static void cleanup();
-    
-    // Qt 全局消息回调转发接口
+
     static void messageHandler(QtMsgType type, const QMessageLogContext& context, const QString& msg);
 
-    // 可以在任何地方动态获取单例
     static Logger* instance();
 
-    // 动态调整最低输出级别
     void setMinLevel(QtMsgType level);
 
-    // 禁用拷贝于赋值，强制单例约束
     Logger(const Logger&) = delete;
     Logger& operator=(const Logger&) = delete;
 
@@ -35,12 +31,12 @@ private:
     void openLogFile(const QDate& target_date);
     void log(QtMsgType type, const QMessageLogContext& context, const QString& msg);
 
-    static QString getLogSeverity(QtMsgType type);
+    static const char* getLogSeverity(QtMsgType type);
     static int getSeverityLevel(QtMsgType type);
 
-    QString log_dir_;
-    QFile* log_file_ = nullptr;
-    QRecursiveMutex mutex_;
+    std::string log_dir_;
+    FILE* log_file_ = nullptr;
+    std::mutex mutex_;
     QDate current_date_;
     QtMsgType min_level_;
 
@@ -48,4 +44,4 @@ private:
     static QtMessageHandler previous_handler_;
 };
 
-} // namespace scan_tracking::common
+}  // namespace scan_tracking::common

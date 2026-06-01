@@ -3,6 +3,7 @@
 #include <QtCore/QByteArray>
 #include <QtCore/QDateTime>
 #include <QtCore/QDir>
+#include <QtCore/QVector>
 
 #include <opencv2/opencv.hpp>
 
@@ -14,7 +15,7 @@ namespace vision {
 
 namespace {
 
-struct DefaultCalibSet {
+struct StereoCalibSet {
     cv::Mat I1;
     cv::Mat D1;
     cv::Mat E1;
@@ -23,35 +24,41 @@ struct DefaultCalibSet {
     cv::Mat E2;
 };
 
-DefaultCalibSet makeDefaultCalibSet()
+bool vectorHasSize(const QVector<double>& values, int expectedCount)
 {
-    DefaultCalibSet calib;
-    calib.I1 = (cv::Mat_<double>(3, 3) <<
-        5.078851406536548e+03, 0.830568826844289, 2.746479519311858e+03,
-        0.0, 5.079564338697494e+03, 1.827274288235361e+03,
-        0.0, 0.0, 1.0);
-    calib.D1 = (cv::Mat_<double>(1, 5) <<
-        -0.061121083586165,
-        0.174884596596884,
-        -1.053862530437392e-04,
-        -2.625558299490124e-04,
-        -0.174942436164493);
-    calib.E1 = cv::Mat::eye(4, 4, CV_64F);
-    calib.I2 = (cv::Mat_<double>(3, 3) <<
-        5.088957721152494e+03, 1.694422728104837, 2.748597487208202e+03,
-        0.0, 5.087725659008389e+03, 1.818343109063463e+03,
-        0.0, 0.0, 1.0);
-    calib.D2 = (cv::Mat_<double>(1, 5) <<
-        -0.061336067087922,
-        0.140736778029161,
-        -2.839150977966796e-04,
-        0.001241546114496,
-        -0.079946406594583);
-    calib.E2 = (cv::Mat_<double>(4, 4) <<
-        0.932342748446725, -0.009472020725314, 0.361451629187345, -5.793657636690184e+02,
-        -0.014055020969881, 0.997951882006392, 0.062405909859861, -13.667600451372955,
-        -0.361302443673362, -0.063263907745887, 0.930300071037500, 1.265698817906372e+02,
-        0.0, 0.0, 0.0, 1.0);
+    return values.size() == expectedCount;
+}
+
+cv::Mat matrixFromRowMajor(const QVector<double>& values, int rows, int cols)
+{
+    cv::Mat matrix(rows, cols, CV_64F);
+    for (int row = 0; row < rows; ++row) {
+        for (int col = 0; col < cols; ++col) {
+            matrix.at<double>(row, col) =
+                values[static_cast<int>(row * cols + col)];
+        }
+    }
+    return matrix;
+}
+
+StereoCalibSet makeStereoCalibSetFromConfig(const scan_tracking::common::LbPoseConfig& config)
+{
+    StereoCalibSet calib;
+    if (!vectorHasSize(config.leftIntrinsic3x3, 9) ||
+        !vectorHasSize(config.leftDistortion5, 5) ||
+        !vectorHasSize(config.leftExtrinsic4x4, 16) ||
+        !vectorHasSize(config.rightIntrinsic3x3, 9) ||
+        !vectorHasSize(config.rightDistortion5, 5) ||
+        !vectorHasSize(config.rightExtrinsic4x4, 16)) {
+        return {};
+    }
+
+    calib.I1 = matrixFromRowMajor(config.leftIntrinsic3x3, 3, 3);
+    calib.D1 = matrixFromRowMajor(config.leftDistortion5, 1, 5);
+    calib.E1 = matrixFromRowMajor(config.leftExtrinsic4x4, 4, 4);
+    calib.I2 = matrixFromRowMajor(config.rightIntrinsic3x3, 3, 3);
+    calib.D2 = matrixFromRowMajor(config.rightDistortion5, 1, 5);
+    calib.E2 = matrixFromRowMajor(config.rightExtrinsic4x4, 4, 4);
     return calib;
 }
 
@@ -79,6 +86,11 @@ LbPoseResult makeFailure(const QString& message)
     result.success = false;
     result.message = message;
     return result;
+}
+
+LbPoseResult makeCalibFailure()
+{
+    return makeFailure(QStringLiteral("LB 立体标定参数无效，请检查 config.ini [LbPose]。"));
 }
 
 cv::Mat frameToGrayMat(const HikMonoFrame& frame)
@@ -149,9 +161,20 @@ LbPoseResult runLbPoseDetection(
 
     try {
         TR_INSPECT_3D_Recon_Marker recon;
-        const auto calib = makeDefaultCalibSet();
+        const auto calib = makeStereoCalibSetFromConfig(config);
+        if (calib.I1.empty()) {
+            return makeCalibFailure();
+        }
         if (recon.Set_Calib_Config(calib.I1, calib.D1, calib.E1, calib.I2, calib.D2, calib.E2) != 0) {
-            return makeFailure(QStringLiteral("配置默认立体标定失败。"));
+            return makeFailure(QStringLiteral("配置 LB 立体标定失败。"));
+        }
+        if (recon.Set_2D_Config(
+                config.epipolarThreshold,
+                config.minZRange,
+                config.maxZRange,
+                config.maxReprojErr,
+                config.maxRatio) != 0) {
+            return makeFailure(QStringLiteral("配置 LB 二维重建参数失败。"));
         }
 
         if (recon.Get_3D_Recon_Marker(const_cast<cv::Mat&>(leftImage), const_cast<cv::Mat&>(rightImage)) != 0) {

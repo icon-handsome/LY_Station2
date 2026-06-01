@@ -318,7 +318,9 @@ void VisionPipelineService::finishBundleIfReady()
                     : QStringLiteral("非转动点位，跳过 LBN 位姿检测。");
         }
 
-        if (hikReady) {
+        // 转盘段（needMechEye2D）仅 LBN 标定；封头段用 CXP 双目跑 LB
+        const bool runLb = hikReady && !bundle.request.needMechEye2D;
+        if (runLb) {
             qInfo() << QStringLiteral("[LB位姿] 开始检测，左目=") << bundle.hikCameraAResult.frame.width << QStringLiteral("x")
                     << bundle.hikCameraAResult.frame.height
                     << QStringLiteral(" 右目=") << bundle.hikCameraBResult.frame.width << QStringLiteral("x")
@@ -342,6 +344,12 @@ void VisionPipelineService::finishBundleIfReady()
                         .arg(static_cast<double>(lr.poseMatrix.values[row * 4 + 3]), 12, 'f', 6);
                 }
             }
+        } else if (hikReady && bundle.request.needMechEye2D) {
+            completedBundle.lbPoseResult.invoked = false;
+            completedBundle.lbPoseResult.success = false;
+            completedBundle.lbPoseResult.message =
+                QStringLiteral("转盘点位，跳过 LB 位姿检测（仅 LBN）。");
+            qInfo() << QStringLiteral("[LB位姿] 转盘段跳过（needMechEye2D=true，仅 LBN）");
         } else {
             completedBundle.lbPoseResult.invoked = false;
             completedBundle.lbPoseResult.success = false;

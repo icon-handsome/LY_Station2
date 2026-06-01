@@ -23,7 +23,8 @@ int main(int argc, char* argv[])
     app.setApplicationName("Scan Tracking");
     app.setOrganizationName("ScanTracking");
 
-    scan_tracking::common::Logger::initialize();
+    scan_tracking::common::Logger::initialize(
+        QCoreApplication::applicationDirPath() + QStringLiteral("/logs"));
     scan_tracking::common::ConfigManager::initialize();
 
     scan_tracking::app::ConsoleRuntime runtime(app);

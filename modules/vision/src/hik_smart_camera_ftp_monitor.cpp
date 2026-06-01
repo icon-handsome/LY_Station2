@@ -37,12 +37,16 @@ bool HikSmartCameraFtpMonitor::start(const QString& ftpDirectory)
         return false;
     }
 
-    // 检查目录是否存在
+    // 检查目录是否存在；不存在则尝试创建（现场常缺 D:/HikCameraFTP）
     QDir dir(ftpDirectory);
     if (!dir.exists()) {
-        qCritical(hikFtpMonitorLog) << QStringLiteral("FTP 目录不存在：") << ftpDirectory;
-        emit error(QStringLiteral("FTP 目录不存在: %1").arg(ftpDirectory));
-        return false;
+        if (!QDir().mkpath(ftpDirectory)) {
+            qCritical(hikFtpMonitorLog) << QStringLiteral("FTP 目录不存在且创建失败：") << ftpDirectory;
+            emit error(QStringLiteral("FTP 目录不存在且创建失败: %1").arg(ftpDirectory));
+            return false;
+        }
+        dir = QDir(ftpDirectory);
+        qInfo(hikFtpMonitorLog) << QStringLiteral("FTP 目录已自动创建：") << dir.absolutePath();
     }
 
     m_ftpDirectory = dir.absolutePath();

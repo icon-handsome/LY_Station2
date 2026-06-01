@@ -25,8 +25,10 @@
 #include <cstring>
 #include <algorithm>
 #include <exception>
+#include <filesystem>
 #include <memory>
 #include <mutex>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -130,14 +132,41 @@ scan_tracking::vision::HikMonoFrame cloneHikMonoFrame(
     return dst;
 }
 
-scan_tracking::vision::MultiCameraCaptureBundle cloneCaptureBundle(
-    const scan_tracking::vision::MultiCameraCaptureBundle& src)
+scan_tracking::vision::MultiCameraCaptureBundle cloneCaptureBundleForCache(
+    const scan_tracking::vision::MultiCameraCaptureBundle& src,
+    const scan_tracking::mech_eye::PointCloudFrame& sharedPointCloud)
 {
     scan_tracking::vision::MultiCameraCaptureBundle dst = src;
-    dst.mechEyeResult = cloneCaptureResult(src.mechEyeResult);
+    dst.mechEyeResult = src.mechEyeResult;
+    dst.mechEyeResult.pointCloud = sharedPointCloud;
+    if (src.mechEyeResult.texture2D.isValid()) {
+        dst.mechEyeResult.texture2D.pixels =
+            std::make_shared<std::vector<uint8_t>>(*src.mechEyeResult.texture2D.pixels);
+    }
     dst.hikCameraAResult.frame = cloneHikMonoFrame(src.hikCameraAResult.frame);
     dst.hikCameraBResult.frame = cloneHikMonoFrame(src.hikCameraBResult.frame);
     return dst;
+}
+
+void assignSharedPointCloudToSegmentEntry(
+    QMap<int, QMap<int, scan_tracking::mech_eye::CaptureResult>>& pathSegmentCaptureResults,
+    QMap<int, QMap<int, scan_tracking::vision::MultiCameraCaptureBundle>>& pathSegmentCaptureBundles,
+    int pathId,
+    int segmentIndex,
+    const scan_tracking::mech_eye::PointCloudFrame& sourceCloud)
+{
+    scan_tracking::mech_eye::PointCloudFrame sharedCloud = clonePointCloudFrame(sourceCloud);
+
+    auto& resultRef = pathSegmentCaptureResults[pathId][segmentIndex];
+    scan_tracking::mech_eye::releasePointCloudFrameBuffers(&resultRef.pointCloud);
+    resultRef.pointCloud = sharedCloud;
+
+    if (pathSegmentCaptureBundles.contains(pathId) &&
+        pathSegmentCaptureBundles[pathId].contains(segmentIndex)) {
+        auto& bundleRef = pathSegmentCaptureBundles[pathId][segmentIndex];
+        scan_tracking::mech_eye::releasePointCloudFrameBuffers(&bundleRef.mechEyeResult.pointCloud);
+        bundleRef.mechEyeResult.pointCloud = sharedCloud;
+    }
 }
 
 std::array<float, 16> identityMatrix4x4()
@@ -195,17 +224,62 @@ QString poseStitchOutputTimestamp()
     return QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
 }
 
+QString absolutePathFromStdPath(const std::filesystem::path& path)
+{
+    std::error_code ec;
+    const auto absolute = std::filesystem::absolute(path, ec);
+    if (ec) {
+        return {};
+    }
+    return QString::fromStdWString(absolute.wstring());
+}
+
+bool ensureDirectoryTreeExists(const QString& directoryPath)
+{
+    if (directoryPath.trimmed().isEmpty()) {
+        return false;
+    }
+
+    std::error_code ec;
+    const auto fsPath = std::filesystem::path(directoryPath.toStdWString());
+    std::filesystem::create_directories(fsPath, ec);
+    if (ec) {
+        return false;
+    }
+    return std::filesystem::is_directory(fsPath);
+}
+
 QString createPoseStitchRunRootDirectory()
 {
-    const QString runFolderName =
-        QStringLiteral("run_%1").arg(poseStitchOutputTimestamp());
-    const QString runRoot =
-        QDir(QCoreApplication::applicationDirPath()).filePath(
-            QStringLiteral("output/%1").arg(runFolderName));
-    QDir().mkpath(runRoot);
-    QDir().mkpath(QDir(runRoot).filePath(QStringLiteral("matrix")));
-    QDir().mkpath(QDir(runRoot).filePath(QStringLiteral("pointcloud")));
-    return runRoot;
+    const QString appDir = QCoreApplication::applicationDirPath();
+    if (appDir.isEmpty()) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("[PoseStitchOutput] applicationDirPath 为空，无法创建输出目录");
+        return {};
+    }
+
+    const QString outputBase = appDir + QStringLiteral("/output");
+    if (!ensureDirectoryTreeExists(outputBase)) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("[PoseStitchOutput] 创建 output 根目录失败：") << outputBase;
+        return {};
+    }
+
+    const QString runRoot = outputBase + QStringLiteral("/run_") + poseStitchOutputTimestamp();
+    const QString matrixDir = runRoot + QStringLiteral("/matrix");
+    const QString pointcloudDir = runRoot + QStringLiteral("/pointcloud");
+
+    if (!ensureDirectoryTreeExists(matrixDir)) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("[PoseStitchOutput] 创建 matrix 目录失败：") << matrixDir;
+        return {};
+    }
+    if (!ensureDirectoryTreeExists(pointcloudDir)) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("[PoseStitchOutput] 创建 pointcloud 目录失败：") << pointcloudDir;
+        return {};
+    }
+    return absolutePathFromStdPath(std::filesystem::path(runRoot.toStdWString()));
 }
 
 QString poseStitchMatrixOutputDirectory(const QString& runRoot)
@@ -1410,8 +1484,10 @@ void StateMachine::commitScanSegmentCaptureImmediate(
 
     {
         std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
-        m_pathSegmentCaptureResults[pathId][segmentIndex] = cloneCaptureResult(result);
-        m_pathSegmentCaptureBundles[pathId][segmentIndex] = cloneCaptureBundle(bundle);
+        const scan_tracking::mech_eye::CaptureResult cachedResult = cloneCaptureResult(result);
+        m_pathSegmentCaptureResults[pathId][segmentIndex] = cachedResult;
+        m_pathSegmentCaptureBundles[pathId][segmentIndex] =
+            cloneCaptureBundleForCache(bundle, cachedResult.pointCloud);
     }
 
     int imageCount = countHikImagesInBundle(bundle);
@@ -1425,7 +1501,7 @@ void StateMachine::commitScanSegmentCaptureImmediate(
     publishIpcStatus();
 
     qInfo(LOG_FLOW).noquote()
-        << QStringLiteral("[SegmentCache] 原始点云已入内存，立即回写 PLC")
+        << QStringLiteral("[SegmentCache] 原始点云已入内存（results/bundle 共享同一份点云），立即回写 PLC")
         << QStringLiteral(" [路径") << pathId << QStringLiteral("][段") << segmentIndex << QStringLiteral("]")
         << QStringLiteral(" 任务ID=") << m_activeTask.taskId
         << QStringLiteral(" 点数=") << result.pointCloud.pointCount
@@ -1758,17 +1834,12 @@ void StateMachine::applySegmentRefinementOutcome(const SegmentProcessOutcome& ou
         return;
     }
 
-    auto& resultRef = m_pathSegmentCaptureResults[targetPathId][outcome.segmentIndex];
-    scan_tracking::mech_eye::releasePointCloudFrameBuffers(&resultRef.pointCloud);
-    resultRef.pointCloud = clonePointCloudFrame(outcome.captureResult.pointCloud);
-    
-    // 更新 bundle 缓存
-    if (m_pathSegmentCaptureBundles.contains(targetPathId) &&
-        m_pathSegmentCaptureBundles[targetPathId].contains(outcome.segmentIndex)) {
-        auto& bundleRef = m_pathSegmentCaptureBundles[targetPathId][outcome.segmentIndex];
-        scan_tracking::mech_eye::releasePointCloudFrameBuffers(&bundleRef.mechEyeResult.pointCloud);
-        bundleRef.mechEyeResult.pointCloud = clonePointCloudFrame(outcome.captureResult.pointCloud);
-    }
+    assignSharedPointCloudToSegmentEntry(
+        m_pathSegmentCaptureResults,
+        m_pathSegmentCaptureBundles,
+        targetPathId,
+        outcome.segmentIndex,
+        outcome.captureResult.pointCloud);
 
     qInfo(LOG_FLOW).noquote()
         << QStringLiteral("[SegmentCache] refinement 已写回内存")
@@ -2303,6 +2374,7 @@ void StateMachine::executeInspectionTask()
 
     QString loadError;
     const auto segmentsForInspection = loadSegmentCaptureResultsForInspection(&loadError);
+    ensurePoseStitchRunRootDirectory();
     persistLastPoseStitchArtifactToDisk();
     if (segmentsForInspection.isEmpty()) {
         qWarning(LOG_FLOW).noquote()
@@ -3353,16 +3425,12 @@ void StateMachine::applySegmentPoseStitching(int pathId, int segmentIndex)
             return;
         }
 
-        auto& resultRef = m_pathSegmentCaptureResults[pathId][segmentIndex];
-        scan_tracking::mech_eye::releasePointCloudFrameBuffers(&resultRef.pointCloud);
-        resultRef.pointCloud = clonePointCloudFrame(stitchedCloud);
-
-        if (m_pathSegmentCaptureBundles.contains(pathId) &&
-            m_pathSegmentCaptureBundles[pathId].contains(segmentIndex)) {
-            auto& bundleRef = m_pathSegmentCaptureBundles[pathId][segmentIndex];
-            scan_tracking::mech_eye::releasePointCloudFrameBuffers(&bundleRef.mechEyeResult.pointCloud);
-            bundleRef.mechEyeResult.pointCloud = clonePointCloudFrame(stitchedCloud);
-        }
+        assignSharedPointCloudToSegmentEntry(
+            m_pathSegmentCaptureResults,
+            m_pathSegmentCaptureBundles,
+            pathId,
+            segmentIndex,
+            stitchedCloud);
     }
 
     qInfo(LOG_FLOW).noquote()
@@ -3384,13 +3452,6 @@ void StateMachine::applySegmentPoseStitching(int pathId, int segmentIndex)
         stereoMatrix,
         combinedOutputRt,
         stitchedCloud);
-
-    const auto* configManager = scan_tracking::common::ConfigManager::instance();
-    const int scanSegmentTotal =
-        configManager ? configManager->trackingConfig().scanSegmentTotal : 0;
-    if (scanSegmentTotal > 0 && segmentIndex == scanSegmentTotal) {
-        persistLastPoseStitchArtifactToDisk();
-    }
 }
 
 void StateMachine::updateLastPoseStitchArtifact(
@@ -3423,9 +3484,27 @@ void StateMachine::updateLastPoseStitchArtifact(
 
 void StateMachine::initializePoseStitchRunOutputDirectory()
 {
+    // 启动阶段不做任何目录 I/O：MechEye/Hik/LB 等 SDK 加载后，Qt QDir::mkpath 可能触发堆损坏。
+    // run_* 子目录在 Trig_Inspection 落盘前由 ensurePoseStitchRunRootDirectory() 创建。
+    m_poseStitchRunRootDirectory.clear();
+}
+
+bool StateMachine::ensurePoseStitchRunRootDirectory()
+{
+    if (!m_poseStitchRunRootDirectory.isEmpty()) {
+        return true;
+    }
+
     m_poseStitchRunRootDirectory = createPoseStitchRunRootDirectory();
+    if (m_poseStitchRunRootDirectory.isEmpty()) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("[PoseStitchOutput] 无法创建本次运行输出目录");
+        return false;
+    }
+
     qInfo(LOG_FLOW).noquote()
         << QStringLiteral("[PoseStitchOutput] 本次运行输出目录=") << m_poseStitchRunRootDirectory;
+    return true;
 }
 
 void StateMachine::persistLastPoseStitchArtifactToDisk() const
@@ -3451,7 +3530,7 @@ void StateMachine::persistLastPoseStitchArtifactToDisk() const
 
     if (m_poseStitchRunRootDirectory.isEmpty()) {
         qWarning(LOG_FLOW).noquote()
-            << QStringLiteral("[PoseStitchOutput] 跳过落盘：运行输出目录未初始化");
+            << QStringLiteral("[PoseStitchOutput] 跳过落盘：运行输出目录未就绪");
         scan_tracking::mech_eye::releasePointCloudFrameBuffers(&artifact.stitchedPointCloud);
         return;
     }

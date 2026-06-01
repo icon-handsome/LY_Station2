@@ -253,9 +253,11 @@ void ConsoleRuntime::initModules()
     QObject::connect(
         visionPipelineService_.get(),
         &scan_tracking::vision::VisionPipelineService::stateChanged,
+        &application_,
         [](scan_tracking::vision::VisionPipelineState state, const QString& description) {
             qInfo(appLog) << QStringLiteral("[视觉流水线] 状态 =") << static_cast<int>(state) << description;
-        });
+        },
+        Qt::QueuedConnection);
     QObject::connect(
         visionPipelineService_.get(),
         &scan_tracking::vision::VisionPipelineService::bundleCaptureFinished,
@@ -268,7 +270,7 @@ void ConsoleRuntime::initModules()
         });
 
     visionPipelineService_->start(visionConfig);
-    qInfo(appLog) << "视觉集成框架已启动。";
+    qInfo(appLog) << QStringLiteral("视觉集成框架已启动。");
 
     trackingService_ = std::make_unique<scan_tracking::tracking::TrackingService>();
 

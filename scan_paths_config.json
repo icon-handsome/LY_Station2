@@ -2,7 +2,7 @@
   "version": "1.0",
   "description": "封头检测多路径扫描配置文件",
   "lastModified": "2026-05-27",
-  "_fieldTestNote": "单路径联调：段1转盘扫→段2-7封头6点→段8转盘扫→段9-14封头6点；PLC Trig_ScanSegment 段号 1..14 后 Trig_Inspection",
+  "_fieldTestNote": "单路径联调：段1转盘扫→段2-6封头5点→段7转盘扫→段8-12封头5点；PLC Trig_ScanSegment 段号 1..12 后 Trig_Inspection",
 
   "calibrationMatrix": {
     "_todo": "TODO(calibration): 当前 T0 为临时联调用单位矩阵；正式投产前须替换为现场标定的 Mech-Eye → 机械臂/世界 4×4。",
@@ -21,9 +21,9 @@
     {
       "pathId": 1,
       "pathName": "单路径-转盘+封头×2",
-      "description": "段1/8转盘(3D+2D+LBN)；段2-7、9-14封头各6点(仅3D)",
+      "description": "段1/7转盘(3D+2D+LBN)；段2-6、8-12封头各5点(仅3D)",
       "enabled": true,
-      "totalPoints": 14,
+      "totalPoints": 12,
       "points": [
         { "pointIndex": 1, "pointName": "转盘-第1次", "needRotation": true, "rotationAngle": 0, "description": "机械臂在转盘上扫，需2D+LBN" },
         { "pointIndex": 2, "pointName": "封头-1-1", "needRotation": false, "rotationAngle": 0, "description": "封头第1轮点1" },
@@ -31,14 +31,12 @@
         { "pointIndex": 4, "pointName": "封头-1-3", "needRotation": false, "rotationAngle": 0, "description": "封头第1轮点3" },
         { "pointIndex": 5, "pointName": "封头-1-4", "needRotation": false, "rotationAngle": 0, "description": "封头第1轮点4" },
         { "pointIndex": 6, "pointName": "封头-1-5", "needRotation": false, "rotationAngle": 0, "description": "封头第1轮点5" },
-        { "pointIndex": 7, "pointName": "封头-1-6", "needRotation": false, "rotationAngle": 0, "description": "封头第1轮点6" },
-        { "pointIndex": 8, "pointName": "转盘-第2次", "needRotation": true, "rotationAngle": 0, "description": "机械臂回转盘再扫，需2D+LBN" },
-        { "pointIndex": 9, "pointName": "封头-2-1", "needRotation": false, "rotationAngle": 0, "description": "封头第2轮点1" },
-        { "pointIndex": 10, "pointName": "封头-2-2", "needRotation": false, "rotationAngle": 0, "description": "封头第2轮点2" },
-        { "pointIndex": 11, "pointName": "封头-2-3", "needRotation": false, "rotationAngle": 0, "description": "封头第2轮点3" },
-        { "pointIndex": 12, "pointName": "封头-2-4", "needRotation": false, "rotationAngle": 0, "description": "封头第2轮点4" },
-        { "pointIndex": 13, "pointName": "封头-2-5", "needRotation": false, "rotationAngle": 0, "description": "封头第2轮点5" },
-        { "pointIndex": 14, "pointName": "封头-2-6", "needRotation": false, "rotationAngle": 0, "description": "封头第2轮点6" }
+        { "pointIndex": 7, "pointName": "转盘-第2次", "needRotation": true, "rotationAngle": 0, "description": "机械臂回转盘再扫，需2D+LBN" },
+        { "pointIndex": 8, "pointName": "封头-2-1", "needRotation": false, "rotationAngle": 0, "description": "封头第2轮点1" },
+        { "pointIndex": 9, "pointName": "封头-2-2", "needRotation": false, "rotationAngle": 0, "description": "封头第2轮点2" },
+        { "pointIndex": 10, "pointName": "封头-2-3", "needRotation": false, "rotationAngle": 0, "description": "封头第2轮点3" },
+        { "pointIndex": 11, "pointName": "封头-2-4", "needRotation": false, "rotationAngle": 0, "description": "封头第2轮点4" },
+        { "pointIndex": 12, "pointName": "封头-2-5", "needRotation": false, "rotationAngle": 0, "description": "封头第2轮点5" }
       ]
     },
     {
@@ -75,7 +73,7 @@
 
   "executionConfig": {
     "executeAllPaths": false,
-    "description": "单路径联调：仅 pathId=1，PLC 段号 1..14",
+    "description": "单路径联调：仅 pathId=1，PLC 段号 1..12",
     "selectedPathIds": [1],
     "pathExecutionOrder": "sequential",
     "allowPathSkipOnError": false
@@ -83,7 +81,7 @@
 
   "turntableConfig": {
     "enabled": true,
-    "description": "段1、段8为转盘位，IPC 采集 3D+2D 并走 LBN（无标记时 config.ini useIdentityRtWithoutMarkers）"
+    "description": "段1、段7为转盘位，IPC 采集 3D+2D 并走 LBN（无标记时 config.ini useIdentityRtWithoutMarkers）"
   },
 
   "captureConfig": {
