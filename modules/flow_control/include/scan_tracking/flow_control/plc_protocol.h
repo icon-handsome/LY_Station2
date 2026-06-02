@@ -183,7 +183,7 @@ inline quint16 plcAnalogToUInt16(quint16 word0, quint16 word1 = 0)
 // ==================== 寄存器区块定义 ====================
 
 constexpr int kCommandBlockStart = 0;    ///< 命令区起始地址：PLC→IPC的控制指令区域（0 基偏移）
-constexpr int kCommandBlockSize = 40;    ///< 命令区大小：共40个寄存器
+constexpr int kCommandBlockSize = 41;    ///< 命令区大小：40001~40040（modbusIndex 1~40，含 index 0 预留）
 constexpr int kResultBlockStart = 101;   ///< 结果区起始：40101（modbusIndex=101）
 constexpr int kResultBlockSize = 84;     ///< 结果区大小：共84个寄存器
 
@@ -201,6 +201,43 @@ constexpr int kRecipeId = modbusIndexFromPlcAddress(40014);
 constexpr int kScanSegmentIndex = modbusIndexFromPlcAddress(40015);       ///< 地址表 40015
 constexpr int kScanSegmentIndexRobot = modbusIndexFromPlcAddress(40016);  ///< 机械臂/PLC 实际下发段号
 constexpr int kRequestTimeoutSeconds = modbusIndexFromPlcAddress(40017);
+
+// --- 机械臂末端中心点位姿（PLC → IPC，CDAB FLOAT32，单位 mm / deg）---
+constexpr int kRobotTcpX = modbusIndexFromPlcAddress(40029);
+constexpr int kRobotTcpY = modbusIndexFromPlcAddress(40031);
+constexpr int kRobotTcpZ = modbusIndexFromPlcAddress(40033);
+constexpr int kRobotTcpRx = modbusIndexFromPlcAddress(40035);
+constexpr int kRobotTcpRy = modbusIndexFromPlcAddress(40037);
+constexpr int kRobotTcpRz = modbusIndexFromPlcAddress(40039);
+
+/// 六轴位姿（x/y/z + rx/ry/rz）
+struct Pose6f {
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    float rx = 0.0f;
+    float ry = 0.0f;
+    float rz = 0.0f;
+};
+
+/// 从命令块读取单个 CDAB FLOAT32（与 Load_X / Unload_X 字序一致）
+inline float readFloatFromCommandBlock(const QVector<quint16>& commandBlock, int startOffset)
+{
+    return realFromCdabWords(commandBlock.value(startOffset), commandBlock.value(startOffset + 1));
+}
+
+/// 从命令块读取机械臂末端中心点位姿（40029~40040）
+inline Pose6f readRobotTcpPoseFromCommandBlock(const QVector<quint16>& commandBlock)
+{
+    return {
+        readFloatFromCommandBlock(commandBlock, kRobotTcpX),
+        readFloatFromCommandBlock(commandBlock, kRobotTcpY),
+        readFloatFromCommandBlock(commandBlock, kRobotTcpZ),
+        readFloatFromCommandBlock(commandBlock, kRobotTcpRx),
+        readFloatFromCommandBlock(commandBlock, kRobotTcpRy),
+        readFloatFromCommandBlock(commandBlock, kRobotTcpRz),
+    };
+}
 
 /// 从 40015/40016 解析段号：优先非零的 40015，否则读 40016（机械臂经 PLC 转发）
 inline quint16 resolveScanSegmentIndexFromBlock(const QVector<quint16>& commandBlock)

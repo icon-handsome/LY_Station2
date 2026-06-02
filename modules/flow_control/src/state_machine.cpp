@@ -836,6 +836,7 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
 
     const QVector<quint16> previousCommandBlock = m_lastCommandBlock;
     m_lastCommandBlock = values;       // 保存最新的命令块数据
+    m_robotTcpPose = protocol::registers::readRobotTcpPoseFromCommandBlock(values);
     resetModbusFailureCounter();       // 通信成功，重置失败计数器
 
     // 判断命令块是否发生业务变化：忽略 PLC_Heartbeat，避免每 100ms 因心跳刷屏
@@ -881,7 +882,15 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
             << "Trig_CodeRead=" << values.value(regs::modbusIndexFromPlcAddress(40027))
             << "Trig_ResultReset=" << values.value(regs::modbusIndexFromPlcAddress(40028))
             << "TaskIdHigh=" << values.value(regs::kTaskIdHigh)
-            << "TaskIdLow=" << values.value(regs::kTaskIdLow);
+            << "TaskIdLow=" << values.value(regs::kTaskIdLow)
+            << "RobotTcp="
+            << QStringLiteral("x=%1 y=%2 z=%3 rx=%4 ry=%5 rz=%6")
+                   .arg(m_robotTcpPose.x, 0, 'f', 3)
+                   .arg(m_robotTcpPose.y, 0, 'f', 3)
+                   .arg(m_robotTcpPose.z, 0, 'f', 3)
+                   .arg(m_robotTcpPose.rx, 0, 'f', 3)
+                   .arg(m_robotTcpPose.ry, 0, 'f', 3)
+                   .arg(m_robotTcpPose.rz, 0, 'f', 3);
     }
 
     // 命令块原始寄存器值：只在首次读取或内容变化时打印
@@ -932,10 +941,22 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
             "Trig_SelfCheck",          // 26
             "Trig_CodeRead",           // 27
             "Trig_ResultReset",        // 28
-            "Reserved_29",             // 29
+            "RobotTcp_X_L",            // 29  40029
+            "RobotTcp_X_H",            // 30  40030
+            "RobotTcp_Y_L",            // 31
+            "RobotTcp_Y_H",            // 32
+            "RobotTcp_Z_L",            // 33
+            "RobotTcp_Z_H",            // 34
+            "RobotTcp_Rx_L",           // 35
+            "RobotTcp_Rx_H",           // 36
+            "RobotTcp_Ry_L",           // 37
+            "RobotTcp_Ry_H",           // 38
+            "RobotTcp_Rz_L",           // 39  40039
+            "RobotTcp_Rz_H",           // 40  40040
         };
         constexpr int kNameCount = sizeof(kRegisterNames) / sizeof(kRegisterNames[0]);
-        const int compareCount = qMin(previousCommandBlock.size(), qMin(values.size(), 30));
+        const int compareCount = qMin(previousCommandBlock.size(),
+                                      qMin(values.size(), protocol::registers::kCommandBlockSize));
 
         QStringList changedFields;
         for (int index = 0; index < compareCount; ++index) {

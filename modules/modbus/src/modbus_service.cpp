@@ -20,9 +20,9 @@ Q_LOGGING_CATEGORY(LOG_MODBUS, "modbus")
 namespace {
 /// 寄存器总大小：覆盖 40001-40200（offset 0-199），足够容纳命令区+结果区+预留
 constexpr int kTotalRegisterCount = 200;
-/// 命令区（PLC 写入）：offset 0-39
+/// 命令区（PLC 写入）：offset 0-40，覆盖 PLC 40001~40040
 constexpr int kCommandBlockStart = 0;
-constexpr int kCommandBlockSize = 40;
+constexpr int kCommandBlockSize = 41;
 /// 结果区（IPC 写入，PLC 读取）：offset 100-183
 constexpr int kResultBlockStart = 101;  // 40101，与 plc_protocol 一致（40000+下标）
 constexpr int kResultBlockSize = 84;

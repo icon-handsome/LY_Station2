@@ -95,6 +95,9 @@ public:
     /// 获取最近一次 PLC 命令块快照（供 HMI 状态推送使用）
     const QVector<quint16>& lastCommandBlock() const { return m_lastCommandBlock; }
 
+    /// PLC 下发的机械臂末端中心点位姿（40029~40040，CDAB FLOAT32）
+    protocol::Pose6f robotTcpPose() const { return m_robotTcpPose; }
+
     /// 注册综合检测结果推送回调（tracking 不可用等路径由状态机补发）
     void setInspectionResultPublisher(std::function<void(const tracking::InspectionResult&)> publisher);
 
@@ -541,6 +544,7 @@ private:
     QElapsedTimer m_pollRequestTimer;                       // 当前轮询请求耗时计时器
     int m_consecutiveModbusFailures = 0;                    // 连续 Modbus 失败次数
     QVector<quint16> m_lastCommandBlock;                    // 上一次命令块副本
+    protocol::Pose6f m_robotTcpPose;                         // 机械臂末端中心点位姿（PLC→IPC）
     
     // === 多路径支持：二维缓存结构（路径ID → 段号 → 数据） ===
     QMap<int, QMap<int, scan_tracking::mech_eye::CaptureResult>> m_pathSegmentCaptureResults;  // 多路径点云缓存
