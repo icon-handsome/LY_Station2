@@ -55,42 +55,20 @@ bool isHighFrequencyTcpType(const QString& type)
         || type == QLatin1String(kEventLog);
 }
 
-/// status.camera 单行摘要（仅在实际下发时打印，与显控 payload 变更去重一致）
-QString summarizeCameraStatusPayload(const QJsonObject& payload)
+bool isStatusPushType(const QString& type)
 {
-    QStringList parts;
+    using namespace msg_type;
+    return type == QLatin1String(kStatusSystem)
+        || type == QLatin1String(kStatusPlc)
+        || type == QLatin1String(kStatusCamera)
+        || type == QLatin1String(kStatusDevice);
+}
 
-    const QJsonObject mechEye = payload.value(QLatin1String("mechEye")).toObject();
-    if (!mechEye.isEmpty()) {
-        parts << QStringLiteral("梅卡(状态=%1,已连接=%2)")
-                     .arg(mechEye.value(QLatin1String("state")).toInt(-1))
-                     .arg(mechEye.value(QLatin1String("connected")).toBool() ? 1 : 0);
-    }
-
-    const QJsonObject hikA = payload.value(QLatin1String("hikA")).toObject();
-    if (!hikA.isEmpty()) {
-        parts << QStringLiteral("海康A(已连接=%1)")
-                     .arg(hikA.value(QLatin1String("connected")).toBool() ? 1 : 0);
-    }
-
-    const QJsonObject hikB = payload.value(QLatin1String("hikB")).toObject();
-    if (!hikB.isEmpty()) {
-        parts << QStringLiteral("海康B(已连接=%1)")
-                     .arg(hikB.value(QLatin1String("connected")).toBool() ? 1 : 0);
-    }
-
-    const QJsonObject hikC = payload.value(QLatin1String("hikC")).toObject();
-    if (!hikC.isEmpty()) {
-        parts << QStringLiteral("海康C(已连接=%1)")
-                     .arg(hikC.value(QLatin1String("connected")).toBool() ? 1 : 0);
-    }
-
-    const QJsonObject pipeline = payload.value(QLatin1String("pipeline")).toObject();
-    if (!pipeline.isEmpty()) {
-        parts << QStringLiteral("流水线(状态=%1)")
-                     .arg(pipeline.value(QLatin1String("state")).toInt(-1));
-    }
-    return parts.isEmpty() ? QStringLiteral("（空）") : parts.join(QLatin1String(" "));
+void logStatusPushTx(const QString& type, const QString& msgId, const QJsonObject& payload)
+{
+    qInfo(LOG_HMI_SERVER).noquote()
+        << QStringLiteral("[TCPIP] → TX") << type << msgId
+        << summarizeHmiTracePayload(type, payload);
 }
 
 // TODO(hmi): 远程 event.log 转发默认关闭，优先保证 TCP 简洁与主业务打通。
@@ -271,7 +249,6 @@ void HmiTcpServer::onNewConnection()
         m_statusPushTimer->start();
         m_heartbeatTimer->start();
 
-        // 发送 core.hello 欢迎消息
         sendToClient(buildEnvelope(QStringLiteral("core.hello"), nextEventId(), QJsonObject()));
         pushAllStatusToClient();
         syncCameraConnectivityCache();
@@ -292,6 +269,8 @@ void HmiTcpServer::onSessionDisconnected()
 
 void HmiTcpServer::onSessionHeartbeatTimeout()
 {
+    qWarning(LOG_HMI_SERVER).noquote()
+        << QStringLiteral("[TCPIP] 显控心跳超时（约 6s 无有效报文），断开会话");
     if (m_session) {
         m_session->disconnect();
     }
@@ -342,8 +321,12 @@ void HmiTcpServer::onMessageReceived(const QJsonObject& message)
     const QString type = message.value(QLatin1String("type")).toString();
     const QString msgId = message.value(QLatin1String("msgId")).toString();
     
-    // 本地单行摘要；完整 JSON 不再打印/转发，避免套娃与刷屏
-    if (!isHighFrequencyTcpType(type)) {
+    if (kHmiTcpVerboseTrace) {
+        const QJsonObject payload = message.value(QLatin1String("payload")).toObject();
+        qInfo(LOG_HMI_SERVER).noquote()
+            << QStringLiteral("[TCPIP] ← RX") << type << msgId
+            << summarizeHmiTracePayload(type, payload);
+    } else if (!isHighFrequencyTcpType(type)) {
         qDebug(LOG_HMI_SERVER).noquote()
             << QStringLiteral("[TCPIP] 接收") << type << msgId;
     }
@@ -360,7 +343,8 @@ void HmiTcpServer::onMessageReceived(const QJsonObject& message)
         (this->*it.value())(message);
     } else {
         // 未知消息类型，返回错误响应
-        qWarning(LOG_HMI_SERVER) << "收到未知类型的消息:" << type;
+        qWarning(LOG_HMI_SERVER).noquote()
+            << QStringLiteral("[TCPIP] 未知消息类型:") << type << msgId;
         sendResponse(type, msgId, false, QStringLiteral("未知命令类型"));
     }
 }
@@ -811,10 +795,10 @@ bool HmiTcpServer::pushStatusIfChanged(const QString& type, const QJsonObject& p
     }
     slot.payload = payload;
     slot.isValid = true;
-    sendToClient(buildEnvelope(type, nextEventId(), payload));
-    if (hasClient() && type == QLatin1String(msg_type::kStatusCamera)) {
-        qInfo(LOG_HMI_SERVER).noquote()
-            << QStringLiteral("[TCPIP] 推送 status.camera |") << summarizeCameraStatusPayload(payload);
+    const QString msgId = nextEventId();
+    sendToClient(buildEnvelope(type, msgId, payload));
+    if (hasClient() && isStatusPushType(type)) {
+        logStatusPushTx(type, msgId, payload);
     }
     return true;
 }
@@ -1553,8 +1537,11 @@ void HmiTcpServer::sendToClient(const QJsonObject& envelope)
     const QString msgId = envelope.value(QLatin1String("msgId")).toString();
 
     g_inTcpSend = true;
-    if (!isHighFrequencyTcpType(type)) {
-        qDebug(LOG_HMI_SERVER).noquote() << QStringLiteral("[TCPIP] 发送") << type << msgId;
+    if (kHmiTcpVerboseTrace) {
+        const QJsonObject payload = envelope.value(QLatin1String("payload")).toObject();
+        qInfo(LOG_HMI_SERVER).noquote()
+            << QStringLiteral("[TCPIP] → TX") << type << msgId
+            << summarizeHmiTracePayload(type, payload);
     }
     m_session->sendMessage(envelope);
     g_inTcpSend = false;

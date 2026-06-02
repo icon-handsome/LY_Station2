@@ -85,6 +85,13 @@ void HmiSession::sendMessage(const QJsonObject& envelope)
     }
 
     const QByteArray frame = serializeFrame(envelope);
+    if (kHmiTcpVerboseTrace) {
+        const QString type = envelope.value(QLatin1String("type")).toString();
+        const QString msgId = envelope.value(QLatin1String("msgId")).toString();
+        qInfo(LOG_SESSION).noquote()
+            << QStringLiteral("[TCPIP] 发帧") << frame.size() << QStringLiteral("B")
+            << type << msgId;
+    }
     m_socket->write(frame);
 }
 
@@ -150,11 +157,20 @@ void HmiSession::onReadyRead()
 
         m_buffer.remove(0, totalFrameSize);
 
+        const QJsonObject message = doc.object();
+        if (kHmiTcpVerboseTrace) {
+            const QString type = message.value(QLatin1String("type")).toString();
+            const QString msgId = message.value(QLatin1String("msgId")).toString();
+            qInfo(LOG_SESSION).noquote()
+                << QStringLiteral("[TCPIP] 收帧") << totalFrameSize << QStringLiteral("B JSON=")
+                << jsonLength << type << msgId;
+        }
+
         // 收到有效消息，重置心跳计时器
         resetHeartbeatTimer();
 
         // 发出消息接收信号，交由 HmiTcpServer 处理
-        emit messageReceived(doc.object());
+        emit messageReceived(message);
     }
 }
 
@@ -167,7 +183,8 @@ void HmiSession::onSocketDisconnected()
 
 void HmiSession::onHeartbeatTimeout()
 {
-    qWarning(LOG_SESSION) << "HMI 客户端心跳超时:" << peerDescription();
+    qWarning(LOG_SESSION).noquote()
+        << QStringLiteral("[TCPIP] 会话心跳超时，客户端:") << peerDescription();
     emit heartbeatTimeout();
 }
 

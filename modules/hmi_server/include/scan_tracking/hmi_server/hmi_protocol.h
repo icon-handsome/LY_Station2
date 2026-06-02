@@ -21,6 +21,9 @@ inline constexpr const char* kProtocolVersion = "1.0";
 /// 最大允许的单帧 JSON 字节大小（1MB）
 inline constexpr quint32 kMaxFrameSize = 1048576;
 
+/// 联调详细日志（心跳/每帧收发）；日常 false，仅 status.* 推送摘要见 pushStatusIfChanged
+inline constexpr bool kHmiTcpVerboseTrace = false;
+
 // ============================================================
 // 消息类型常量定义
 // ============================================================
@@ -113,6 +116,9 @@ QByteArray serializeFrame(const QJsonObject& envelope);
  * @brief 将协议 JSON 的 UTF-8 字节转为可安全写入日志的 QString（避免 QDebug 把 QByteArray 当 Latin-1 显示乱码）
  */
 QString frameJsonToLogString(const QByteArray& jsonUtf8);
+
+/// 联调日志用 payload 单行摘要（不含大段 JSON）
+QString summarizeHmiTracePayload(const QString& type, const QJsonObject& payload);
 
 }  // namespace hmi_server
 }  // namespace scan_tracking

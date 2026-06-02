@@ -11,7 +11,7 @@
 - HMI TCP 监听 **`config.ini [Hmi] tcpPort`**（默认 **9900**）。
 - 客户端连接后：`core.hello` + 四类 `status.*` 全量推送。
 - 周期：**500ms** 状态轮询（**payload 不变则不下发**，稳态不会刷 `status.camera`）、**2s** 心跳 `heartbeat.ping`。
-- Core 控制台：仅在实际下发 `status.camera` 时打印一行 `[TCPIP] status.camera TX | ...`（与显控同频，默认 `[Logger] level=1` 可见）。
+- Core `[TCPIP]`：默认仅在实际推送 `status.*`（payload 变化）时打印 `→ TX status.xxx` 摘要；需心跳/每帧 trace 时将 `hmi_protocol.h` 的 `kHmiTcpVerboseTrace` 改为 `true`。
 - 业务事件由状态机/相机/Modbus 触发上报。
 
 ---
