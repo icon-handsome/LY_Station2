@@ -2,57 +2,13 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Configure (Ninja Release)",
-      "type": "shell",
-      "command": "cmake",
-      "args": [
-        "--preset",
-        "win-msvc2019-qtcore-ninja-release"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "presentation": {
-        "reveal": "always",
-        "panel": "shared",
-        "clear": true
-      },
-      "problemMatcher": [],
-      "group": "build"
-    },
-    {
-      "label": "Build (Ninja Release)",
-      "type": "shell",
-      "command": "cmake",
-      "args": [
-        "--build",
-        "--preset",
-        "win-msvc2019-qtcore-ninja-release"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "dependsOn": [
-        "Configure (Ninja Release)"
-      ],
-      "dependsOrder": "sequence",
-      "presentation": {
-        "reveal": "always",
-        "panel": "shared",
-        "clear": true
-      },
-      "problemMatcher": [
-        "$msCompile"
-      ],
-      "group": "build"
-    },
-    {
       "label": "Configure (Ninja Debug)",
       "type": "shell",
-      "command": "cmake",
+      "command": "cmd",
       "args": [
-        "--preset",
-        "win-msvc2019-qtcore-ninja-debug"
+        "/c",
+        "${workspaceFolder}/tools/scan_tracking_dev.cmd",
+        "configure-debug"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
@@ -68,19 +24,15 @@
     {
       "label": "Build (Ninja Debug)",
       "type": "shell",
-      "command": "cmake",
+      "command": "cmd",
       "args": [
-        "--build",
-        "--preset",
-        "win-msvc2019-qtcore-ninja-debug"
+        "/c",
+        "${workspaceFolder}/tools/scan_tracking_dev.cmd",
+        "build-debug"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
       },
-      "dependsOn": [
-        "Configure (Ninja Debug)"
-      ],
-      "dependsOrder": "sequence",
       "presentation": {
         "reveal": "always",
         "panel": "shared",
@@ -95,22 +47,17 @@
       }
     },
     {
-      "label": "Run scan-tracking",
+      "label": "Run scan-tracking (Debug)",
       "type": "shell",
-      "command": "${workspaceFolder}/tools/scan_tracking_dev.cmd",
+      "command": "cmd",
       "args": [
+        "/c",
+        "${workspaceFolder}/tools/scan_tracking_dev.cmd",
         "run-debug"
       ],
       "options": {
-        "cwd": "${workspaceFolder}",
-        "env": {
-          "PATH": "${workspaceFolder}/build/win-msvc2019-qtcore-ninja-debug/app;${workspaceFolder}/build/win-msvc2019-qtcore-ninja-debug/app/mech_eye_api;${workspaceFolder}/build/win-msvc2019-qtcore-ninja-debug/app/ThirdParty;${workspaceFolder}/build/win-msvc2019-qtcore-ninja-debug/app/hik_mvs_runtime;${workspaceFolder}/build/win-msvc2019-qtcore-ninja-debug/app/OpenNI2;${workspaceFolder}/build/win-msvc2019-qtcore-ninja-debug/app/OpenNI2/Drivers;C:/Qt/5.15.2/msvc2019_64/bin;C:/Program Files/PCL 1.12.0/bin;C:/Program Files/PCL 1.12.0/3rdParty/VTK/bin;C:/Program Files/OpenNI2/Redist;${workspaceFolder}/third_party/LB/opencv-3.4.3-vc14_vc15/opencv/build/x64/vc15/bin;${workspaceFolder}/third_party/Mech-Eye SDK-2.5.4/API/dll;${workspaceFolder}/third_party/Mech-Eye SDK-2.5.4/API/dll_debug;${env:PATH}"
-        }
+        "cwd": "${workspaceFolder}"
       },
-      "dependsOn": [
-        "Build (Ninja Debug)"
-      ],
-      "dependsOrder": "sequence",
       "presentation": {
         "reveal": "always",
         "panel": "dedicated",
@@ -120,15 +67,102 @@
       "problemMatcher": []
     },
     {
-      "label": "Rebuild (Ninja Debug)",
-      "type": "shell",
-      "command": "${workspaceFolder}/tools/scan_tracking_dev.cmd",
-      "args": [
-        "build-debug"
-      ],
+      "label": "Build and Run (Debug)",
       "dependsOn": [
-        "Clean Build Directory",
-        "Configure (Ninja Debug)"
+        "Build (Ninja Debug)",
+        "Run scan-tracking (Debug)"
+      ],
+      "dependsOrder": "sequence",
+      "problemMatcher": []
+    },
+    {
+      "label": "Configure (Ninja Release)",
+      "type": "shell",
+      "command": "cmd",
+      "args": [
+        "/c",
+        "${workspaceFolder}/tools/scan_tracking_dev.cmd",
+        "configure-release"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": [],
+      "group": "build"
+    },
+    {
+      "label": "Build (Ninja Release)",
+      "type": "shell",
+      "command": "cmd",
+      "args": [
+        "/c",
+        "${workspaceFolder}/tools/scan_tracking_dev.cmd",
+        "build-release"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": [
+        "$msCompile"
+      ],
+      "group": "build"
+    },
+    {
+      "label": "Run scan-tracking (Release)",
+      "type": "shell",
+      "command": "cmd",
+      "args": [
+        "/c",
+        "${workspaceFolder}/tools/scan_tracking_dev.cmd",
+        "run-release"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true,
+        "close": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Refresh compile_commands (clangd)",
+      "type": "shell",
+      "command": "cmd",
+      "args": [
+        "/c",
+        "${workspaceFolder}/tools/scan_tracking_dev.cmd",
+        "configure-debug"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared",
+        "showReuseMessage": false
+      },
+      "problemMatcher": [],
+      "group": "none"
+    },
+    {
+      "label": "Rebuild (Ninja Debug)",
+      "dependsOn": [
+        "Clean Build Directory (Debug)",
+        "Configure (Ninja Debug)",
+        "Build (Ninja Debug)"
       ],
       "dependsOrder": "sequence",
       "presentation": {
@@ -142,7 +176,7 @@
       "group": "build"
     },
     {
-      "label": "Clean Build Directory",
+      "label": "Clean Build Directory (Debug)",
       "type": "shell",
       "command": "powershell",
       "args": [

@@ -1,26 +1,51 @@
+# Cursor / clangd：与 VS 共用 Ninja 构建目录中的 compile_commands.json
+# 路径相对仓库根目录，换机器时只需保持同一 preset 的 build 目录即可。
+
 CompileFlags:
-  CompilationDatabase: D:/work/scan-tracking-build/win-msvc2019-qtcore-ninja-debug
+  CompilationDatabase: build/win-msvc2019-qtcore-ninja-debug
   Add:
     - --driver-mode=cl
   Remove:
     - /external:W0
 
 Index:
-  Background: Skip
-  Exclude:
-    - build/**
+  StandardLibrary: Yes
 
 ---
+
+# 不索引生成物与 IDE 本地库（减轻卡顿；不影响 VS 的 .vs 索引）
 If:
-  PathMatch: .*/third_party/.*
+  PathMatch: .*/(build|\.vs|\.cache)(/|$).*
+
+Index:
+  Background: Skip
+
+---
+
+# 跳过体积巨大的第三方预编译树（头文件仍可通过 compile_commands 解析）
+If:
+  PathMatch: .*/third_party/LB/opencv[^/]*/.*
+
+Index:
+  Background: Skip
+
+---
+
+If:
+  PathMatch: .*/third_party/MVS/(Applications|MVS)/.*
+
+Index:
+  Background: Skip
+
+---
+
+If:
+  PathMatch: .*/third_party/.*/(bin|lib|runtime|logs|data|config)(/|$).*
 
 Index:
   Background: Skip
 
 Diagnostics:
   UnusedIncludes: None
----
-If:
-  PathMatch: .*/third_party/.*/(bin|lib|runtime|logs|data|config)/.*
-Index:
-  Background: Skip
+  Suppress:
+    - "*-unused-includes"

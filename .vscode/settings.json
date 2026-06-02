@@ -4,19 +4,47 @@
     "cmake.defaultConfigurePreset": "win-msvc2019-qtcore-ninja-debug",
     "cmake.defaultBuildPreset": "win-msvc2019-qtcore-ninja-debug",
     "cmake.configureOnOpen": false,
-    "clangd.path": "D:/work/tools/clangd_22.1.0/bin/clangd.exe",
+    "cmake.buildBeforeRun": false,
+    "cmake.automaticReconfigure": false,
+    "cmake.buildTask": false,
+
+    "task.allowAutomaticTasks": "off",
+
+    "clangd.enable": true,
+    "clangd.path": "C:/Users/wyx/AppData/Local/Microsoft/WinGet/Packages/LLVM.clangd_Microsoft.Winget.Source_8wekyb3d8bbwe/clangd_22.1.0/bin/clangd.exe",
+    "clangd.checkUpdates": false,
+    "clangd.detectExtensionConflicts": false,
+    "clangd.semanticHighlighting": false,
+    "clangd.onConfigChanged": "ignore",
+    "clangd.arguments": [
+        "--background-index",
+        "--pch-storage=disk",
+        "-j=4",
+        "--clang-tidy=0",
+        "--header-insertion=never",
+        "--query-driver=C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.29.30133/bin/Hostx64/x64/cl.exe",
+        "--log=info"
+    ],
+
     "C_Cpp.intelliSenseEngine": "Disabled",
     "C_Cpp.errorSquiggles": "Disabled",
-    "clangd.arguments": [
-        "--compile-commands-dir=${workspaceFolder}/build/win-msvc2019-qtcore-ninja-debug",
-        "-j=1",
-        "--pch-storage=disk",
-        "--query-driver=C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.29.30133/bin/Hostx64/x64/cl.exe",
-        "--log=error"
-    ],
+    "C_Cpp.intelliSenseEngineFallback": "Disabled",
+    "C_Cpp.autocomplete": "Disabled",
+    "C_Cpp.codeAnalysis.runAutomatically": false,
+    "C_Cpp.workspaceSymbols": "None",
+    "C_Cpp.enhancedColorization": "Disabled",
+    "C_Cpp.formatting": "Disabled",
+    "C_Cpp.autoAddFileAssociations": false,
+
+    "editor.gotoLocation.multipleDefinitions": "goto",
+    "editor.gotoLocation.multipleReferences": "goto",
+    "editor.definitionLinkOpensInPeek": false,
+
     "files.exclude": {
         "**/.cache": true,
         "**/.cache/**": true,
+        "**/.vs": true,
+        "**/.vs/**": true,
         "**/third_party/**/data/**": true,
         "**/third_party/**/config/**": true,
         "**/third_party/**/logs/**": true,
@@ -27,6 +55,9 @@
     "search.exclude": {
         "**/.cache": true,
         "**/.cache/**": true,
+        "**/.vs": true,
+        "**/.vs/**": true,
+        "**/build/**": true,
         "**/third_party/**/bin/**": true,
         "**/third_party/**/lib/**": true,
         "**/third_party/**/runtime/**": true,
@@ -41,14 +72,13 @@
     "files.watcherExclude": {
         "**/.cache/**": true,
         "**/.git/**": true,
+        "**/.vs/**": true,
+        "**/build/**": true,
         "**/third_party/**/bin/**": true,
         "**/third_party/**/lib/**": true,
         "**/third_party/**/runtime/**": true,
         "**/third_party/**/logs/**": true,
         "**/third_party/**/data/**": true,
         "**/third_party/**/config/**": true
-    },
-    "C_Cpp.intelliSenseEngineFallback": "Disabled",
-    "C_Cpp.autocomplete": "Disabled",
-    "C_Cpp.codeAnalysis.runAutomatically": false
+    }
 }
