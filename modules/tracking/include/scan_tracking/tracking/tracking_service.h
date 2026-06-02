@@ -35,8 +35,6 @@ struct InspectionMeasurement {
     float headDepthTol = 0.0f;        ///< head_depth_tol 封头深度
 };
 
-Q_DECLARE_METATYPE(scan_tracking::tracking::InspectionMeasurement)
-
 /// 将测量项写入 JSON payload（协议 snake_case 字段名）
 void appendInspectionMeasurementFields(QJsonObject& payload, const InspectionMeasurement& measurement);
 
@@ -114,3 +112,5 @@ private:
 
 }  // namespace tracking
 }  // namespace scan_tracking
+
+Q_DECLARE_METATYPE(scan_tracking::tracking::InspectionMeasurement)

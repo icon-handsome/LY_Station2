@@ -371,14 +371,6 @@ bool lookupNeedRotationForSegment(int pathId, int segmentIndex)
     return false;
 }
 
-QString selectedSegmentTextForInspection(const scan_tracking::common::TrackingConfig& tracking)
-{
-    return QStringLiteral("[%1,%2,%3]")
-        .arg(tracking.firstStationOuterSegmentIndex)
-        .arg(tracking.firstStationInnerSegmentIndex)
-        .arg(tracking.firstStationHoleSegmentIndex);
-}
-
 /// 日志中展示 PLC 原始字；若与下游解码值不同则注明（如 16256→段号1）
 QString formatPlcRegisterValueForLog(int modbusIndex, quint16 rawValue)
 {
@@ -547,7 +539,7 @@ StateMachine::StateMachine(
     // 从配置管理器获取流程控制配置，如果配置不存在则使用默认值
     const auto* configMgr = common::ConfigManager::instance();
     const auto flowConfig = configMgr ? configMgr->flowControlConfig()
-                                      : common::FlowControlConfig{100, 1000, 300};
+                                      : common::FlowControlConfig{100, 1000, 300, {}};
 
     // 配置定时器间隔
     m_pollTimer->setInterval(flowConfig.pollIntervalMs);      // PLC 轮询间隔
@@ -993,7 +985,8 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
     // 如果当前有活动任务且已完成宣告，检查 PLC 是否已释放触发信号
     if (m_activeTask.definition != nullptr && m_activeTask.completionAnnounced) {
         // 多路径：检测已握手完成但 PLC 仍保持 Trig_Inspection=1，同时要继续扫下一路径 → 勿阻塞
-        if (m_activeTask.definition->stage == protocol::Stage::Inspection && scanPending) {
+        if (m_activeTask.definition->stage == protocol::Stage::Inspection && scanPending
+            && inspectionPending) {
             qWarning(LOG_FLOW).noquote()
                 << QStringLiteral("[多路径] 检测已完成但 Trig_Inspection 仍为 1，")
                 << QStringLiteral("Trig_ScanSegment=1，强制收尾活动任务以继续扫描。")
