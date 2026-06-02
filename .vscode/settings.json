@@ -1,6 +1,6 @@
 {
     "cmake.useCMakePresets": "always",
-    "cmake.cmakePath": "C:/Python311/Scripts/cmake.exe",
+    "cmake.cmakePath": "C:/Program Files/CMake/bin/cmake.exe",
     "cmake.defaultConfigurePreset": "win-msvc2019-qtcore-ninja-debug",
     "cmake.defaultBuildPreset": "win-msvc2019-qtcore-ninja-debug",
     "cmake.configureOnOpen": false,

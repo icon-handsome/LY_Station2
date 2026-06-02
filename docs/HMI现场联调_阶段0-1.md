@@ -40,6 +40,8 @@ Qt 显控应能解析并展示：
 - `status.camera` — mechEye / hikA / hikB / hikC
 - `status.device` — onlineWord0 / faultWord0（位定义见协议 §2.4）
 
+梅卡/海康 **连接或断开** 时（不含采图过程）另收 `event.alarm`：`level=1` 已连接 / `level=2` 已断开，`code` 910–913，文案含「已连接」「已断开」。新客户端接入时只同步状态，不刷历史 alarm。
+
 触发 PLC 流程后应收到：
 
 - `event.scan.started` / `event.scan.finished`

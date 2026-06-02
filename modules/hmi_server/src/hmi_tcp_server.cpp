@@ -97,6 +97,12 @@ QString summarizeCameraStatusPayload(const QJsonObject& payload)
 // 若显控需要「远程日志页」，将此处改为 true，并确认 install/uninstall 成对调用。
 constexpr bool kForwardQtLogsToHmi = false;
 
+// 相机连/断 event.alarm 专用 code（与 Modbus 900 段区分）
+constexpr int kAlarmCodeMechEyeConnect = 910;
+constexpr int kAlarmCodeMechEyeDisconnect = 911;
+constexpr int kAlarmCodeHikConnect = 912;
+constexpr int kAlarmCodeHikDisconnect = 913;
+
 bool shouldForwardLogToHmi(QtMsgType type, const QString& category, const QString& msg)
 {
     if (g_inTcpSend || g_inLogForward) {
@@ -268,6 +274,7 @@ void HmiTcpServer::onNewConnection()
         // 发送 core.hello 欢迎消息
         sendToClient(buildEnvelope(QStringLiteral("core.hello"), nextEventId(), QJsonObject()));
         pushAllStatusToClient();
+        syncCameraConnectivityCache();
     }
 }
 
@@ -793,6 +800,7 @@ void HmiTcpServer::invalidateStatusPushCache()
     m_plcStatusCache = {};
     m_cameraStatusCache = {};
     m_deviceStatusCache = {};
+    m_cameraConnectivityCache = {};
 }
 
 bool HmiTcpServer::pushStatusIfChanged(const QString& type, const QJsonObject& payload,
@@ -840,6 +848,7 @@ void HmiTcpServer::syncStatusPushCacheFromCurrent()
     m_cameraStatusCache.isValid = true;
     m_deviceStatusCache.payload = buildDeviceStatusPayload();
     m_deviceStatusCache.isValid = true;
+    syncCameraConnectivityCache();
 }
 
 void HmiTcpServer::pushSystemStatus()
@@ -916,6 +925,111 @@ void HmiTcpServer::pushCameraStatus()
 {
     const QJsonObject payload = buildCameraStatusPayload();
     pushStatusIfChanged(QLatin1String(msg_type::kStatusCamera), payload, m_cameraStatusCache);
+    checkCameraConnectivityEdges();
+}
+
+bool HmiTcpServer::mechEyeConnected() const
+{
+    if (!m_mechEyeService) {
+        return false;
+    }
+    const auto state = m_mechEyeService->state();
+    return state != mech_eye::CameraRuntimeState::Idle
+        && state != mech_eye::CameraRuntimeState::Error;
+}
+
+void HmiTcpServer::syncCameraConnectivityCache()
+{
+    if (m_mechEyeService) {
+        m_cameraConnectivityCache.mechEye = mechEyeConnected();
+    }
+    if (m_hikCameraA) {
+        m_cameraConnectivityCache.hikA = m_hikCameraA->isConnected();
+    }
+    if (m_hikCameraB) {
+        m_cameraConnectivityCache.hikB = m_hikCameraB->isConnected();
+    }
+    if (m_hikCameraC || m_hikCameraCController) {
+        m_cameraConnectivityCache.hikC = hikCameraCConnected();
+    }
+    m_cameraConnectivityCache.valid = true;
+}
+
+void HmiTcpServer::emitCameraConnectivityAlarm(const QString& deviceLabel, bool connected, int code)
+{
+    if (!hasClient()) {
+        return;
+    }
+    QJsonObject payload;
+    payload[QLatin1String("message")] = connected
+        ? QStringLiteral("%1已连接").arg(deviceLabel)
+        : QStringLiteral("%1已断开").arg(deviceLabel);
+    payload[QLatin1String("level")] = connected ? 1 : 2;
+    payload[QLatin1String("code")] = code;
+    payload[QLatin1String("timestamp")] = QDateTime::currentMSecsSinceEpoch();
+    sendToClient(buildEnvelope(QLatin1String(msg_type::kEventAlarm), nextEventId(), payload));
+}
+
+void HmiTcpServer::checkCameraConnectivityEdges()
+{
+    if (!hasClient()) {
+        return;
+    }
+    if (!m_cameraConnectivityCache.valid) {
+        syncCameraConnectivityCache();
+        return;
+    }
+
+    if (m_mechEyeService) {
+        const bool nowConnected = mechEyeConnected();
+        if (nowConnected != m_cameraConnectivityCache.mechEye) {
+            emitCameraConnectivityAlarm(
+                QStringLiteral("梅卡相机"),
+                nowConnected,
+                nowConnected ? kAlarmCodeMechEyeConnect : kAlarmCodeMechEyeDisconnect);
+            m_cameraConnectivityCache.mechEye = nowConnected;
+        }
+    }
+
+    if (m_hikCameraA) {
+        const bool nowConnected = m_hikCameraA->isConnected();
+        if (nowConnected != m_cameraConnectivityCache.hikA) {
+            const QString label = QStringLiteral("海康相机 [%1]").arg(m_hikCameraA->roleName());
+            emitCameraConnectivityAlarm(
+                label,
+                nowConnected,
+                nowConnected ? kAlarmCodeHikConnect : kAlarmCodeHikDisconnect);
+            m_cameraConnectivityCache.hikA = nowConnected;
+        }
+    }
+
+    if (m_hikCameraB) {
+        const bool nowConnected = m_hikCameraB->isConnected();
+        if (nowConnected != m_cameraConnectivityCache.hikB) {
+            const QString label = QStringLiteral("海康相机 [%1]").arg(m_hikCameraB->roleName());
+            emitCameraConnectivityAlarm(
+                label,
+                nowConnected,
+                nowConnected ? kAlarmCodeHikConnect : kAlarmCodeHikDisconnect);
+            m_cameraConnectivityCache.hikB = nowConnected;
+        }
+    }
+
+    if (m_hikCameraC || m_hikCameraCController) {
+        const bool nowConnected = hikCameraCConnected();
+        if (nowConnected != m_cameraConnectivityCache.hikC) {
+            QString roleName = QStringLiteral("hikC");
+            if (m_hikCameraC) {
+                roleName = m_hikCameraC->roleName();
+            }
+            const QString label = QStringLiteral("海康相机 [%1]").arg(roleName);
+            emitCameraConnectivityAlarm(
+                label,
+                nowConnected,
+                nowConnected ? kAlarmCodeHikConnect : kAlarmCodeHikDisconnect);
+            m_cameraConnectivityCache.hikC = nowConnected;
+        }
+    }
 }
 
 QJsonObject HmiTcpServer::buildCameraStatusPayload() const

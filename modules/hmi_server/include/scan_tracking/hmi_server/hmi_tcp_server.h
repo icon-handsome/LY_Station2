@@ -201,8 +201,19 @@ private:
 
     QJsonObject buildCameraStatusPayload() const;
 
+    /// 梅卡 connected 语义（与 buildCameraStatusPayload 一致，采图过程仍视为已连接）
+    bool mechEyeConnected() const;
+
     /// 海康 C：SDK 已连接或智能相机 TCP 已接入视为在线（与 A/B 的 isConnected 语义对齐显控）
     bool hikCameraCConnected() const;
+
+    /// 同步相机连/断边沿缓存（新客户端接入或拉全量状态后调用，不发送 alarm）
+    void syncCameraConnectivityCache();
+
+    /// 检测 connected 边沿并向显控发送 event.alarm（仅连/断，不含采图过程 state 变化）
+    void checkCameraConnectivityEdges();
+
+    void emitCameraConnectivityAlarm(const QString& deviceLabel, bool connected, int code);
     
     /// 向 Qt 端周期性推送设备在线状态字和故障状态字（对应协议 status.device）
     void pushDeviceStatus();
@@ -281,6 +292,16 @@ private:
     HmiStatusPushCache m_plcStatusCache;     ///< status.plc 去重缓存
     HmiStatusPushCache m_cameraStatusCache;  ///< status.camera 去重缓存
     HmiStatusPushCache m_deviceStatusCache;  ///< status.device 去重缓存
+
+    /// 相机 connected 边沿缓存（与 status.camera 判定一致，用于连/断 alarm）
+    struct CameraConnectivityCache {
+        bool mechEye = false;
+        bool hikA = false;
+        bool hikB = false;
+        bool hikC = false;
+        bool valid = false;
+    };
+    CameraConnectivityCache m_cameraConnectivityCache;
 
     bool m_serviceSignalsBound = false;      ///< 是否已 bindServiceSignals
 
