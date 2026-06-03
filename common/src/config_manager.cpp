@@ -177,6 +177,62 @@ const VisionConfig& ConfigManager::visionConfig() const { return m_visionConfig;
 const FlowControlConfig& ConfigManager::flowControlConfig() const { return m_flowControlConfig; }
 const TrackingConfig& ConfigManager::trackingConfig() const { return m_trackingConfig; }
 const BevelConfig& ConfigManager::bevelConfig() const { return m_bevelConfig; }
+
+QVector<BevelRecipePreset> standardBevelRecipePresets()
+{
+    return {
+        BevelRecipePreset{
+            0,
+            QStringLiteral("45deg_1mm"),
+            45.0f,
+            1.0f,
+        },
+        BevelRecipePreset{
+            1,
+            QStringLiteral("30deg_6mm"),
+            30.0f,
+            6.0f,
+        },
+    };
+}
+
+BevelRecipe bevelRecipePresetForType(int bevelType)
+{
+    for (const BevelRecipePreset& preset : standardBevelRecipePresets()) {
+        if (preset.bevelType == bevelType) {
+            BevelRecipe recipe;
+            recipe.active = true;
+            recipe.bevelType = preset.bevelType;
+            recipe.angleDeg = preset.angleDeg;
+            recipe.lengthMm = preset.lengthMm;
+            return recipe;
+        }
+    }
+    return BevelRecipe{};
+}
+
+void ConfigManager::setBevelRecipe(const BevelRecipe& recipe)
+{
+    std::lock_guard<std::mutex> lock(m_bevelRecipeMutex);
+    m_runtimeBevelRecipe = recipe;
+    m_runtimeBevelRecipe.active = true;
+    m_runtimeRecipeSet = true;
+}
+
+BevelRecipe ConfigManager::bevelRecipe() const
+{
+    std::lock_guard<std::mutex> lock(m_bevelRecipeMutex);
+    if (m_runtimeRecipeSet) {
+        return m_runtimeBevelRecipe;
+    }
+    return m_bevelConfig.defaultRecipe;
+}
+
+bool ConfigManager::hasActiveBevelRecipe() const
+{
+    return bevelRecipe().active;
+}
+
 const HmiConfig& ConfigManager::hmiConfig() const { return m_hmiConfig; }
 const LbPoseConfig& ConfigManager::lbPoseConfig() const { return m_lbPoseConfig; }
 const LbnPoseConfig& ConfigManager::lbnPoseConfig() const { return m_lbnPoseConfig; }
@@ -289,6 +345,11 @@ void ConfigManager::writeDefaults(QSettings& settings)
     settings.beginGroup("Bevel");
     settings.setValue("configPath", "bevel/config.txt");
     settings.setValue("templateDir", "bevel/data/templates");
+    settings.setValue("angleTolDeg", 2.0);
+    settings.setValue("lengthTolMm", 1.0);
+    settings.setValue("defaultBevelType", 0);
+    settings.setValue("defaultAngleDeg", 45.0);
+    settings.setValue("defaultLengthMm", 1.0);
     settings.endGroup();
 
     settings.beginGroup("Hmi");
@@ -479,6 +540,19 @@ void ConfigManager::load(const QString& filePath)
         settings.value("configPath", QStringLiteral("bevel/config.txt")).toString();
     m_bevelConfig.templateDir =
         settings.value("templateDir", QStringLiteral("bevel/data/templates")).toString();
+    m_bevelConfig.angleTolDeg =
+        settings.value("angleTolDeg", 2.0).toFloat();
+    m_bevelConfig.lengthTolMm =
+        settings.value("lengthTolMm", 1.0).toFloat();
+    m_bevelConfig.defaultRecipe.bevelType =
+        settings.value("defaultBevelType", 0).toInt();
+    m_bevelConfig.defaultRecipe.angleDeg =
+        settings.value("defaultAngleDeg", 45.0).toFloat();
+    m_bevelConfig.defaultRecipe.lengthMm =
+        settings.value("defaultLengthMm", 1.0).toFloat();
+    m_bevelConfig.defaultRecipe.active =
+        m_bevelConfig.defaultRecipe.angleDeg > 0.0f
+        && m_bevelConfig.defaultRecipe.lengthMm > 0.0f;
     settings.endGroup();
 
     settings.beginGroup("Hmi");

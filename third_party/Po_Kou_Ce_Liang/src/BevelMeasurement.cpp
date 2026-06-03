@@ -752,17 +752,31 @@ BevelConfig loadConfig(const std::string& configPath)
 }
 BevelMeasurementResult solveBevelFromRawCloud(const CloudT::ConstPtr& rawCloud, const std::string& configPath)
 {
-    return solveBevelFromRawCloud(rawCloud, configPath, std::string());
+    return solveBevelFromRawCloud(rawCloud, configPath, std::string(), BevelSolveOptions{});
 }
 
 BevelMeasurementResult solveBevelFromRawCloud(const CloudT::ConstPtr& rawCloud,
                                               const std::string& configPath,
                                               const std::string& templateDir)
 {
+    return solveBevelFromRawCloud(rawCloud, configPath, templateDir, BevelSolveOptions{});
+}
+
+BevelMeasurementResult solveBevelFromRawCloud(const CloudT::ConstPtr& rawCloud,
+                                              const std::string& configPath,
+                                              const std::string& templateDir,
+                                              const BevelSolveOptions& options)
+{
     BevelMeasurementResult result;
     try 
 	{
         BevelConfig cfg = loadConfig(configPath);
+        if (options.overrideStandard) {
+            cfg.standardAngleMinDeg = options.standardAngleMinDeg;
+            cfg.standardAngleMaxDeg = options.standardAngleMaxDeg;
+            cfg.standardLengthMin = options.standardLengthMin;
+            cfg.standardLengthMax = options.standardLengthMax;
+        }
         if (!templateDir.empty()) 
 		{
             cfg.templatePathPattern = joinPath(templateDir, "type_{type}_template.pcd");
@@ -779,8 +793,11 @@ BevelMeasurementResult solveBevelFromRawCloud(const CloudT::ConstPtr& rawCloud,
         {
             throw std::runtime_error("Downsampled cloud is empty");
         }
-		 
-		if (0)
+
+        int bevelType = 0;
+        if (options.forcedBevelType >= 0) {
+            bevelType = options.forcedBevelType;
+        } else if (0)
 		{
 			const cv::Mat image = projectSectionImage(scan, cfg);
 			if (cfg.saveProjectionImage)
@@ -788,16 +805,13 @@ BevelMeasurementResult solveBevelFromRawCloud(const CloudT::ConstPtr& rawCloud,
 				cv::imwrite(cfg.projectionImagePath, image);
 			}
 
-			// ?????SVM?
 			cv::Mat normalizedImage;
-			int bevelType = classifyBevelType(image, cfg.svmModelPath, &normalizedImage);
+			bevelType = classifyBevelType(image, cfg.svmModelPath, &normalizedImage);
 			if (cfg.saveNormalizedProjectionImage && !normalizedImage.empty())
 			{
 				cv::imwrite(cfg.normalizedProjectionImagePath, normalizedImage);
 			}
 		}
-		// ??
-		int bevelType = 0;
 		
         CloudT::Ptr templ(new CloudT);
         const std::string templatePath = replaceType(cfg.templatePathPattern, bevelType);
@@ -818,8 +832,7 @@ BevelMeasurementResult solveBevelFromRawCloud(const CloudT::ConstPtr& rawCloud,
 
 		result = solveGeometry(scan, measureScan, templ, features, cfg);
 
-		// ???30¿??
-		if (bevelType == 1)   // 30¿????1mm,????
+		if (bevelType == 1)
 		{
 			float len_side = result.length;
 			result.length = abs(17.0 - len_side * cos(result.angleDeg));

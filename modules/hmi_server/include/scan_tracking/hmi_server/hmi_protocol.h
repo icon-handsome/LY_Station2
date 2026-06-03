@@ -82,6 +82,9 @@ inline constexpr const char* kCmdModbusDisconnect    = "cmd.modbus_disconnect";
 /// 调试用：用状态机缓存点云触发坡口综合检测（需 config.ini allowDebugTriggerInspection=true）
 inline constexpr const char* kCmdDebugTriggerInspection = "cmd.debug_trigger_inspection";
 
+/// 设置坡口工艺配方（bevel_type / angle_deg / length）
+inline constexpr const char* kCmdSetBevelRecipe = "cmd.set_bevel_recipe";
+
 }  // namespace msg_type
 
 // ============================================================

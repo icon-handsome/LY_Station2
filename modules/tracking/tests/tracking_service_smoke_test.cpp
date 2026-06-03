@@ -61,6 +61,7 @@ bool writeTestConfig()
     stream << "[FlowControl]\npollIntervalMs=100\nheartbeatIntervalMs=1000\nsimulatedProcessingMs=300\n";
     stream << "[Tracking]\nscanSegmentTotal=3\n";
     stream << "[Bevel]\nconfigPath=bevel/config.txt\ntemplateDir=bevel/data/templates\n";
+    stream << "angleTolDeg=2.0\nlengthTolMm=1.0\ndefaultBevelType=0\ndefaultAngleDeg=45.0\ndefaultLengthMm=1.0\n";
     file.close();
     return true;
 }
@@ -76,6 +77,47 @@ bool testRejectsEmptyPointCloud()
     ok &= expectTrue(result.ngReasonWord0 == (1u << 4), "empty cloud should use missing-input NG bit");
     ok &= expectTrue(result.message.contains(QStringLiteral("没有可用点云")),
                      "empty cloud should explain missing input");
+    return ok;
+}
+
+bool testRejectsMissingRecipeWhenDefaultsDisabled()
+{
+    scan_tracking::common::ConfigManager::cleanup();
+    const QString configPath = QCoreApplication::applicationDirPath() + QStringLiteral("/config.ini");
+    QFile file(configPath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+        std::cerr << "FAILED: cannot rewrite config.ini\n";
+        return false;
+    }
+    QTextStream stream(&file);
+    stream << "[App]\nversion=0.1.0\nenvironment=test\n";
+    stream << "[Logger]\nlevel=0\nrotateDays=7\n";
+    stream << "[Modbus]\nhost=127.0.0.1\nport=502\nunitId=1\ntimeoutMs=1000\nreconnectIntervalMs=2000\n";
+    stream << "[Camera]\ndefaultCamera=Mech-Eye Nano\nscanTimeoutMs=5000\n";
+    stream << "[Vision]\nmechEyeCameraKey=Mech-Eye Nano\nmechCaptureTimeoutMs=5000\nhikConnectTimeoutMs=3000\nhikCaptureTimeoutMs=1000\nhikSdkRoot=D:/work/scan-tracking/third_party/hik_mvs\nhikCameraAName=hik_camera_a\nhikCameraAKey=192.168.10.12\nhikCameraAIp=192.168.10.12\nhikCameraASerial=\nhikCameraBName=hik_camera_b\nhikCameraBKey=192.168.10.13\nhikCameraBIp=192.168.10.13\nhikCameraBSerial=\n";
+    stream << "[FlowControl]\npollIntervalMs=100\nheartbeatIntervalMs=1000\nsimulatedProcessingMs=300\n";
+    stream << "[Tracking]\nscanSegmentTotal=3\n";
+    stream << "[Bevel]\nconfigPath=bevel/config.txt\ntemplateDir=bevel/data/templates\n";
+    stream << "angleTolDeg=2.0\nlengthTolMm=1.0\ndefaultBevelType=0\ndefaultAngleDeg=0\ndefaultLengthMm=0\n";
+    file.close();
+
+    scan_tracking::common::ConfigManager::initialize();
+    if (scan_tracking::common::ConfigManager::instance()->hasActiveBevelRecipe()) {
+        std::cerr << "FAILED: inactive default recipe should not be active\n";
+        scan_tracking::common::ConfigManager::cleanup();
+        return false;
+    }
+
+    scan_tracking::tracking::TrackingService service;
+    const auto frame = makePointCloudFrame(4);
+    const auto result = service.inspectPointCloud(frame, frame.pointCount);
+
+    scan_tracking::common::ConfigManager::cleanup();
+
+    bool ok = true;
+    ok &= expectTrue(result.resultCode == 2, "missing recipe should return NG");
+    ok &= expectTrue(result.message.contains(QStringLiteral("坡口配方")),
+                     "missing recipe should explain bevel recipe requirement");
     return ok;
 }
 
@@ -110,6 +152,7 @@ int main(int argc, char* argv[])
     bool ok = true;
     ok &= testRejectsEmptyPointCloud();
     ok &= testInvokesBevelPipelineWithTinyCloud();
+    ok &= testRejectsMissingRecipeWhenDefaultsDisabled();
 
     scan_tracking::common::ConfigManager::cleanup();
 

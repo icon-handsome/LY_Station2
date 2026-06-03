@@ -47,6 +47,30 @@ scan_tracking::vision::bevel::BevelInspectionResult runBevelMeasurement(
 [Bevel]
 configPath=bevel/config.txt
 templateDir=bevel/data/templates
+angleTolDeg=2.0
+lengthTolMm=1.0
+defaultBevelType=0
+defaultAngleDeg=45.0
+defaultLengthMm=1.0
+```
+
+### 两种标准型号
+
+| `bevel_type` | 坡口角 | 钝边长度 | 模板 |
+|--------------|--------|----------|------|
+| 0 | 45° | 1 mm | `type_0_*` |
+| 1 | 30° | 6 mm | `type_1_*` |
+
+`cmd.get_config` 的 `bevel.presets` 返回上表；Qt 换型时可只发 `bevel_type`，Core 自动填充角度与长度：
+
+```json
+{ "type": "cmd.set_bevel_recipe", "payload": { "bevel_type": 1 } }
+```
+
+也可显式下发（会覆盖标准值）：
+
+```json
+{ "type": "cmd.set_bevel_recipe", "payload": { "bevel_type": 0, "angle_deg": 45.0, "length": 1.0 } }
 ```
 
 环境变量：`SCAN_TRACKING_BEVEL_CONFIG_DIR`（指向含 `config.txt` 与 `data/` 的目录）。

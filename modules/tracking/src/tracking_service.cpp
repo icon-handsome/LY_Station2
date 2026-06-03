@@ -110,7 +110,18 @@ InspectionResult TrackingService::inspectPointCloud(
         return deliverInspectionResult(result, notifyListener);
     }
 
-    const auto detection = scan_tracking::vision::bevel::runBevelMeasurement(pointCloud);
+    const auto* configManager = scan_tracking::common::ConfigManager::instance();
+    if (configManager == nullptr || !configManager->hasActiveBevelRecipe()) {
+        result.resultCode = 2;
+        result.ngReasonWord0 = (1u << 4);
+        result.message = QStringLiteral("请先通过 HMI 设置坡口配方（cmd.set_bevel_recipe）。");
+        return deliverInspectionResult(result, notifyListener);
+    }
+
+    const scan_tracking::common::BevelRecipe recipe = configManager->bevelRecipe();
+    const scan_tracking::common::BevelConfig& bevelConfig = configManager->bevelConfig();
+    const auto detection = scan_tracking::vision::bevel::runBevelMeasurement(
+        pointCloud, recipe, bevelConfig.angleTolDeg, bevelConfig.lengthTolMm);
 
     if (!detection.invoked) {
         result.resultCode = 2;

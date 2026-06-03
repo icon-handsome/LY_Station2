@@ -84,6 +84,16 @@ struct TemplateFeature
     Eigen::Vector3f point;
 };
 
+struct BevelSolveOptions
+{
+    int forcedBevelType = -1;
+    bool overrideStandard = false;
+    double standardAngleMinDeg = 0.0;
+    double standardAngleMaxDeg = 0.0;
+    double standardLengthMin = 0.0;
+    double standardLengthMax = 0.0;
+};
+
 BevelConfig loadConfig(const std::string& configPath);
 
 BevelMeasurementResult solveBevelFromRawCloud(const CloudT::ConstPtr& rawCloud,
@@ -92,6 +102,11 @@ BevelMeasurementResult solveBevelFromRawCloud(const CloudT::ConstPtr& rawCloud,
 BevelMeasurementResult solveBevelFromRawCloud(const CloudT::ConstPtr& rawCloud,
                                               const std::string& configPath,
                                               const std::string& templateDir);
+
+BevelMeasurementResult solveBevelFromRawCloud(const CloudT::ConstPtr& rawCloud,
+                                              const std::string& configPath,
+                                              const std::string& templateDir,
+                                              const BevelSolveOptions& options);
 
 bool loadTextPointCloud(const std::string& path, CloudT::Ptr cloud);
 

@@ -5,6 +5,7 @@
 #include <QVector>
 #include <QtCore/QtGlobal>
 #include <array>
+#include <mutex>
 #include <vector>
 
 namespace scan_tracking {
@@ -100,10 +101,35 @@ struct TrackingConfig {
     int scanSegmentTotal = 3;  // 扫描段总数（从 config.ini 获取，PLC不下发）
 };
 
+/// 坡口工艺配方（HMI 下发或 config.ini 默认值）
+struct BevelRecipe {
+    bool active = false;
+    int bevelType = 0;
+    float angleDeg = 0.0f;
+    float lengthMm = 0.0f;
+};
+
+/// 标准坡口型号（与 Po_Kou type_{n} 模板一一对应）
+struct BevelRecipePreset {
+    int bevelType = 0;
+    QString name;
+    float angleDeg = 0.0f;
+    float lengthMm = 0.0f;
+};
+
+/// 两种量产型号：type0=45°/1mm，type1=30°/6mm
+QVector<BevelRecipePreset> standardBevelRecipePresets();
+
+/// 按 bevel_type 查标准型号；未知 type 返回空 recipe（active=false）
+BevelRecipe bevelRecipePresetForType(int bevelType);
+
 /// 坡口测量（Po_Kou）算法配置（[Bevel]）
 struct BevelConfig {
     QString configPath = QStringLiteral("bevel/config.txt");
     QString templateDir = QStringLiteral("bevel/data/templates");
+    float angleTolDeg = 2.0f;
+    float lengthTolMm = 1.0f;
+    BevelRecipe defaultRecipe;
 };
 
 /// HMI 显控 TCP 服务配置（[Hmi]）
@@ -222,6 +248,9 @@ public:
     const FlowControlConfig& flowControlConfig() const;
     const TrackingConfig& trackingConfig() const;
     const BevelConfig& bevelConfig() const;
+    void setBevelRecipe(const BevelRecipe& recipe);
+    BevelRecipe bevelRecipe() const;
+    bool hasActiveBevelRecipe() const;
     const HmiConfig& hmiConfig() const;
     const LbPoseConfig& lbPoseConfig() const;
     const LbnPoseConfig& lbnPoseConfig() const;
@@ -254,6 +283,9 @@ CameraConfig m_cameraConfig;
     FlowControlConfig m_flowControlConfig;
     TrackingConfig m_trackingConfig;
     BevelConfig m_bevelConfig;
+    mutable std::mutex m_bevelRecipeMutex;
+    BevelRecipe m_runtimeBevelRecipe;
+    bool m_runtimeRecipeSet = false;
     HmiConfig m_hmiConfig;
     LbPoseConfig m_lbPoseConfig;
     LbnPoseConfig m_lbnPoseConfig;

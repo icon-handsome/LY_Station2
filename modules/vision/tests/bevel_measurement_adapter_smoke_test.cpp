@@ -1,5 +1,6 @@
 #include "scan_tracking/vision/bevel_measurement_adapter.h"
 
+#include <cmath>
 #include <iostream>
 
 #include <QCoreApplication>
@@ -49,10 +50,42 @@ bool testToPclPointCloud()
     return ok;
 }
 
+bool testBuildBevelSolveOptions()
+{
+    scan_tracking::common::BevelRecipe recipe;
+    recipe.active = true;
+    recipe.bevelType = 1;
+    recipe.angleDeg = 30.0f;
+    recipe.lengthMm = 6.0f;
+
+    const auto options =
+        scan_tracking::vision::bevel::buildBevelSolveOptions(recipe, 2.0f, 1.0f);
+
+    bool ok = true;
+    ok &= expectTrue(options.forcedBevelType == 1, "forced bevel type should match recipe");
+    ok &= expectTrue(options.overrideStandard, "standard override should be enabled");
+    ok &= expectTrue(std::abs(options.standardAngleMinDeg - 28.0) < 1e-6,
+                     "angle min should be target minus tolerance");
+    ok &= expectTrue(std::abs(options.standardAngleMaxDeg - 32.0) < 1e-6,
+                     "angle max should be target plus tolerance");
+    ok &= expectTrue(std::abs(options.standardLengthMin - 5.0) < 1e-6,
+                     "length min should be target minus tolerance");
+    ok &= expectTrue(std::abs(options.standardLengthMax - 7.0) < 1e-6,
+                     "length max should be target plus tolerance");
+    return ok;
+}
+
 bool testRejectsEmptyCloud()
 {
+    scan_tracking::common::BevelRecipe recipe;
+    recipe.active = true;
+    recipe.bevelType = 0;
+    recipe.angleDeg = 45.0f;
+    recipe.lengthMm = 1.0f;
+
     const auto frame = makeFrame(0);
-    const auto result = scan_tracking::vision::bevel::runBevelMeasurement(frame);
+    const auto result =
+        scan_tracking::vision::bevel::runBevelMeasurement(frame, recipe, 2.0f, 1.0f);
 
     bool ok = true;
     ok &= expectTrue(!result.invoked, "empty cloud should not invoke Po_Kou");
@@ -70,6 +103,7 @@ int main(int argc, char* argv[])
 
     bool ok = true;
     ok &= testToPclPointCloud();
+    ok &= testBuildBevelSolveOptions();
     ok &= testRejectsEmptyCloud();
 
     if (!ok) {

@@ -18,6 +18,8 @@
 #include "scan_tracking/tracking/tracking_service.h"  // InspectionMeasurement, appendInspectionMeasurementFields
 #include "scan_tracking/common/config_manager.h"
 
+#include <cmath>
+
 #include <QtNetwork/QTcpServer>
 #include <QtNetwork/QTcpSocket>
 #include <QtNetwork/QHostAddress>
@@ -312,6 +314,8 @@ void HmiTcpServer::initializeMessageHandlers()
     // 调试命令（需 config.ini [Hmi] allowDebugTriggerInspection=true）
     m_messageHandlers[QString::fromLatin1(msg_type::kCmdDebugTriggerInspection)] =
         &HmiTcpServer::handleCmdDebugTriggerInspection;
+    m_messageHandlers[QString::fromLatin1(msg_type::kCmdSetBevelRecipe)] =
+        &HmiTcpServer::handleCmdSetBevelRecipe;
 }
 
 // 处理接收到的客户端消息，根据 type 字段分发到不同的处理函数
@@ -538,6 +542,25 @@ void HmiTcpServer::handleCmdGetConfig(const QJsonObject& message)
     QJsonObject bevelObj;
     bevelObj[QLatin1String("configPath")] = cfgMgr->bevelConfig().configPath;
     bevelObj[QLatin1String("templateDir")] = cfgMgr->bevelConfig().templateDir;
+    bevelObj[QLatin1String("angleTolDeg")] = static_cast<double>(cfgMgr->bevelConfig().angleTolDeg);
+    bevelObj[QLatin1String("lengthTolMm")] = static_cast<double>(cfgMgr->bevelConfig().lengthTolMm);
+    const common::BevelRecipe recipe = cfgMgr->bevelRecipe();
+    QJsonObject recipeObj;
+    recipeObj[QLatin1String("active")] = recipe.active;
+    recipeObj[QLatin1String("bevel_type")] = recipe.bevelType;
+    recipeObj[QLatin1String("angle_deg")] = static_cast<double>(recipe.angleDeg);
+    recipeObj[QLatin1String("length")] = static_cast<double>(recipe.lengthMm);
+    bevelObj[QLatin1String("recipe")] = recipeObj;
+    QJsonArray presetArray;
+    for (const common::BevelRecipePreset& preset : common::standardBevelRecipePresets()) {
+        QJsonObject presetObj;
+        presetObj[QLatin1String("bevel_type")] = preset.bevelType;
+        presetObj[QLatin1String("name")] = preset.name;
+        presetObj[QLatin1String("angle_deg")] = static_cast<double>(preset.angleDeg);
+        presetObj[QLatin1String("length")] = static_cast<double>(preset.lengthMm);
+        presetArray.append(presetObj);
+    }
+    bevelObj[QLatin1String("presets")] = presetArray;
     configPayload[QLatin1String("bevel")] = bevelObj;
 
     QJsonObject hmiObj;
@@ -707,6 +730,112 @@ void HmiTcpServer::handleCmdDebugTriggerInspection(const QJsonObject& message)
         << QStringLiteral(" cachedSegments=") << cachedSegments
         << QStringLiteral(" resultCode=") << inspectionResult.resultCode
         << QStringLiteral(" message=") << inspectionResult.message;
+}
+
+void HmiTcpServer::handleCmdSetBevelRecipe(const QJsonObject& message)
+{
+    const QString msgId = message.value(QLatin1String("msgId")).toString();
+    const QJsonObject payload = message.value(QLatin1String("payload")).toObject();
+
+    auto* cfgMgr = common::ConfigManager::instance();
+    if (cfgMgr == nullptr) {
+        sendResponse(
+            QLatin1String(msg_type::kCmdSetBevelRecipe),
+            msgId,
+            false,
+            QStringLiteral("配置管理器未初始化"));
+        return;
+    }
+
+    if (!payload.contains(QLatin1String("bevel_type"))) {
+        sendResponse(
+            QLatin1String(msg_type::kCmdSetBevelRecipe),
+            msgId,
+            false,
+            QStringLiteral("缺少必填字段：bevel_type"));
+        return;
+    }
+
+    const int bevelType = payload.value(QLatin1String("bevel_type")).toInt(-1);
+    if (bevelType < 0) {
+        sendResponse(
+            QLatin1String(msg_type::kCmdSetBevelRecipe),
+            msgId,
+            false,
+            QStringLiteral("bevel_type 不能为负数"));
+        return;
+    }
+
+    double angleDeg = payload.value(QLatin1String("angle_deg")).toDouble(0.0);
+    double lengthMm = payload.value(QLatin1String("length")).toDouble(0.0);
+    const bool hasAngle = payload.contains(QLatin1String("angle_deg"));
+    const bool hasLength = payload.contains(QLatin1String("length"));
+
+    if (!hasAngle || !hasLength) {
+        const common::BevelRecipe preset = common::bevelRecipePresetForType(bevelType);
+        if (!preset.active) {
+            sendResponse(
+                QLatin1String(msg_type::kCmdSetBevelRecipe),
+                msgId,
+                false,
+                QStringLiteral("未知 bevel_type=%1，或未同时提供 angle_deg 与 length").arg(bevelType));
+            return;
+        }
+        if (!hasAngle) {
+            angleDeg = preset.angleDeg;
+        }
+        if (!hasLength) {
+            lengthMm = preset.lengthMm;
+        }
+    }
+
+    if (!(angleDeg > 0.0) || !std::isfinite(angleDeg)) {
+        sendResponse(
+            QLatin1String(msg_type::kCmdSetBevelRecipe),
+            msgId,
+            false,
+            QStringLiteral("angle_deg 必须为大于 0 的有效数值"));
+        return;
+    }
+    if (!(lengthMm > 0.0) || !std::isfinite(lengthMm)) {
+        sendResponse(
+            QLatin1String(msg_type::kCmdSetBevelRecipe),
+            msgId,
+            false,
+            QStringLiteral("length 必须为大于 0 的有效数值"));
+        return;
+    }
+
+    common::BevelRecipe recipe;
+    recipe.active = true;
+    recipe.bevelType = bevelType;
+    recipe.angleDeg = static_cast<float>(angleDeg);
+    recipe.lengthMm = static_cast<float>(lengthMm);
+    cfgMgr->setBevelRecipe(recipe);
+
+    QJsonObject responsePayload = buildResponsePayload(
+        true, QStringLiteral("坡口工艺配方已更新"));
+    responsePayload[QLatin1String("bevel_type")] = recipe.bevelType;
+    responsePayload[QLatin1String("angle_deg")] = static_cast<double>(recipe.angleDeg);
+    responsePayload[QLatin1String("length")] = static_cast<double>(recipe.lengthMm);
+    responsePayload[QLatin1String("angleTolDeg")] =
+        static_cast<double>(cfgMgr->bevelConfig().angleTolDeg);
+    responsePayload[QLatin1String("lengthTolMm")] =
+        static_cast<double>(cfgMgr->bevelConfig().lengthTolMm);
+
+    QJsonObject envelope;
+    envelope[QStringLiteral("version")] = QLatin1String(kProtocolVersion);
+    envelope[QStringLiteral("msgId")] = msgId;
+    envelope[QStringLiteral("type")] = QLatin1String(msg_type::kCmdSetBevelRecipe);
+    envelope[QStringLiteral("timestamp")] = QDateTime::currentMSecsSinceEpoch();
+    envelope[QStringLiteral("payload")] = responsePayload;
+    sendToClient(envelope);
+
+    qInfo(LOG_HMI_SERVER).noquote()
+        << QStringLiteral("[TCPIP] 坡口配方已更新")
+        << QStringLiteral(" bevel_type=") << recipe.bevelType
+        << QStringLiteral(" angle_deg=") << recipe.angleDeg
+        << QStringLiteral(" length=") << recipe.lengthMm;
 }
 
 void HmiTcpServer::handleCmdCaptureMechEye(const QJsonObject& message)
@@ -1491,6 +1620,17 @@ QJsonObject HmiTcpServer::buildInspectionFinishedPayload(const tracking::Inspect
     tracking::appendInspectionMeasurementFields(payload, result.measurement);
     payload[QLatin1String("message")] = result.message;
     payload[QLatin1String("sourcePointCount")] = result.sourcePointCount;
+
+    if (const auto* cfgMgr = common::ConfigManager::instance()) {
+        const common::BevelRecipe recipe = cfgMgr->bevelRecipe();
+        const common::BevelConfig& bevelConfig = cfgMgr->bevelConfig();
+        payload[QLatin1String("expected_bevel_type")] = recipe.bevelType;
+        payload[QLatin1String("expected_angle_deg")] = static_cast<double>(recipe.angleDeg);
+        payload[QLatin1String("expected_length")] = static_cast<double>(recipe.lengthMm);
+        payload[QLatin1String("angle_tol_deg")] = static_cast<double>(bevelConfig.angleTolDeg);
+        payload[QLatin1String("length_tol_mm")] = static_cast<double>(bevelConfig.lengthTolMm);
+    }
+
     return payload;
 }
 

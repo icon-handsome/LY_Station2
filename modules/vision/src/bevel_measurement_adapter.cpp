@@ -134,8 +134,30 @@ QString resolveBevelTemplateDir()
     return defaultTemplateDir.exists() ? defaultTemplateDir.absolutePath() : QString();
 }
 
+::bevel::BevelSolveOptions buildBevelSolveOptions(
+    const scan_tracking::common::BevelRecipe& recipe,
+    float angleTolDeg,
+    float lengthTolMm)
+{
+    ::bevel::BevelSolveOptions options;
+    options.forcedBevelType = recipe.bevelType;
+    options.overrideStandard = true;
+    options.standardAngleMinDeg =
+        static_cast<double>(recipe.angleDeg) - static_cast<double>(angleTolDeg);
+    options.standardAngleMaxDeg =
+        static_cast<double>(recipe.angleDeg) + static_cast<double>(angleTolDeg);
+    options.standardLengthMin =
+        static_cast<double>(recipe.lengthMm) - static_cast<double>(lengthTolMm);
+    options.standardLengthMax =
+        static_cast<double>(recipe.lengthMm) + static_cast<double>(lengthTolMm);
+    return options;
+}
+
 BevelInspectionResult runBevelMeasurement(
-    const scan_tracking::mech_eye::PointCloudFrame& cloud)
+    const scan_tracking::mech_eye::PointCloudFrame& cloud,
+    const scan_tracking::common::BevelRecipe& recipe,
+    float angleTolDeg,
+    float lengthTolMm)
 {
     BevelInspectionResult result;
 
@@ -160,12 +182,14 @@ BevelInspectionResult runBevelMeasurement(
 
         const std::string configPathUtf8 = configPath.toLocal8Bit().toStdString();
         const std::string templateDirUtf8 = templateDir.toLocal8Bit().toStdString();
+        const ::bevel::BevelSolveOptions options =
+            buildBevelSolveOptions(recipe, angleTolDeg, lengthTolMm);
 
         const ::bevel::BevelMeasurementResult algorithmResult =
             templateDir.isEmpty()
-                ? ::bevel::solveBevelFromRawCloud(pclCloud, configPathUtf8)
+                ? ::bevel::solveBevelFromRawCloud(pclCloud, configPathUtf8, std::string(), options)
                 : ::bevel::solveBevelFromRawCloud(
-                      pclCloud, configPathUtf8, templateDirUtf8);
+                      pclCloud, configPathUtf8, templateDirUtf8, options);
 
         result.ok = algorithmResult.ok;
         result.bevelType = algorithmResult.bevelType;
@@ -194,6 +218,22 @@ BevelInspectionResult runBevelMeasurement(
     }
 
     return result;
+}
+
+BevelInspectionResult runBevelMeasurement(
+    const scan_tracking::mech_eye::PointCloudFrame& cloud)
+{
+    const auto* configManager = scan_tracking::common::ConfigManager::instance();
+    if (configManager == nullptr || !configManager->hasActiveBevelRecipe()) {
+        BevelInspectionResult result;
+        result.message = QStringLiteral("坡口测量缺少有效工艺配方。");
+        return result;
+    }
+
+    const scan_tracking::common::BevelRecipe recipe = configManager->bevelRecipe();
+    const scan_tracking::common::BevelConfig& bevelConfig = configManager->bevelConfig();
+    return runBevelMeasurement(
+        cloud, recipe, bevelConfig.angleTolDeg, bevelConfig.lengthTolMm);
 }
 
 }  // namespace scan_tracking::vision::bevel

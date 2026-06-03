@@ -176,6 +176,9 @@ private:
 
     /// 调试用：用状态机缓存点云触发坡口检测并推送显控（需 config.ini 开关）
     void handleCmdDebugTriggerInspection(const QJsonObject& message);
+
+    /// 设置坡口工艺配方（Qt 用户输入）
+    void handleCmdSetBevelRecipe(const QJsonObject& message);
     
     /// 处理单独通过 Mech-Eye 进行采图的指令（多用于独立标定或调试测试）
     void handleCmdCaptureMechEye(const QJsonObject& message);
