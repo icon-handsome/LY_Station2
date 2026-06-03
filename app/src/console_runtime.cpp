@@ -296,7 +296,7 @@ void ConsoleRuntime::initModules()
         hmiTcpServer_->setHikCameraCController(hikCameraCController_.get());
         hmiTcpServer_->bindServiceSignals();
 
-        // 演示初版：蓝友 inspectSegments 返回后立即经 HMI TCP 推送 event.inspection.finished（含失败）
+        // 坡口测量 inspectPointCloud 返回后立即经 HMI TCP 推送 event.inspection.finished（含失败）
         // 注意：std::function 不可对同一对象连续 std::move，否则 StateMachine 侧会得到空回调并在析构时崩溃。
         const QPointer<scan_tracking::hmi_server::HmiTcpServer> hmiWeak(hmiTcpServer_.get());
         const scan_tracking::tracking::InspectionResultNotifier publishInspectionToHmi =

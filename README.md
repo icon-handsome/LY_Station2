@@ -47,8 +47,8 @@
 | `[Vision]` | `hikCxpExposureTimeUs` / `hikCxpGain` | CXP 曝光/增益 |
 | `[LbPose]` | `leftIntrinsic3x3` 等 | LB 双目标定矩阵与 2D 重建参数 |
 | `[LbnPose]` | `useIdentityRtWithoutMarkers` | 转盘无标记联调时 `true`，Rt 用单位阵 |
-| `[Tracking]` | `firstStation*SegmentIndex` | 蓝友检测用的外/内/孔三段段号 |
 | `[Tracking]` | `scanSegmentTotal` | PLC 扫描总段数（上限 16，现场可设 10） |
+| `[Bevel]` | `configPath` / `templateDir` | Po_Kou 坡口测量配置与模板目录 |
 | `[Hmi]` | `tcpPort` / `allowDebugTriggerInspection` | 显控 TCP 与调试检测开关 |
 
 数据流与联调说明见 [`docs/算法使用API.md`](docs/算法使用API.md) §10.1 与 [`docs/多点位扫描与位姿跟踪完整流程.md`](docs/多点位扫描与位姿跟踪完整流程.md)。

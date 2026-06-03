@@ -17,13 +17,12 @@ target_link_libraries(scan_tracking_tracking
         scan_tracking_mech_eye
     PRIVATE
         LbPoseDetection::lb_pose_detection
-        scan_tracking_lanyou_test_adapter
 )
 
-if(SCAN_TRACKING_ENABLE_LANYOU_DETECTION)
+if(SCAN_TRACKING_ENABLE_BEVEL_MEASUREMENT)
     target_link_libraries(scan_tracking_tracking
         PRIVATE
-            scan_tracking_lanyou_test_adapter
+            scan_tracking_bevel_adapter
     )
 
     add_executable(scan_tracking_tracking_smoke_test
@@ -39,6 +38,10 @@ if(SCAN_TRACKING_ENABLE_LANYOU_DETECTION)
     set_target_properties(scan_tracking_tracking_smoke_test PROPERTIES
         FOLDER "tests"
     )
+
+    scan_tracking_deploy_bevel_runtime(scan_tracking_tracking_smoke_test)
+    scan_tracking_deploy_pcl_runtime(scan_tracking_tracking_smoke_test)
+    scan_tracking_deploy_opencv_runtime(scan_tracking_tracking_smoke_test)
 endif()
 
 set_target_properties(scan_tracking_tracking PROPERTIES

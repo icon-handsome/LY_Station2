@@ -74,7 +74,7 @@ public:
     bool hasClient() const;
 
     /**
-     * @brief 主动推送第一工位/蓝友综合检测结果到 Qt 显控（演示初版入口）
+     * @brief 主动推送坡口综合检测结果到 Qt 显控
      *
      * 发送 `event.inspection.finished`，成功与失败均推送，便于客户演示即时看到结果。
      * TODO(hmi-demo): 无客户端时不缓存，演示后若需要可补最后一帧缓存
@@ -174,7 +174,7 @@ private:
     /// 处理触发结果复位指令 (安全限制：拦截 Qt 端触发，须由 PLC 触发)
     void handleCmdTriggerResultReset(const QJsonObject& message);
 
-    /// 调试用：用状态机缓存点云触发蓝友检测并推送显控（需 config.ini 开关）
+    /// 调试用：用状态机缓存点云触发坡口检测并推送显控（需 config.ini 开关）
     void handleCmdDebugTriggerInspection(const QJsonObject& message);
     
     /// 处理单独通过 Mech-Eye 进行采图的指令（多用于独立标定或调试测试）

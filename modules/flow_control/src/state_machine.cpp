@@ -1980,7 +1980,7 @@ void StateMachine::executeCodeReadTask()
  * 
  * 关键步骤：
  * 1. 检查跟踪服务是否可用
- * 2. 调用 inspectSegments 进行点云分析
+ * 2. 调用 inspectPointCloud 进行坡口测量
  * 3. 将检测结果写入 PLC
  * 4. 根据检测结果决定任务成功或失败
  * 5. 清空点云缓存（检测完成后不再需要原始点云）
@@ -2210,14 +2210,23 @@ const protocol::TriggerDefinition* StateMachine::selectPendingTrigger(
     return nullptr;
 }
 
-QMap<int, scan_tracking::mech_eye::CaptureResult> StateMachine::loadSegmentCaptureResultsForInspection(
+bool StateMachine::loadMergedPointCloudForInspection(
+    scan_tracking::mech_eye::PointCloudFrame* outCloud,
+    int* totalPointCount,
+    int* segmentCount,
     QString* errorMessage)
 {
+    if (outCloud == nullptr) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("综合检测失败：输出点云指针为空。");
+        }
+        return false;
+    }
+
     int maxJoinMs = kBackgroundRefinementJoinTimeoutMs;
     if (m_activeTask.definition != nullptr &&
         m_activeTask.definition->stage == protocol::Stage::Inspection &&
         m_activeTask.timeoutSeconds > 0) {
-        // 为综合检测主流程留出时间，避免 join 占满 PLC 超时（常见 60s）
         maxJoinMs = std::min(
             kBackgroundRefinementJoinTimeoutMs,
             std::max(5000, static_cast<int>(m_activeTask.timeoutSeconds) * 1000 - 5000));
@@ -2241,10 +2250,8 @@ QMap<int, scan_tracking::mech_eye::CaptureResult> StateMachine::loadSegmentCaptu
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("综合检测失败：ConfigManager 不可用。");
         }
-        return {};
+        return false;
     }
-
-    const auto& tracking = configManager->trackingConfig();
 
     int inspectPathId = m_activeTask.inspectionPathId;
     if (inspectPathId <= 0) {
@@ -2252,25 +2259,14 @@ QMap<int, scan_tracking::mech_eye::CaptureResult> StateMachine::loadSegmentCaptu
     }
     if (inspectPathId <= 0) {
         if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral("综合检测失败：没有已扫满 6 段的可检测路径。");
+            *errorMessage = QStringLiteral("综合检测失败：没有已扫满的可检测路径。");
         }
-        return {};
+        return false;
     }
 
-    // 每条路径扫完后各做一次检测：外/内/孔均取自【同一路径】的 1/2/3 段（见 config [Tracking]）
-    struct SegmentMapping {
-        int segmentIndex;
-        QString name;
-        int outputKey;
-    };
-
-    const SegmentMapping mappings[] = {
-        {tracking.firstStationOuterSegmentIndex, QStringLiteral("外圈"), 1},
-        {tracking.firstStationInnerSegmentIndex, QStringLiteral("内圈"), 2},
-        {tracking.firstStationHoleSegmentIndex, QStringLiteral("孔"), 3},
-    };
-
-    QMap<int, scan_tracking::mech_eye::CaptureResult> loaded;
+    auto mergedPoints = std::make_shared<std::vector<float>>();
+    int mergedPointCount = 0;
+    int mergedSegmentCount = 0;
 
     {
         std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
@@ -2280,49 +2276,73 @@ QMap<int, scan_tracking::mech_eye::CaptureResult> StateMachine::loadSegmentCaptu
                 *errorMessage = QStringLiteral(
                     "综合检测失败：路径 %1 不存在（尚未扫描）。").arg(inspectPathId);
             }
-            return {};
+            return false;
         }
 
         const auto& pathSegments = m_pathSegmentCaptureResults[inspectPathId];
+        QList<int> segmentIndices = pathSegments.keys();
+        std::sort(segmentIndices.begin(), segmentIndices.end());
 
-        for (const auto& mapping : mappings) {
-            if (!pathSegments.contains(mapping.segmentIndex)) {
-                if (errorMessage != nullptr) {
-                    *errorMessage = QStringLiteral(
-                        "综合检测缺少%1点云：路径%2段%3不存在")
-                        .arg(mapping.name)
-                        .arg(inspectPathId)
-                        .arg(mapping.segmentIndex);
-                }
-                return {};
+        for (int segmentIndex : segmentIndices) {
+            const auto& captureResult = pathSegments[segmentIndex];
+            if (!captureResult.success() || !captureResult.pointCloud.isValid()) {
+                continue;
             }
 
-            const auto& captureResult = pathSegments[mapping.segmentIndex];
-            if (!captureResult.pointCloud.isValid()) {
-                if (errorMessage != nullptr) {
-                    *errorMessage = QStringLiteral(
-                        "综合检测%1点云无效：路径%2段%3")
-                        .arg(mapping.name)
-                        .arg(inspectPathId)
-                        .arg(mapping.segmentIndex);
-                }
-                return {};
+            const auto& cloud = captureResult.pointCloud;
+            if (!cloud.pointsXYZ || cloud.pointCount <= 0) {
+                continue;
             }
 
-            loaded.insert(mapping.outputKey, cloneCaptureResult(captureResult));
+            const int availablePointCount =
+                static_cast<int>(cloud.pointsXYZ->size() / 3);
+            const int pointCount = std::min(cloud.pointCount, availablePointCount);
+            if (pointCount <= 0) {
+                continue;
+            }
+
+            mergedPoints->reserve(
+                mergedPoints->size() + static_cast<std::size_t>(pointCount * 3));
+            for (int index = 0; index < pointCount; ++index) {
+                const auto base = static_cast<std::size_t>(index * 3);
+                mergedPoints->push_back((*cloud.pointsXYZ)[base]);
+                mergedPoints->push_back((*cloud.pointsXYZ)[base + 1]);
+                mergedPoints->push_back((*cloud.pointsXYZ)[base + 2]);
+            }
+
+            mergedPointCount += pointCount;
+            ++mergedSegmentCount;
         }
     }
 
-    qInfo(LOG_FLOW).noquote()
-        << QStringLiteral("[多路径] 单路径综合检测 pathId=") << inspectPathId
-        << QStringLiteral(" 外圈段") << tracking.firstStationOuterSegmentIndex
-        << QStringLiteral(" 点数=") << loaded[1].pointCloud.pointCount
-        << QStringLiteral(" 内圈段") << tracking.firstStationInnerSegmentIndex
-        << QStringLiteral(" 点数=") << loaded[2].pointCloud.pointCount
-        << QStringLiteral(" 孔段") << tracking.firstStationHoleSegmentIndex
-        << QStringLiteral(" 点数=") << loaded[3].pointCloud.pointCount;
+    if (mergedPointCount <= 0 || mergedSegmentCount <= 0) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral(
+                "综合检测失败：路径 %1 没有可用点云段。").arg(inspectPathId);
+        }
+        return false;
+    }
 
-    return loaded;
+    scan_tracking::mech_eye::PointCloudFrame mergedCloud;
+    mergedCloud.pointsXYZ = std::move(mergedPoints);
+    mergedCloud.pointCount = mergedPointCount;
+    mergedCloud.width = mergedPointCount;
+    mergedCloud.height = 1;
+
+    *outCloud = std::move(mergedCloud);
+    if (totalPointCount != nullptr) {
+        *totalPointCount = mergedPointCount;
+    }
+    if (segmentCount != nullptr) {
+        *segmentCount = mergedSegmentCount;
+    }
+
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("[多路径] 路径级点云合并 pathId=") << inspectPathId
+        << QStringLiteral(" 参与段数=") << mergedSegmentCount
+        << QStringLiteral(" 总点数=") << mergedPointCount;
+
+    return true;
 }
 
 tracking::InspectionResult StateMachine::runDebugInspectionOnCachedSegments() const
@@ -2344,16 +2364,19 @@ tracking::InspectionResult StateMachine::runDebugInspectionOnCachedSegments() co
 
     QString loadError;
     auto* mutableSelf = const_cast<StateMachine*>(this);
-    const auto segmentsForInspection = mutableSelf->loadSegmentCaptureResultsForInspection(&loadError);
-    if (segmentsForInspection.isEmpty()) {
+    scan_tracking::mech_eye::PointCloudFrame mergedCloud;
+    int totalPointCount = 0;
+    int segmentCount = 0;
+    if (!mutableSelf->loadMergedPointCloudForInspection(
+            &mergedCloud, &totalPointCount, &segmentCount, &loadError)) {
         failure.ngReasonWord0 = (1u << 4);
         failure.message = loadError.isEmpty()
-            ? QStringLiteral("调试综合检测失败：无法加载必需分段点云。")
+            ? QStringLiteral("调试综合检测失败：无法加载合并点云。")
             : loadError;
         return failure;
     }
 
-    return m_tracking->inspectSegments(segmentsForInspection, false);
+    return m_tracking->inspectPointCloud(mergedCloud, totalPointCount, false);
 }
 
 void StateMachine::executeInspectionTask()
@@ -2387,10 +2410,13 @@ void StateMachine::executeInspectionTask()
     }
 
     QString loadError;
-    const auto segmentsForInspection = loadSegmentCaptureResultsForInspection(&loadError);
+    scan_tracking::mech_eye::PointCloudFrame mergedCloud;
+    int totalPointCount = 0;
+    int segmentCount = 0;
     ensurePoseStitchRunRootDirectory();
     persistLastPoseStitchArtifactToDisk();
-    if (segmentsForInspection.isEmpty()) {
+    if (!loadMergedPointCloudForInspection(
+            &mergedCloud, &totalPointCount, &segmentCount, &loadError)) {
         qWarning(LOG_FLOW).noquote()
             << QStringLiteral("Trig_Inspection 加载内存点云失败：") << loadError
             << multiPathCacheStatusText();
@@ -2418,25 +2444,20 @@ void StateMachine::executeInspectionTask()
     }
 
     const tracking::InspectionResult trackingResult =
-        m_tracking->inspectSegments(segmentsForInspection);
+        m_tracking->inspectPointCloud(mergedCloud, totalPointCount);
 
-    // 将跟踪服务的检测结果转换为内部摘要结构
     InspectionSummary summary;
-    summary.resultCode = trackingResult.resultCode;           // 结果码：1=合格，其他=不合格
-    summary.ngReasonWord0 = trackingResult.ngReasonWord0;     // NG 原因字 0
-    summary.ngReasonWord1 = trackingResult.ngReasonWord1;     // NG 原因字 1
-    summary.measureItemCount = trackingResult.measureItemCount;  // 测量项数量
-    summary.offsetXmm = trackingResult.offsetXmm;             // X 方向偏移量（mm）
-    summary.offsetYmm = trackingResult.offsetYmm;             // Y 方向偏移量（mm）
-    summary.offsetZmm = trackingResult.offsetZmm;             // Z 方向偏移量（mm）
+    summary.resultCode = trackingResult.resultCode;
+    summary.ngReasonWord0 = trackingResult.ngReasonWord0;
+    summary.ngReasonWord1 = trackingResult.ngReasonWord1;
+    summary.measureItemCount = trackingResult.measureItemCount;
 
     qInfo(LOG_FLOW).noquote()
         << QStringLiteral("Trig_Inspection 完成")
-        << QStringLiteral(" 参与段数=") << trackingResult.segmentCount
-        << QStringLiteral(" 总点数=") << trackingResult.totalPointCount
-        << QStringLiteral(" 偏移Xmm=") << trackingResult.offsetXmm
-        << QStringLiteral(" 偏移Ymm=") << trackingResult.offsetYmm
-        << QStringLiteral(" 偏移Zmm=") << trackingResult.offsetZmm
+        << QStringLiteral(" 参与段数=") << segmentCount
+        << QStringLiteral(" 总点数=") << trackingResult.sourcePointCount
+        << QStringLiteral(" angleDeg=") << trackingResult.measurement.headAngleTol
+        << QStringLiteral(" lengthMm=") << trackingResult.measurement.bluntHeightTol
         << QStringLiteral(" 说明=") << trackingResult.message;
 
     // 将检测结果写入 PLC 寄存器（NG 字等仍写真实算法结果，供联调日志/后续恢复）
@@ -2455,11 +2476,7 @@ void StateMachine::executeInspectionTask()
     completeActiveTask(plcRes, protocol::AckState::Completed, plcRes == kInspectionResOk);
     emit inspectionFinished(
         summary.resultCode, summary.ngReasonWord0, summary.ngReasonWord1,
-        summary.measureItemCount, summary.offsetXmm, summary.offsetYmm, summary.offsetZmm,
-        trackingResult.stableOffsetXmm, trackingResult.stableOffsetYmm, trackingResult.stableOffsetZmm,
-        trackingResult.measurement,
-        trackingResult.outlinerErrorLog, trackingResult.inlinerErrorLog,
-        trackingResult.message);
+        summary.measureItemCount, trackingResult.measurement, trackingResult.message);
     // 每条路径检测后保留各路径点云，供后续路径继续扫描；整轮结束由 Trig_ResultReset 清空
 }
 
@@ -3193,10 +3210,7 @@ void StateMachine::writeInspectionResult(const InspectionSummary& summary)
         << QStringLiteral("检测结果寄存器已写入")
         << QStringLiteral(" ngReasonWord0=") << summary.ngReasonWord0
         << QStringLiteral(" ngReasonWord1=") << summary.ngReasonWord1
-        << QStringLiteral(" measureItemCount=") << summary.measureItemCount
-        << QStringLiteral(" offsetXmm=") << summary.offsetXmm   // X 方向偏移（未在寄存器中写入，仅记录日志）
-        << QStringLiteral(" offsetYmm=") << summary.offsetYmm   // Y 方向偏移
-        << QStringLiteral(" offsetZmm=") << summary.offsetZmm;  // Z 方向偏移
+        << QStringLiteral(" measureItemCount=") << summary.measureItemCount;
 }
 
 /**

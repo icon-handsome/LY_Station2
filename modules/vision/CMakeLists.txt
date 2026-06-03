@@ -124,77 +124,50 @@ scan_tracking_deploy_hik_mvs_runtime(scan_tracking_cxp_smoke)
 scan_tracking_deploy_mech_eye_runtime(scan_tracking_cxp_smoke)
 scan_tracking_deploy_opencv_runtime(scan_tracking_cxp_smoke)
 
-if(SCAN_TRACKING_ENABLE_LANYOU_DETECTION)
-    add_library(scan_tracking_lanyou_test_adapter STATIC
-        src/lanyou_detection_adapter.cpp
-        src/lanyou_first_station_adapter.cpp
-        include/scan_tracking/vision/lanyou_detection_adapter.h
-        include/scan_tracking/vision/lanyou_issue_codes.h
-        include/scan_tracking/vision/lanyou_first_station_adapter.h
+if(SCAN_TRACKING_ENABLE_BEVEL_MEASUREMENT)
+    add_library(scan_tracking_bevel_adapter STATIC
+        src/bevel_measurement_adapter.cpp
+        include/scan_tracking/vision/bevel_measurement_adapter.h
     )
 
-    target_include_directories(scan_tracking_lanyou_test_adapter
+    target_include_directories(scan_tracking_bevel_adapter
         PUBLIC
             ${CMAKE_CURRENT_SOURCE_DIR}/include
+        PRIVATE
+            ${CMAKE_SOURCE_DIR}/third_party/Po_Kou_Ce_Liang/include
     )
 
-    target_link_libraries(scan_tracking_lanyou_test_adapter
+    target_link_libraries(scan_tracking_bevel_adapter
         PUBLIC
             Qt5::Core
+            scan_tracking_common
             scan_tracking_mech_eye
-            Lanyou::FirstDetection
+            Bevel::Measurement
     )
 
-    target_compile_features(scan_tracking_lanyou_test_adapter PUBLIC cxx_std_17)
+    target_compile_features(scan_tracking_bevel_adapter PUBLIC cxx_std_17)
 
-    set_target_properties(scan_tracking_lanyou_test_adapter PROPERTIES
+    set_target_properties(scan_tracking_bevel_adapter PROPERTIES
         FOLDER "tests"
     )
 
-    add_executable(scan_tracking_lanyou_smoke_test
-        tests/lanyou_detection_adapter_smoke_test.cpp
+    add_executable(scan_tracking_bevel_smoke_test
+        tests/bevel_measurement_adapter_smoke_test.cpp
     )
 
-    target_link_libraries(scan_tracking_lanyou_smoke_test
+    target_link_libraries(scan_tracking_bevel_smoke_test
         PRIVATE
             Qt5::Core
-            scan_tracking_lanyou_test_adapter
+            scan_tracking_bevel_adapter
     )
 
-    set_target_properties(scan_tracking_lanyou_smoke_test PROPERTIES
+    set_target_properties(scan_tracking_bevel_smoke_test PROPERTIES
         FOLDER "tests"
     )
 
-    add_executable(scan_tracking_lanyou_first_station_adapter_smoke_test
-        tests/lanyou_first_station_adapter_smoke_test.cpp
-    )
-
-    target_link_libraries(scan_tracking_lanyou_first_station_adapter_smoke_test
-        PRIVATE
-            Qt5::Core
-            scan_tracking_lanyou_test_adapter
-    )
-
-    set_target_properties(scan_tracking_lanyou_first_station_adapter_smoke_test PROPERTIES
-        FOLDER "tests"
-    )
-
-    add_executable(scan_tracking_lanyou_first_station_ply_runner
-        tests/lanyou_first_station_ply_runner.cpp
-    )
-
-    target_link_libraries(scan_tracking_lanyou_first_station_ply_runner
-        PRIVATE
-            Lanyou::FirstDetection
-    )
-
-    if(MSVC)
-        target_link_options(scan_tracking_lanyou_first_station_ply_runner PRIVATE /STACK:268435456)
-    endif()
-
-    set_target_properties(scan_tracking_lanyou_first_station_ply_runner PROPERTIES
-        FOLDER "tests"
-    )
+    scan_tracking_deploy_bevel_runtime(scan_tracking_bevel_smoke_test)
+    scan_tracking_deploy_pcl_runtime(scan_tracking_bevel_smoke_test)
+    scan_tracking_deploy_opencv_runtime(scan_tracking_bevel_smoke_test)
 endif()
 
 if(SCAN_TRACKING_ENABLE_LBN_POSE_DETECTION)

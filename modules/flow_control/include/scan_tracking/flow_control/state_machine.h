@@ -137,10 +137,8 @@ signals:
 
     /// 综合检测完成
     void inspectionFinished(quint16 resultCode, quint16 ngReasonWord0, quint16 ngReasonWord1,
-                            quint16 measureItemCount, float offsetXmm, float offsetYmm, float offsetZmm,
-                            float stableOffsetXmm, float stableOffsetYmm, float stableOffsetZmm,
+                            quint16 measureItemCount,
                             const tracking::InspectionMeasurement& measurement,
-                            const QString& outlinerErrorLog, const QString& inlinerErrorLog,
                             const QString& message);
 
     /// 位姿校验完成
@@ -243,9 +241,6 @@ private:
         quint16 ngReasonWord0 = 0;    // NG 原因字 0
         quint16 ngReasonWord1 = 0;    // NG 原因字 1
         quint16 measureItemCount = 0; // 测量项数量
-        float offsetXmm = 0.0f;       // X 方向偏移量（mm）
-        float offsetYmm = 0.0f;       // Y 方向偏移量（mm）
-        float offsetZmm = 0.0f;       // Z 方向偏移量（mm）
     };
 
     // 设置新状态
@@ -350,8 +345,11 @@ private:
     // maxWaitMs < 0 表示使用默认上限；综合检测会传入「任务超时 - 余量」避免占满 60s
     void joinAllBackgroundRefinementJobs(int maxWaitMs = -1);
 
-    // 综合检测前从内存缓存取 [Tracking] 必需的三段点云（会等待后台 refinement，不可 const）
-    QMap<int, scan_tracking::mech_eye::CaptureResult> loadSegmentCaptureResultsForInspection(
+    // 综合检测前从内存缓存合并路径点云（会等待后台 refinement，不可 const）
+    bool loadMergedPointCloudForInspection(
+        scan_tracking::mech_eye::PointCloudFrame* outCloud,
+        int* totalPointCount,
+        int* segmentCount,
         QString* errorMessage);
 
     /// 所有启用路径的 1..scanSegmentTotal 段均已缓存

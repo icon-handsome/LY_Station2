@@ -21,7 +21,7 @@ Q_LOGGING_CATEGORY(LOG_POINT_CLOUD_PROC, "mech_eye.point_cloud_processor")
 
 namespace scan_tracking::mech_eye {
 
-// PCL/Eigen 在 Windows 下非线程安全；多段后台 refinement 与蓝友检测并发时会偶发 aligned_free 崩溃。
+// PCL/Eigen 在 Windows 下非线程安全；多段后台 refinement 与坡口测量并发时会偶发 aligned_free 崩溃。
 std::mutex& pointCloudAlgorithmMutex()
 {
     static std::mutex mutex;

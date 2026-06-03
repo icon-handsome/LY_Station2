@@ -73,6 +73,25 @@ function(scan_tracking_deploy_vtk_runtime target_name)
     )
 endfunction()
 
+function(scan_tracking_deploy_bevel_runtime target_name)
+    set(_bevel_source_root "${CMAKE_SOURCE_DIR}/third_party/Po_Kou_Ce_Liang")
+    if(NOT EXISTS "${_bevel_source_root}/config.txt")
+        message(WARNING "Bevel runtime source not found: ${_bevel_source_root}")
+        return()
+    endif()
+
+    add_custom_command(TARGET ${target_name} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target_name}>/bevel"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${_bevel_source_root}/config.txt"
+            "$<TARGET_FILE_DIR:${target_name}>/bevel/config.txt"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${_bevel_source_root}/data"
+            "$<TARGET_FILE_DIR:${target_name}>/bevel/data"
+        COMMENT "Deploying Po_Kou bevel measurement runtime assets"
+    )
+endfunction()
+
 function(scan_tracking_deploy_openni2_runtime target_name)
     if(NOT EXISTS "${SCAN_TRACKING_OPENNI2_RUNTIME_DIR}")
         message(WARNING "OpenNI2 runtime directory not found: ${SCAN_TRACKING_OPENNI2_RUNTIME_DIR}")

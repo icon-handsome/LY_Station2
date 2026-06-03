@@ -176,6 +176,7 @@ const CameraConfig& ConfigManager::cameraConfig() const { return m_cameraConfig;
 const VisionConfig& ConfigManager::visionConfig() const { return m_visionConfig; }
 const FlowControlConfig& ConfigManager::flowControlConfig() const { return m_flowControlConfig; }
 const TrackingConfig& ConfigManager::trackingConfig() const { return m_trackingConfig; }
+const BevelConfig& ConfigManager::bevelConfig() const { return m_bevelConfig; }
 const HmiConfig& ConfigManager::hmiConfig() const { return m_hmiConfig; }
 const LbPoseConfig& ConfigManager::lbPoseConfig() const { return m_lbPoseConfig; }
 const LbnPoseConfig& ConfigManager::lbnPoseConfig() const { return m_lbnPoseConfig; }
@@ -282,9 +283,12 @@ void ConfigManager::writeDefaults(QSettings& settings)
     settings.endGroup();
 
     settings.beginGroup("Tracking");
-    settings.setValue("firstStationOuterSegmentIndex", 1);
-    settings.setValue("firstStationInnerSegmentIndex", 2);
-    settings.setValue("firstStationHoleSegmentIndex", 3);
+    settings.setValue("scanSegmentTotal", 3);
+    settings.endGroup();
+
+    settings.beginGroup("Bevel");
+    settings.setValue("configPath", "bevel/config.txt");
+    settings.setValue("templateDir", "bevel/data/templates");
     settings.endGroup();
 
     settings.beginGroup("Hmi");
@@ -467,10 +471,14 @@ void ConfigManager::load(const QString& filePath)
     settings.endGroup();
 
     settings.beginGroup("Tracking");
-    m_trackingConfig.firstStationOuterSegmentIndex = settings.value("firstStationOuterSegmentIndex", 1).toInt();
-    m_trackingConfig.firstStationInnerSegmentIndex = settings.value("firstStationInnerSegmentIndex", 2).toInt();
-    m_trackingConfig.firstStationHoleSegmentIndex = settings.value("firstStationHoleSegmentIndex", 3).toInt();
     m_trackingConfig.scanSegmentTotal = settings.value("scanSegmentTotal", 3).toInt();
+    settings.endGroup();
+
+    settings.beginGroup("Bevel");
+    m_bevelConfig.configPath =
+        settings.value("configPath", QStringLiteral("bevel/config.txt")).toString();
+    m_bevelConfig.templateDir =
+        settings.value("templateDir", QStringLiteral("bevel/data/templates")).toString();
     settings.endGroup();
 
     settings.beginGroup("Hmi");

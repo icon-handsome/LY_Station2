@@ -139,6 +139,6 @@ if(SCAN_TRACKING_ENABLE_LBN_POSE_DETECTION)
     add_subdirectory(LBN)
 endif()
 
-if(SCAN_TRACKING_ENABLE_LANYOU_DETECTION)
-    add_subdirectory(lanyou_first_detection)
+if(SCAN_TRACKING_ENABLE_BEVEL_MEASUREMENT)
+    add_subdirectory(Po_Kou_Ce_Liang)
 endif()

@@ -21,48 +21,29 @@ bool expectTrue(bool condition, const char* message)
     return true;
 }
 
-scan_tracking::mech_eye::CaptureResult makeCaptureResult(int pointCount, bool success = true)
+scan_tracking::mech_eye::PointCloudFrame makePointCloudFrame(int pointCount)
 {
-    scan_tracking::mech_eye::CaptureResult result;
-    result.errorCode = success
-        ? scan_tracking::mech_eye::CaptureErrorCode::Success
-        : scan_tracking::mech_eye::CaptureErrorCode::CaptureFailed;
-
-    if (pointCount > 0) {
-        auto points = std::make_shared<std::vector<float>>();
-        points->reserve(static_cast<std::size_t>(pointCount * 3));
-        for (int index = 0; index < pointCount; ++index) {
-            points->push_back(static_cast<float>(index));
-            points->push_back(static_cast<float>(index + 1));
-            points->push_back(static_cast<float>(index + 2));
-        }
-        result.pointCloud.pointsXYZ = points;
-        result.pointCloud.pointCount = pointCount;
-        result.pointCloud.width = pointCount;
-        result.pointCloud.height = 1;
+    scan_tracking::mech_eye::PointCloudFrame frame;
+    if (pointCount <= 0) {
+        return frame;
     }
 
-    return result;
+    auto points = std::make_shared<std::vector<float>>();
+    points->reserve(static_cast<std::size_t>(pointCount * 3));
+    for (int index = 0; index < pointCount; ++index) {
+        points->push_back(static_cast<float>(index));
+        points->push_back(static_cast<float>(index + 1));
+        points->push_back(static_cast<float>(index + 2));
+    }
+
+    frame.pointsXYZ = points;
+    frame.pointCount = pointCount;
+    frame.width = pointCount;
+    frame.height = 1;
+    return frame;
 }
 
-bool testRejectsWhenThereAreFewerThanThreeValidSegments()
-{
-    scan_tracking::tracking::TrackingService service;
-    QMap<int, scan_tracking::mech_eye::CaptureResult> segments;
-    segments.insert(1, makeCaptureResult(2));
-    segments.insert(2, makeCaptureResult(2));
-
-    const auto result = service.inspectSegments(segments);
-
-    bool ok = true;
-    ok &= expectTrue(result.resultCode == 2, "should return NG when fewer than three valid segments are available");
-    ok &= expectTrue(result.totalPointCount == 4, "should still count all valid points");
-    ok &= expectTrue(result.ngReasonWord0 == (1u << 4), "should use missing-input NG bit for insufficient segments");
-    ok &= expectTrue(result.message.contains(QStringLiteral("缺少必需分段")), "should explain missing required segment count");
-    return ok;
-}
-
-bool 写入测试配置(int 外表面段号, int 内表面段号, int 开孔段号)
+bool writeTestConfig()
 {
     const QString configPath = QCoreApplication::applicationDirPath() + QStringLiteral("/config.ini");
     QFile file(configPath);
@@ -78,38 +59,39 @@ bool 写入测试配置(int 外表面段号, int 内表面段号, int 开孔段�
     stream << "[Camera]\ndefaultCamera=Mech-Eye Nano\nscanTimeoutMs=5000\n";
     stream << "[Vision]\nmechEyeCameraKey=Mech-Eye Nano\nmechCaptureTimeoutMs=5000\nhikConnectTimeoutMs=3000\nhikCaptureTimeoutMs=1000\nhikSdkRoot=D:/work/scan-tracking/third_party/hik_mvs\nhikCameraAName=hik_camera_a\nhikCameraAKey=192.168.10.12\nhikCameraAIp=192.168.10.12\nhikCameraASerial=\nhikCameraBName=hik_camera_b\nhikCameraBKey=192.168.10.13\nhikCameraBIp=192.168.10.13\nhikCameraBSerial=\n";
     stream << "[FlowControl]\npollIntervalMs=100\nheartbeatIntervalMs=1000\nsimulatedProcessingMs=300\n";
-    stream << "[Tracking]\n";
-    stream << "firstStationOuterSegmentIndex=" << 外表面段号 << "\n";
-    stream << "firstStationInnerSegmentIndex=" << 内表面段号 << "\n";
-    stream << "firstStationHoleSegmentIndex=" << 开孔段号 << "\n";
+    stream << "[Tracking]\nscanSegmentTotal=3\n";
+    stream << "[Bevel]\nconfigPath=bevel/config.txt\ntemplateDir=bevel/data/templates\n";
     file.close();
     return true;
 }
 
-bool testUsesConfiguredSegmentMapping()
+bool testRejectsEmptyPointCloud()
 {
-    scan_tracking::common::ConfigManager::cleanup();
-    if (!写入测试配置(10, 20, 30)) {
-        return false;
-    }
-    scan_tracking::common::ConfigManager::initialize();
-
     scan_tracking::tracking::TrackingService service;
-    QMap<int, scan_tracking::mech_eye::CaptureResult> segments;
-    segments.insert(10, makeCaptureResult(2));
-    segments.insert(20, makeCaptureResult(2));
-    segments.insert(30, makeCaptureResult(2));
-    segments.insert(40, makeCaptureResult(2));
-
-    const auto result = service.inspectSegments(segments);
-    scan_tracking::common::ConfigManager::cleanup();
+    const auto frame = makePointCloudFrame(0);
+    const auto result = service.inspectPointCloud(frame, 0);
 
     bool ok = true;
-    ok &= expectTrue(result.resultCode == 2, "tiny synthetic clouds should still fail the real first-station pipeline");
-    ok &= expectTrue(result.totalPointCount == 8, "should count all valid points before invoking the adapter");
-    ok &= expectTrue(result.ngReasonWord0 == (1u << 5), "FirstOut failure should map to the temporary FirstOut NG bit");
-    ok &= expectTrue(result.message.contains(QStringLiteral("外表面算法失败")), "result message should show that FirstOut was really invoked");
-    ok &= expectTrue(result.message.contains("[10,20,30]"), "result message should report the selected segment indices");
+    ok &= expectTrue(result.resultCode == 2, "empty cloud should return NG");
+    ok &= expectTrue(result.ngReasonWord0 == (1u << 4), "empty cloud should use missing-input NG bit");
+    ok &= expectTrue(result.message.contains(QStringLiteral("没有可用点云")),
+                     "empty cloud should explain missing input");
+    return ok;
+}
+
+bool testInvokesBevelPipelineWithTinyCloud()
+{
+    scan_tracking::tracking::TrackingService service;
+    const auto frame = makePointCloudFrame(8);
+    const auto result = service.inspectPointCloud(frame, frame.pointCount);
+
+    bool ok = true;
+    ok &= expectTrue(result.resultCode == 2, "tiny synthetic cloud should fail Po_Kou pipeline");
+    ok &= expectTrue(result.sourcePointCount == 8, "source point count should be preserved");
+    ok &= expectTrue(
+        result.ngReasonWord0 == (1u << 4) || result.ngReasonWord0 == (1u << 5),
+        "failure should map to adapter or algorithm NG bit");
+    ok &= expectTrue(!result.message.isEmpty(), "failure should include message");
     return ok;
 }
 
@@ -120,14 +102,14 @@ int main(int argc, char* argv[])
     QCoreApplication app(argc, argv);
 
     scan_tracking::common::ConfigManager::cleanup();
-    if (!写入测试配置(1, 2, 3)) {
+    if (!writeTestConfig()) {
         return 1;
     }
     scan_tracking::common::ConfigManager::initialize();
 
     bool ok = true;
-    ok &= testRejectsWhenThereAreFewerThanThreeValidSegments();
-    ok &= testUsesConfiguredSegmentMapping();
+    ok &= testRejectsEmptyPointCloud();
+    ok &= testInvokesBevelPipelineWithTinyCloud();
 
     scan_tracking::common::ConfigManager::cleanup();
 

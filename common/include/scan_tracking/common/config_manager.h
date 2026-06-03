@@ -97,17 +97,20 @@ struct PointCloudProcessingConfig {
 };
 
 struct TrackingConfig {
-    int firstStationOuterSegmentIndex;
-    int firstStationInnerSegmentIndex;
-    int firstStationHoleSegmentIndex;
-    int scanSegmentTotal;  // 扫描段总数（从 config.ini 获取，PLC不下发）
+    int scanSegmentTotal = 3;  // 扫描段总数（从 config.ini 获取，PLC不下发）
+};
+
+/// 坡口测量（Po_Kou）算法配置（[Bevel]）
+struct BevelConfig {
+    QString configPath = QStringLiteral("bevel/config.txt");
+    QString templateDir = QStringLiteral("bevel/data/templates");
 };
 
 /// HMI 显控 TCP 服务配置（[Hmi]）
 struct HmiConfig {
     bool enabled = true;       ///< 是否启动 HMI TCP 服务端
     quint16 tcpPort = 9900;    ///< 监听端口
-    /// 是否允许显控发送 cmd.debug_trigger_inspection（用缓存点云跑蓝友并推送，不写 PLC）
+    /// 是否允许显控发送 cmd.debug_trigger_inspection（用缓存点云跑坡口测量并推送，不写 PLC）
     bool allowDebugTriggerInspection = false;
 };
 
@@ -218,6 +221,7 @@ public:
     const VisionConfig& visionConfig() const;
     const FlowControlConfig& flowControlConfig() const;
     const TrackingConfig& trackingConfig() const;
+    const BevelConfig& bevelConfig() const;
     const HmiConfig& hmiConfig() const;
     const LbPoseConfig& lbPoseConfig() const;
     const LbnPoseConfig& lbnPoseConfig() const;
@@ -249,6 +253,7 @@ CameraConfig m_cameraConfig;
     VisionConfig m_visionConfig;
     FlowControlConfig m_flowControlConfig;
     TrackingConfig m_trackingConfig;
+    BevelConfig m_bevelConfig;
     HmiConfig m_hmiConfig;
     LbPoseConfig m_lbPoseConfig;
     LbnPoseConfig m_lbnPoseConfig;

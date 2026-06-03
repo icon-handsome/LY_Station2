@@ -60,7 +60,7 @@ include(MechEyeSdk)
 include(HikMvsSdk)
 include(PclRuntime)
 
-option(SCAN_TRACKING_ENABLE_LANYOU_DETECTION "Build Lanyou PCL-based detection algorithms" ON)
+option(SCAN_TRACKING_ENABLE_BEVEL_MEASUREMENT "Build Po_Kou bevel measurement algorithms" ON)
 option(SCAN_TRACKING_ENABLE_LB_POSE_DETECTION "Build the legacy LB pose detection module" ON)
 option(SCAN_TRACKING_ENABLE_LBN_POSE_DETECTION "Build the LBN Mech-Eye pose detection library" ON)
 

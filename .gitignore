@@ -32,15 +32,15 @@ third_party/onnxruntime/logs/
 # Third party SDK bundles (ignore by default, then un-ignore each tree for IDE visibility)
 third_party/*
 !third_party/CMakeLists.txt
-!third_party/lanyou_first_detection/
-!third_party/lanyou_first_detection/**
+!third_party/Po_Kou_Ce_Liang/
+!third_party/Po_Kou_Ce_Liang/**
 !third_party/LBN/
 !third_party/LBN/**
 !third_party/LB/
 !third_party/LB/**
 !third_party/MVS/
 !third_party/MVS/**
-third_party/lanyou_first_detection/logs/
+third_party/Po_Kou_Ce_Liang/x64/
 # LB: bundled OpenCV tree/installer (local path only, see third_party/LBN/CMakeLists.txt)
 third_party/LB/opencv-3.4.3-vc14_vc15/
 third_party/LB/opencv-3.4.3-vc14_vc15.exe

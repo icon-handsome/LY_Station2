@@ -2,15 +2,12 @@
  * @file tracking_service.cpp
  * @brief 跟踪服务实现文件
  *
- * 实现跟踪服务类，提供分段点云的综合检测和位姿校验功能。
- * 整合蓝优第一工位检测算法，对外表面、内表面和内孔点云进行综合分析，
- * 并输出检测结果、偏移量和测量参数。
+ * 实现跟踪服务类，提供坡口测量综合检测和位姿校验功能。
  */
 
 #include "scan_tracking/tracking/tracking_service.h"
 
 #include <cmath>
-#include <vector>
 
 #include <QtCore/QJsonObject>
 #include <QtCore/QLoggingCategory>
@@ -19,17 +16,13 @@
 #include "scan_tracking/common/application_info.h"
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/tracking/lb_pose_check.h"
-#include "scan_tracking/vision/lanyou_first_station_adapter.h"
+#include "scan_tracking/vision/bevel_measurement_adapter.h"
 
 namespace scan_tracking::tracking {
 
 Q_LOGGING_CATEGORY(LOG_TRACKING, "tracking")
 
 namespace {
-
-// TODO(field-commissioning): 蓝友 FirstOut/FirstInliner 现场崩溃，临时 bypass 不调用算法；
-// 联调通过后改为 false，并恢复下方 runFirstStationDetection() 调用。
-constexpr bool kBypassLanyouFirstStationDetection = true;
 
 void ensureInspectionMeasurementMetaTypeRegistered()
 {
@@ -46,139 +39,28 @@ double measurementJsonValue(float value)
     return std::isfinite(value) ? static_cast<double>(value) : 0.0;
 }
 
-InspectionMeasurement measurementFromParams(const FirstPoseDetectionParams& params)
-{
-    InspectionMeasurement measurement;
-    measurement.headAngleTol = params.head_angle_tol;
-    measurement.straightHeightTol = params.straight_height_tol;
-    measurement.straightSlopeTol = params.straight_slope_tol;
-    measurement.innerDiameter = params.inner_diameter;
-    measurement.bluntHeightTol = params.blunt_height_tol;
-    measurement.innerDiameterTol = params.inner_diameter_tol;
-    measurement.holeDiameterTol = params.hole_diameter_tol;
-    measurement.headDepthTol = params.head_depth_tol;
-    return measurement;
-}
-
-/// 有效分段条目结构体
-struct ValidSegmentEntry {
-    int segmentIndex = -1;                                    ///< 分段索引
-    const scan_tracking::mech_eye::CaptureResult* captureResult = nullptr; ///< 采集结果指针
-};
-
-/// 收集有效的分段采集结果
-// @param segmentCaptureResults 分段采集结果映射表
-// @param totalPointCount 总点数输出参数
-// @return 有效分段列表
-std::vector<ValidSegmentEntry> collectValidSegments(
-    const QMap<int, scan_tracking::mech_eye::CaptureResult>& segmentCaptureResults,
-    int* totalPointCount)
-{
-    std::vector<ValidSegmentEntry> validSegments;
-    int points = 0;
-
-    // 遍历所有分段，筛选出有效的采集结果
-    for (auto it = segmentCaptureResults.cbegin(); it != segmentCaptureResults.cend(); ++it) {
-        const auto& captureResult = it.value();
-        // 检查采集是否成功且点云有效
-        if (!captureResult.success() || !captureResult.pointCloud.isValid()) {
-            continue;
-        }
-
-        points += captureResult.pointCloud.pointCount;
-        validSegments.push_back(ValidSegmentEntry{it.key(), &captureResult});
-    }
-
-    if (totalPointCount != nullptr) {
-        *totalPointCount = points;
-    }
-
-    return validSegments;
-}
-
-/// 第一工位分段映射配置
-struct FirstStationSegmentMapping {
-    int outerSurfaceSegmentIndex = 1;   ///< 外表面分段索引
-    int innerSurfaceSegmentIndex = 2;   ///< 内表面分段索引
-    int innerHoleSegmentIndex = 3;      ///< 内孔分段索引
-};
-
-/// 从配置管理器加载第一工位分段映射
-// @return 分段映射配置
-FirstStationSegmentMapping loadFirstStationSegmentMapping()
-{
-    FirstStationSegmentMapping mapping;
-    const auto* configManager = scan_tracking::common::ConfigManager::instance();
-    if (configManager == nullptr) {
-        return mapping;
-    }
-
-    const auto& config = configManager->trackingConfig();
-    mapping.outerSurfaceSegmentIndex = config.firstStationOuterSegmentIndex;
-    mapping.innerSurfaceSegmentIndex = config.firstStationInnerSegmentIndex;
-    mapping.innerHoleSegmentIndex = config.firstStationHoleSegmentIndex;
-    return mapping;
-}
-
-/// 在有效分段列表中查找指定索引的分段
-// @param validSegments 有效分段列表
-// @param segmentIndex 要查找的分段索引
-// @return 找到则返回采集结果指针，否则返回nullptr
-const scan_tracking::mech_eye::CaptureResult* findValidSegment(
-    const std::vector<ValidSegmentEntry>& validSegments,
-    int segmentIndex)
-{
-    for (const auto& segment : validSegments) {
-        if (segment.segmentIndex == segmentIndex) {
-            return segment.captureResult;
-        }
-    }
-    return nullptr;
-}
-
-/// 生成选中的分段索引文本
-// @param mapping 分段映射配置
-// @return 格式化后的分段索引字符串
-QString selectedSegmentText(const FirstStationSegmentMapping& mapping)
-{
-    return QStringLiteral("[%1,%2,%3]")
-        .arg(mapping.outerSurfaceSegmentIndex)
-        .arg(mapping.innerSurfaceSegmentIndex)
-        .arg(mapping.innerHoleSegmentIndex);
-}
-
-/// 统计检测结果中的有效测量项数量
-// @param detectionResult 蓝优检测结果
-// @return 测量项数量
-quint16 countMeasuredItems(
-    const scan_tracking::vision::lanyou::FirstStationDetectionResult& detectionResult)
+quint16 countMeasuredItems(const InspectionMeasurement& measurement)
 {
     quint16 count = 0;
-    if (std::isfinite(detectionResult.params.head_angle_tol)) {
+    if (std::isfinite(measurement.headAngleTol)) {
         ++count;
     }
-    if (std::isfinite(detectionResult.params.straight_height_tol)) {
-        ++count;
-    }
-    if (std::isfinite(detectionResult.params.straight_slope_tol)) {
-        ++count;
-    }
-    if (std::isfinite(detectionResult.params.inner_diameter)) {
+    if (std::isfinite(measurement.bluntHeightTol)) {
         ++count;
     }
     return count;
 }
 
-/// 组合NG原因文本
-// @param label 原因标签
-// @param errorLog 错误日志
-// @return 组合后的原因文本
-QString composeNgReasonText(const QString& label, const QString& errorLog)
+InspectionMeasurement measurementFromBevelResult(
+    const scan_tracking::vision::bevel::BevelInspectionResult& detection)
 {
-    if (errorLog.trimmed().isEmpty()) {
-        return label;
-    }
-    return QStringLiteral("%1: %2").arg(label, errorLog.trimmed());
+    InspectionMeasurement measurement;
+    measurement.headAngleTol = detection.angleDeg;
+    measurement.bluntHeightTol = detection.lengthMm;
+    measurement.bevelType = detection.bevelType;
+    measurement.icpFitness = detection.icpFitness;
+    measurement.qualityCode = detection.qualityCode;
+    return measurement;
 }
 
 }  // namespace
@@ -186,17 +68,12 @@ QString composeNgReasonText(const QString& label, const QString& errorLog)
 void appendInspectionMeasurementFields(QJsonObject& payload, const InspectionMeasurement& measurement)
 {
     payload[QStringLiteral("head_angle_tol")] = measurementJsonValue(measurement.headAngleTol);
-    payload[QStringLiteral("straight_height_tol")] = measurementJsonValue(measurement.straightHeightTol);
-    payload[QStringLiteral("straight_slope_tol")] = measurementJsonValue(measurement.straightSlopeTol);
-    payload[QStringLiteral("inner_diameter")] = measurementJsonValue(measurement.innerDiameter);
     payload[QStringLiteral("blunt_height_tol")] = measurementJsonValue(measurement.bluntHeightTol);
-    payload[QStringLiteral("inner_diameter_tol")] = measurementJsonValue(measurement.innerDiameterTol);
-    payload[QStringLiteral("hole_diameter_tol")] = measurementJsonValue(measurement.holeDiameterTol);
-    payload[QStringLiteral("head_depth_tol")] = measurementJsonValue(measurement.headDepthTol);
+    payload[QStringLiteral("bevel_type")] = measurement.bevelType;
+    payload[QStringLiteral("icp_fitness")] = measurementJsonValue(measurement.icpFitness);
+    payload[QStringLiteral("quality_code")] = measurement.qualityCode;
 }
 
-/// 获取跟踪服务状态文本
-// @return 应用名称和状态描述
 std::string TrackingService::statusText() const
 {
     return scan_tracking::common::ApplicationInfo::name() + " core is ready.";
@@ -207,157 +84,75 @@ void TrackingService::setInspectionResultNotifier(InspectionResultNotifier notif
     m_inspectionResultNotifier = std::move(notifier);
 }
 
-InspectionResult TrackingService::deliverInspectionResult(InspectionResult result, bool notifyListener) const
+InspectionResult TrackingService::deliverInspectionResult(
+    InspectionResult result, bool notifyListener) const
 {
-    // 蓝友 runFirstStationDetection 完成后，经本出口立即通知显控（演示初版：失败也推送）
     if (notifyListener && m_inspectionResultNotifier) {
         m_inspectionResultNotifier(result);
     }
     return result;
 }
 
-/// 执行分段点云的综合检测（第一工位）
-//
-// 该函数接收多个分段的采集结果，根据配置的映射关系提取外表面、内表面和内孔点云，
-// 调用蓝优第一工位检测算法进行分析，并返回检测结果。
-//
-// @param segmentCaptureResults 分段采集结果映射表
-// @return 检测结果结构体，包含结果码、NG原因、偏移量和测量参数
-InspectionResult TrackingService::inspectSegments(
-    const QMap<int, scan_tracking::mech_eye::CaptureResult>& segmentCaptureResults,
+InspectionResult TrackingService::inspectPointCloud(
+    const scan_tracking::mech_eye::PointCloudFrame& pointCloud,
+    int sourcePointCount,
     bool notifyListener) const
 {
     ensureInspectionMeasurementMetaTypeRegistered();
 
     InspectionResult result;
-    result.segmentCount = segmentCaptureResults.size();
-    result.measureItemCount = 0;
+    result.sourcePointCount = sourcePointCount > 0 ? sourcePointCount : pointCloud.pointCount;
 
-    // 收集有效的分段采集结果
-    const auto validSegments = collectValidSegments(segmentCaptureResults, &result.totalPointCount);
-
-    // 检查是否有可用点云
-    if (result.totalPointCount <= 0) {
+    if (!pointCloud.isValid() || result.sourcePointCount <= 0) {
         result.resultCode = 2;
         result.ngReasonWord0 = (1u << 4);
         result.message = QStringLiteral("综合检测没有可用点云。");
         return deliverInspectionResult(result, notifyListener);
     }
 
-    // 加载第一工位分段映射配置
-    // TODO(multipath): 多路径时 segmentIndex 与 pathId/pointIndex 的映射需从 scan_paths_config.json 解析，
-    // 不能仅依赖 [Tracking] 三个固定段位；蓝友侧待 detectMultiPath 融合后再改此处取点逻辑。
-    const auto segmentMapping = loadFirstStationSegmentMapping();
+    const auto detection = scan_tracking::vision::bevel::runBevelMeasurement(pointCloud);
 
-    // 查找所需的三个分段：外表面、内表面、内孔
-    const auto* outerSurfaceResult = findValidSegment(validSegments, segmentMapping.outerSurfaceSegmentIndex);
-    const auto* innerSurfaceResult = findValidSegment(validSegments, segmentMapping.innerSurfaceSegmentIndex);
-    const auto* innerHoleResult = findValidSegment(validSegments, segmentMapping.innerHoleSegmentIndex);
-
-    // 检查必需的三个分段是否都存在
-    if (outerSurfaceResult == nullptr || innerSurfaceResult == nullptr || innerHoleResult == nullptr) {
-        result.resultCode = 2;
-        result.ngReasonWord0 = (1u << 4);
-        result.message = QStringLiteral(
-            "第一工位检测缺少必需分段，当前配置段位为 %1。")
-                             .arg(selectedSegmentText(segmentMapping));
-        return deliverInspectionResult(result, notifyListener);
-    }
-
-    if (kBypassLanyouFirstStationDetection) {
-        result.resultCode = 1;
-        result.measureItemCount = 0;
-        result.message = QStringLiteral(
-            "TODO(field-commissioning): 蓝友第一工位算法已临时 bypass，未调用 runFirstStationDetection，"
-            "固定返回 OK(resultCode=1)；段位 %1，总点数 %2。")
-                             .arg(selectedSegmentText(segmentMapping))
-                             .arg(result.totalPointCount);
-        qWarning(LOG_TRACKING).noquote() << result.message;
-        return deliverInspectionResult(result, notifyListener);
-    }
-
-    // 构建帧集合，调用蓝优第一工位检测算法
-    scan_tracking::vision::lanyou::FirstStationFrameSet frameSet;
-    frameSet.outerSurfaceFrame = outerSurfaceResult->pointCloud;
-    frameSet.innerSurfaceFrame = innerSurfaceResult->pointCloud;
-    frameSet.innerHoleFrame = innerHoleResult->pointCloud;
-
-    const auto detection = scan_tracking::vision::lanyou::runFirstStationDetection(frameSet);
-    // TODO(hmi-demo): 此处可追加蓝友原始 params 的调试字段；当前仅通过 deliverInspectionResult 推送协议化结果
-
-    // 检查算法是否真正启动
     if (!detection.invoked) {
         result.resultCode = 2;
         result.ngReasonWord0 = (1u << 4);
-        result.outlinerErrorLog = detection.outlinerErrorLog;
-        result.inlinerErrorLog = detection.inlinerErrorLog;
-        result.message = QStringLiteral(
-            "第一工位算法适配层未真正启动，段位为 %1,详情：%2")
-                             .arg(selectedSegmentText(segmentMapping), detection.message);
+        result.message = detection.message.isEmpty()
+            ? QStringLiteral("坡口测量适配层未启动。")
+            : detection.message;
         return deliverInspectionResult(result, notifyListener);
     }
 
-    // 检查外表面检测结果
-    if (!detection.firstOutSuccess) {
+    result.measurement = measurementFromBevelResult(detection);
+
+    if (!detection.ok) {
         result.resultCode = 2;
         result.ngReasonWord0 = (1u << 5);
-        result.outlinerErrorLog = detection.outlinerErrorLog;
-        result.message = QStringLiteral(
-            "%1，段位为 %2。")
-                             .arg(
-                                 composeNgReasonText(
-                                     QStringLiteral("第一工位外表面算法失败"),
-                                     detection.outlinerErrorLog.isEmpty() ? detection.message : detection.outlinerErrorLog),
-                                 selectedSegmentText(segmentMapping));
+        result.message = detection.message.isEmpty()
+            ? QStringLiteral("坡口测量算法失败。")
+            : detection.message;
         return deliverInspectionResult(result, notifyListener);
     }
 
-    // 检查内表面检测结果
-    if (!detection.firstInlinerSuccess) {
+    if (detection.qualityCode != 0) {
         result.resultCode = 2;
         result.ngReasonWord0 = (1u << 6);
-        result.inlinerErrorLog = detection.inlinerErrorLog;
-        result.message = QStringLiteral(
-            "%1，段位为 %2。")
-                             .arg(
-                                 composeNgReasonText(
-                                     QStringLiteral("第一工位内表面算法失败"),
-                                     detection.inlinerErrorLog.isEmpty() ? detection.message : detection.inlinerErrorLog),
-                                 selectedSegmentText(segmentMapping));
+        result.message = detection.message.isEmpty()
+            ? QStringLiteral("坡口测量超出标准范围，qualityCode=%1。")
+                  .arg(detection.qualityCode)
+            : detection.message;
         return deliverInspectionResult(result, notifyListener);
     }
 
-    // 检测成功，填充结果
     result.resultCode = 1;
-    result.measureItemCount = countMeasuredItems(detection);
-    result.offsetXmm = detection.params.cylinder_center.x();
-    result.offsetYmm = detection.params.cylinder_center.y();
-    result.offsetZmm = detection.params.cylinder_center.z();
-    result.stableOffsetXmm = detection.stableOffsetXmm;
-    result.stableOffsetYmm = detection.stableOffsetYmm;
-    result.stableOffsetZmm = detection.stableOffsetZmm;
-    result.measurement = measurementFromParams(detection.params);
-    result.outlinerErrorLog = detection.outlinerErrorLog;
-    result.inlinerErrorLog = detection.inlinerErrorLog;
+    result.measureItemCount = countMeasuredItems(result.measurement);
     result.message = QStringLiteral(
-        "第一工位检测通过，段位为 %1,稳定偏移=(%2,%3,%4),坡口角=%5,直边高度=%6,直边斜度=%7,内径=%8。")
-                         .arg(selectedSegmentText(segmentMapping))
-                         .arg(result.stableOffsetXmm, 0, 'f', 3)
-                         .arg(result.stableOffsetYmm, 0, 'f', 3)
-                         .arg(result.stableOffsetZmm, 0, 'f', 3)
-                         .arg(detection.params.head_angle_tol, 0, 'f', 3)
-                         .arg(detection.params.straight_height_tol, 0, 'f', 3)
-                         .arg(detection.params.straight_slope_tol, 0, 'f', 3)
-                         .arg(detection.params.inner_diameter, 0, 'f', 3);
+        "坡口测量通过：angle=%1 deg, length=%2 mm, bevelType=%3, icpFitness=%4。")
+                         .arg(detection.angleDeg, 0, 'f', 3)
+                         .arg(detection.lengthMm, 0, 'f', 3)
+                         .arg(detection.bevelType)
+                         .arg(detection.icpFitness, 0, 'f', 6);
     return deliverInspectionResult(result, notifyListener);
 }
 
-/// 执行位姿校验（LB位姿检测）
-//
-// 使用LB位姿检测算法对左右相机图像进行三维重建和模板匹配，
-// 计算目标物体的位姿并输出4x4变换矩阵。
-//
-// @return 位姿校验结果结构体
 PoseCheckResult TrackingService::checkPose() const
 {
     PoseCheckResult result;
@@ -368,7 +163,6 @@ PoseCheckResult TrackingService::checkPose() const
         return result;
     }
 
-    // 调用LB位姿检测算法
     const auto lbResult = runLegacyLbPoseCheck(configManager->lbPoseConfig());
     result.invoked = lbResult.invoked;
     result.success = lbResult.success;

@@ -101,7 +101,7 @@
   "algorithmConfig": {
     "lbn": { "enabled": true, "timeoutMs": 2000, "confidenceThreshold": 0.8 },
     "lb": { "enabled": true, "timeoutMs": 1500, "minFeaturePoints": 50 },
-    "lanyou": { "enabled": true, "timeoutMs": 10000, "qualityThreshold": 0.7 }
+    "bevel": { "enabled": true, "timeoutMs": 10000, "qualityThreshold": 0.7 }
   },
 
   "dataManagement": {

@@ -79,7 +79,7 @@ inline constexpr const char* kCmdRefreshCamera       = "cmd.refresh_camera";
 inline constexpr const char* kCmdModbusConnect       = "cmd.modbus_connect";
 inline constexpr const char* kCmdModbusDisconnect    = "cmd.modbus_disconnect";
 
-/// 调试用：用状态机缓存点云触发蓝友综合检测（需 config.ini allowDebugTriggerInspection=true）
+/// 调试用：用状态机缓存点云触发坡口综合检测（需 config.ini allowDebugTriggerInspection=true）
 inline constexpr const char* kCmdDebugTriggerInspection = "cmd.debug_trigger_inspection";
 
 }  // namespace msg_type

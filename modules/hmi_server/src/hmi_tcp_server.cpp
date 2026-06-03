@@ -530,12 +530,15 @@ void HmiTcpServer::handleCmdGetConfig(const QJsonObject& message)
     flowControlObj[QLatin1String("simulatedProcessingMs")] = cfgMgr->flowControlConfig().simulatedProcessingMs; // 模拟处理间隔
     configPayload[QLatin1String("flowControl")] = flowControlObj;
     
-    // 7. Tracking 配置
+    // 7. Tracking / Bevel 配置
     QJsonObject trackingObj;
-    trackingObj[QLatin1String("firstStationOuterSegmentIndex")] = cfgMgr->trackingConfig().firstStationOuterSegmentIndex; // 外表面段号
-    trackingObj[QLatin1String("firstStationInnerSegmentIndex")] = cfgMgr->trackingConfig().firstStationInnerSegmentIndex; // 内表面段号
-    trackingObj[QLatin1String("firstStationHoleSegmentIndex")] = cfgMgr->trackingConfig().firstStationHoleSegmentIndex; // 开孔段号
+    trackingObj[QLatin1String("scanSegmentTotal")] = cfgMgr->trackingConfig().scanSegmentTotal;
     configPayload[QLatin1String("tracking")] = trackingObj;
+
+    QJsonObject bevelObj;
+    bevelObj[QLatin1String("configPath")] = cfgMgr->bevelConfig().configPath;
+    bevelObj[QLatin1String("templateDir")] = cfgMgr->bevelConfig().templateDir;
+    configPayload[QLatin1String("bevel")] = bevelObj;
 
     QJsonObject hmiObj;
     hmiObj[QLatin1String("enabled")] = cfgMgr->hmiConfig().enabled;
@@ -668,7 +671,7 @@ void HmiTcpServer::handleCmdDebugTriggerInspection(const QJsonObject& message)
     // 2. 读取当前缓存段位（多路径场景下 cache 可能含多段，见 multiPathNote）
     const QVector<int> cachedSegments = m_stateMachine->cachedScanSegmentIndices();
 
-    // 3. 用缓存跑蓝友（不写 PLC、不清缓存）；notifyListener=false 避免与下方 publish 重复
+    // 3. 用缓存跑坡口测量（不写 PLC、不清缓存）；notifyListener=false 避免与下方 publish 重复
     const tracking::InspectionResult inspectionResult = m_stateMachine->runDebugInspectionOnCachedSegments();
 
     // 4. 无论合格/不合格都推 event.inspection.finished 给显控
@@ -688,10 +691,8 @@ void HmiTcpServer::handleCmdDebugTriggerInspection(const QJsonObject& message)
     }
     payload[QLatin1String("cachedSegmentIndices")] = segmentArray;
     payload[QLatin1String("inspectionMessage")] = inspectionResult.message;
-    // TODO(multipath): 多路径融合完成后，此处应返回 pathId、每路径点位列表及实际参与蓝友的段位
     payload[QLatin1String("multiPathNote")] = QStringLiteral(
-        "当前蓝友仍按 config.ini [Tracking] 的 firstStationOuter/Inner/HoleSegmentIndex 三段取点；"
-        "多路径多点位缓存已可写入状态机，但尚未做路径级融合与 detectMultiPath。");
+        "综合检测会将当前可检测路径上的分段点云合并为单云后调用 Po_Kou 坡口测量算法。");
 
     QJsonObject envelope;
     envelope[QStringLiteral("version")] = QLatin1String(kProtocolVersion);
@@ -1487,18 +1488,9 @@ QJsonObject HmiTcpServer::buildInspectionFinishedPayload(const tracking::Inspect
     payload[QLatin1String("ngReasonWord0")] = result.ngReasonWord0;
     payload[QLatin1String("ngReasonWord1")] = result.ngReasonWord1;
     payload[QLatin1String("measureItemCount")] = result.measureItemCount;
-    payload[QLatin1String("offsetXmm")] = static_cast<double>(result.offsetXmm);
-    payload[QLatin1String("offsetYmm")] = static_cast<double>(result.offsetYmm);
-    payload[QLatin1String("offsetZmm")] = static_cast<double>(result.offsetZmm);
-    payload[QLatin1String("stableOffsetXmm")] = static_cast<double>(result.stableOffsetXmm);
-    payload[QLatin1String("stableOffsetYmm")] = static_cast<double>(result.stableOffsetYmm);
-    payload[QLatin1String("stableOffsetZmm")] = static_cast<double>(result.stableOffsetZmm);
     tracking::appendInspectionMeasurementFields(payload, result.measurement);
-    payload[QLatin1String("outlinerErrorLog")] = result.outlinerErrorLog;
-    payload[QLatin1String("inlinerErrorLog")] = result.inlinerErrorLog;
     payload[QLatin1String("message")] = result.message;
-    payload[QLatin1String("segmentCount")] = result.segmentCount;
-    payload[QLatin1String("totalPointCount")] = result.totalPointCount;
+    payload[QLatin1String("sourcePointCount")] = result.sourcePointCount;
     return payload;
 }
 
@@ -1507,7 +1499,7 @@ void HmiTcpServer::publishInspectionResult(const tracking::InspectionResult& res
     if (!hasClient()) {
         // TODO(hmi-demo): 无显控连接时缓存最后一帧，连接后补发
         qInfo(LOG_HMI_SERVER).noquote()
-            << QStringLiteral("[TCPIP] 蓝友检测结果未推送（无显控连接）")
+            << QStringLiteral("[TCPIP] 坡口测量结果未推送（无显控连接）")
             << QStringLiteral(" resultCode=") << result.resultCode
             << QStringLiteral(" message=") << result.message;
         return;
@@ -1517,11 +1509,12 @@ void HmiTcpServer::publishInspectionResult(const tracking::InspectionResult& res
     sendToClient(buildEnvelope(QLatin1String(msg_type::kEventInspectionFinished), nextEventId(), payload));
 
     qInfo(LOG_HMI_SERVER).noquote()
-        << QStringLiteral("[TCPIP] 蓝友检测结果已推送 event.inspection.finished")
+        << QStringLiteral("[TCPIP] 坡口测量结果已推送 event.inspection.finished")
         << QStringLiteral(" resultCode=") << result.resultCode
         << QStringLiteral(" ngWord0=") << result.ngReasonWord0
         << QStringLiteral(" measureItems=") << result.measureItemCount
-        << QStringLiteral(" offset=(") << result.offsetXmm << QStringLiteral(",") << result.offsetYmm << QStringLiteral(",") << result.offsetZmm << QStringLiteral(")")
+        << QStringLiteral(" angleDeg=") << result.measurement.headAngleTol
+        << QStringLiteral(" lengthMm=") << result.measurement.bluntHeightTol
         << QStringLiteral(" message=") << result.message;
 }
 
