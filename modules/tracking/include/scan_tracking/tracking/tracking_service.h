@@ -34,6 +34,9 @@ struct InspectionMeasurement {
 /// 将测量项写入 JSON payload（协议 snake_case 字段名）
 void appendInspectionMeasurementFields(QJsonObject& payload, const InspectionMeasurement& measurement);
 
+/// 将显控 12 项指标写入 payload.headMetrics（2 项 Po_Kou 实测，其余 10 项暂为 0）
+void appendHeadDisplayMetricsFields(QJsonObject& payload, const InspectionMeasurement& measurement);
+
 /// 检测结果结构体，封装坡口综合检测的完整输出
 struct InspectionResult {
     quint16 resultCode = 0;           ///< 结果码：1-成功，2-失败

@@ -1618,6 +1618,7 @@ QJsonObject HmiTcpServer::buildInspectionFinishedPayload(const tracking::Inspect
     payload[QLatin1String("ngReasonWord1")] = result.ngReasonWord1;
     payload[QLatin1String("measureItemCount")] = result.measureItemCount;
     tracking::appendInspectionMeasurementFields(payload, result.measurement);
+    tracking::appendHeadDisplayMetricsFields(payload, result.measurement);
     payload[QLatin1String("message")] = result.message;
     payload[QLatin1String("sourcePointCount")] = result.sourcePointCount;
 

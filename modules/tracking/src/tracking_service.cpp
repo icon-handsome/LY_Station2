@@ -74,6 +74,24 @@ void appendInspectionMeasurementFields(QJsonObject& payload, const InspectionMea
     payload[QStringLiteral("quality_code")] = measurement.qualityCode;
 }
 
+void appendHeadDisplayMetricsFields(QJsonObject& payload, const InspectionMeasurement& measurement)
+{
+    QJsonObject headMetrics;
+    headMetrics[QStringLiteral("inner_diameter_mm")] = 0.0;
+    headMetrics[QStringLiteral("roundness_tol")] = 0.0;
+    headMetrics[QStringLiteral("straight_slope_tol")] = 0.0;
+    headMetrics[QStringLiteral("head_depth_mm")] = 0.0;
+    headMetrics[QStringLiteral("straight_height_tol")] = 0.0;
+    headMetrics[QStringLiteral("bevel_angle_deg")] = measurementJsonValue(measurement.headAngleTol);
+    headMetrics[QStringLiteral("blunt_height_mm")] = measurementJsonValue(measurement.bluntHeightTol);
+    headMetrics[QStringLiteral("inner_circumference_mm")] = 0.0;
+    headMetrics[QStringLiteral("hole_opening_mm")] = 0.0;
+    headMetrics[QStringLiteral("joint_fit_up_angle_deg")] = 0.0;
+    headMetrics[QStringLiteral("thickness_mm")] = 0.0;
+    headMetrics[QStringLiteral("head_volume_m3")] = 0.0;
+    payload[QStringLiteral("headMetrics")] = headMetrics;
+}
+
 std::string TrackingService::statusText() const
 {
     return scan_tracking::common::ApplicationInfo::name() + " core is ready.";

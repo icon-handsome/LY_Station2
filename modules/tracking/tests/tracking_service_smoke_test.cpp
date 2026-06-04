@@ -1,11 +1,13 @@
 #include "scan_tracking/tracking/tracking_service.h"
 
 #include <iostream>
+#include <cmath>
 #include <memory>
 #include <vector>
 
 #include <QCoreApplication>
 #include <QFile>
+#include <QJsonObject>
 #include <QTextStream>
 
 #include "scan_tracking/common/config_manager.h"
@@ -137,6 +139,75 @@ bool testInvokesBevelPipelineWithTinyCloud()
     return ok;
 }
 
+bool nearDouble(double actual, double expected, double epsilon = 1e-3)
+{
+    return std::fabs(actual - expected) <= epsilon;
+}
+
+bool testHeadDisplayMetricsFields()
+{
+    scan_tracking::tracking::InspectionMeasurement measurement;
+    measurement.headAngleTol = 45.2f;
+    measurement.bluntHeightTol = 1.05f;
+
+    QJsonObject payload;
+    scan_tracking::tracking::appendHeadDisplayMetricsFields(payload, measurement);
+
+    const QJsonObject headMetrics = payload.value(QStringLiteral("headMetrics")).toObject();
+    if (headMetrics.size() != 12) {
+        std::cerr << "FAILED: headMetrics should contain 12 keys\n";
+        return false;
+    }
+
+    bool ok = true;
+    ok &= expectTrue(
+        nearDouble(headMetrics.value(QStringLiteral("bevel_angle_deg")).toDouble(), 45.2),
+        "bevel_angle_deg should match Po_Kou measurement");
+    ok &= expectTrue(
+        nearDouble(headMetrics.value(QStringLiteral("blunt_height_mm")).toDouble(), 1.05),
+        "blunt_height_mm should match Po_Kou measurement");
+
+    const QStringList zeroKeys = {
+        QStringLiteral("inner_diameter_mm"),
+        QStringLiteral("roundness_tol"),
+        QStringLiteral("straight_slope_tol"),
+        QStringLiteral("head_depth_mm"),
+        QStringLiteral("straight_height_tol"),
+        QStringLiteral("inner_circumference_mm"),
+        QStringLiteral("hole_opening_mm"),
+        QStringLiteral("joint_fit_up_angle_deg"),
+        QStringLiteral("thickness_mm"),
+        QStringLiteral("head_volume_m3"),
+    };
+    for (const QString& key : zeroKeys) {
+        ok &= expectTrue(
+            nearDouble(headMetrics.value(key).toDouble(), 0.0),
+            qPrintable(QStringLiteral("placeholder metric should be zero: %1").arg(key)));
+    }
+    return ok;
+}
+
+bool testHeadDisplayMetricsDefaultsToZero()
+{
+    scan_tracking::tracking::InspectionMeasurement measurement;
+    QJsonObject payload;
+    scan_tracking::tracking::appendHeadDisplayMetricsFields(payload, measurement);
+
+    const QJsonObject headMetrics = payload.value(QStringLiteral("headMetrics")).toObject();
+    if (headMetrics.size() != 12) {
+        std::cerr << "FAILED: default headMetrics should contain 12 keys\n";
+        return false;
+    }
+
+    bool ok = true;
+    for (auto it = headMetrics.begin(); it != headMetrics.end(); ++it) {
+        ok &= expectTrue(
+            nearDouble(it.value().toDouble(), 0.0),
+            qPrintable(QStringLiteral("default metric should be zero: %1").arg(it.key())));
+    }
+    return ok;
+}
+
 }  // namespace
 
 int main(int argc, char* argv[])
@@ -153,6 +224,8 @@ int main(int argc, char* argv[])
     ok &= testRejectsEmptyPointCloud();
     ok &= testInvokesBevelPipelineWithTinyCloud();
     ok &= testRejectsMissingRecipeWhenDefaultsDisabled();
+    ok &= testHeadDisplayMetricsFields();
+    ok &= testHeadDisplayMetricsDefaultsToZero();
 
     scan_tracking::common::ConfigManager::cleanup();
 
