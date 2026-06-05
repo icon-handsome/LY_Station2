@@ -42,6 +42,7 @@ private slots:
     void onSocketError(QAbstractSocket::SocketError socketError);
 
 private:
+    void drainReceiveBuffer();
     void processReceivedData(const QByteArray& data);
     void updateHeartbeat();
 

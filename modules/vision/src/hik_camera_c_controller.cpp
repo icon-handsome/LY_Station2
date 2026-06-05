@@ -6,7 +6,6 @@
 #include <QtCore/QLoggingCategory>
 #include <QtCore/QThread>
 
-#include "scan_tracking/vision/hik_camera_service.h"
 #include "scan_tracking/vision/hik_smart_camera_tcp_server.h"
 #include "scan_tracking/vision/hik_smart_camera_ftp_monitor.h"
 
@@ -26,11 +25,8 @@ void HikCameraCController::registerMetaTypes()
     qRegisterMetaType<scan_tracking::vision::ImageFileInfo>("scan_tracking::vision::ImageFileInfo");    registered = true;
 }
 
-HikCameraCController::HikCameraCController(
-    HikCameraService* hikCameraCService,
-    QObject* parent)
+HikCameraCController::HikCameraCController(QObject* parent)
     : QObject(parent)
-    , m_hikCameraCService(hikCameraCService)
     , m_tcpServer(nullptr)
     , m_testCaptureTimer(nullptr)
 {
@@ -69,46 +65,18 @@ void HikCameraCController::start(const scan_tracking::common::VisionConfig& conf
                          ? QStringLiteral("D:/HikCameraFTP")
                          : config.hikCameraCFtpDirectory;
 
-    if (m_hikCameraCService == nullptr) {
-        setState(HikCameraCState::Error, QStringLiteral("海康相机 C 服务未初始化"));
-        emit fatalError(VisionErrorCode::InvalidConfig, QStringLiteral("海康相机 C 服务未初始化。"));
-        return;
-    }
-
-    // 连接相机状态变化信号
-    connect(
-        m_hikCameraCService,
-        &HikCameraService::stateChanged,
-        this,
-        &HikCameraCController::onCameraCStateChanged,
-        Qt::QueuedConnection);
-
-    // 连接错误信号
-    connect(
-        m_hikCameraCService,
-        &HikCameraService::fatalError,
-        this,
-        &HikCameraCController::onCameraError,
-        Qt::QueuedConnection);
-
     m_started = true;
-    setState(HikCameraCState::Initializing, QStringLiteral("海康相机 C 控制器正在初始化"));
+    setState(HikCameraCState::Initializing, QStringLiteral("海康相机 C 控制器正在初始化（纯TCP模式）"));
 
     qInfo(hikCControllerLog) << QStringLiteral("HikCameraCController 已启动，相机：")
                              << m_config.hikCameraC.logicalName
-                             << QStringLiteral(" IP:") << m_config.hikCameraC.ipAddress
-                             << QStringLiteral(" Key:") << m_config.hikCameraC.cameraKey;
+                             << QStringLiteral(" IP:") << m_config.hikCameraC.ipAddress;
 
-    // 初始化 TCP 服务器
+    // 初始化 TCP 服务器（唯一通信通道）
     initializeTcpServer();
 
     // 初始化 FTP 监控器
     initializeFtpMonitor();
-
-    // 检查相机是否已连接
-    if (m_hikCameraCService->isConnected()) {
-        qInfo(hikCControllerLog) << QStringLiteral("相机 C SDK 连接已建立");
-    }
 }
 
 void HikCameraCController::stop()
@@ -367,31 +335,6 @@ void HikCameraCController::setState(HikCameraCState state, const QString& descri
 }
 
 // ============================================================================
-// 相机服务信号槽
-// ============================================================================
-
-void HikCameraCController::onCameraCStateChanged(
-    QString roleName,
-    QString stateText,
-    QString description)
-{
-    qInfo(hikCControllerLog) << QStringLiteral("相机 SDK 状态：") << roleName << stateText << description;
-
-    // 当相机 SDK 连接成功后，记录状态（但主要依赖 TCP 连接）
-    if (stateText == QStringLiteral("ready") && description.contains(QStringLiteral("已连接"))) {
-        qInfo(hikCControllerLog) << "相机 SDK 连接就绪（将使用 TCP 通信）";
-    }
-}
-
-void HikCameraCController::onCameraError(
-    scan_tracking::vision::VisionErrorCode code,
-    QString message)
-{
-    qWarning(hikCControllerLog) << QStringLiteral("相机 SDK 错误：") << static_cast<int>(code) << message;
-    // 智能相机主要使用 TCP 通信，SDK 错误不一定影响功能
-}
-
-// ============================================================================
 // TCP 服务器信号槽
 // ============================================================================
 
@@ -413,9 +356,12 @@ void HikCameraCController::onTcpCameraConnected(QString cameraIp, quint16 camera
     if (cameraIp == m_smartCameraIp) {
         setState(HikCameraCState::Ready, QStringLiteral("智能相机已通过 TCP 连接并就绪"));
 
-        // 连接成功后，启动自动拍照测试（每10秒一次）
+        // 连接后立即触发一次编号识别
+        requestCapture(CaptureType::NumberRecognition);
+
+        // 后续每 10 秒自动触发（编号识别）
         enableTestMode(true, 10000);
-        qInfo(hikCControllerLog) << "自动采集已启用：每 10 秒一次";
+        qInfo(hikCControllerLog) << "自动采集已启用：连接后立即触发，之后每 10 秒一次";
     } else {
         qWarning(hikCControllerLog) << QStringLiteral("意外相机 IP 已连接：") << cameraIp
                                     << QStringLiteral("（期望：") << m_smartCameraIp << QStringLiteral("）");
@@ -445,8 +391,51 @@ void HikCameraCController::onTcpHeartbeatReceived(QString cameraIp)
 
 void HikCameraCController::onTcpCommandReceived(QString cameraIp, QString command)
 {
-    qInfo(hikCControllerLog) << QStringLiteral("收到命令：") << cameraIp << QStringLiteral("：") << command;
-    // TODO: 处理相机发送的其他指令
+    // 相机回包可能很快：OCR/状态类信息做提取并限频打印，避免刷屏。
+    QString ocrText = command.trimmed();
+    if (ocrText.endsWith(QLatin1Char(';'))) {
+        ocrText.chop(1);
+    }
+
+    if (ocrText.startsWith(QStringLiteral("PX"), Qt::CaseInsensitive)) {
+        ocrText = ocrText.mid(2);
+    } else if (ocrText.startsWith(QLatin1Char('X'), Qt::CaseInsensitive)) {
+        ocrText = ocrText.mid(1);
+    }
+
+    if (!ocrText.isEmpty()
+        && ocrText.compare(QStringLiteral("hello"), Qt::CaseInsensitive) != 0) {
+        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+
+        // 限频策略：
+        // - 相同 OCR 结果在 2 秒内只打印一次
+        // - 任意 OCR 打印最小间隔 300ms
+        const bool sameAsLast = (!m_lastOcrText.isEmpty() && ocrText == m_lastOcrText);
+        const qint64 sinceLastMs = (m_lastOcrLogMs > 0) ? (nowMs - m_lastOcrLogMs) : INT64_MAX;
+        if ((sameAsLast && sinceLastMs < 2000) || (sinceLastMs < 300)) {
+            ++m_suppressedOcrLogCount;
+            return;
+        }
+
+        if (m_suppressedOcrLogCount > 0) {
+            qInfo(hikCControllerLog).noquote()
+                << QStringLiteral("[HikCameraC][OCR] %1（已抑制 %2 条过快/重复回包）")
+                       .arg(ocrText)
+                       .arg(m_suppressedOcrLogCount);
+            m_suppressedOcrLogCount = 0;
+        } else {
+            qInfo(hikCControllerLog).noquote()
+                << QStringLiteral("[HikCameraC][OCR] %1").arg(ocrText);
+        }
+
+        m_lastOcrText = ocrText;
+        m_lastOcrLogMs = nowMs;
+        return;
+    }
+
+    // 非 OCR 文本：降为 Debug，避免刷屏（必要时再扩展协议）。
+    qDebug(hikCControllerLog).noquote()
+        << QStringLiteral("[HikCameraC][TCP] %1: %2").arg(cameraIp, ocrText);
 }
 
 void HikCameraCController::onTcpImageDataReceived(QString cameraIp, QByteArray imageData)
@@ -479,19 +468,8 @@ void HikCameraCController::onTestCaptureTimer()
         return;
     }
     
-    // 循环测试三种拍照类型
-    CaptureType types[] = {
-        CaptureType::SurfaceDefect,
-        CaptureType::WeldDefect,
-        CaptureType::NumberRecognition
-    };
-    
-    static int typeIndex = 0;
-    CaptureType currentType = types[typeIndex];
-    typeIndex = (typeIndex + 1) % 3;
-    
-    qInfo(hikCControllerLog) << "测试采集已触发，类型：" << getCaptureTypeString(currentType);
-    requestCapture(currentType);
+    qInfo(hikCControllerLog) << "测试采集已触发，类型：NumberRecognition";
+    requestCapture(CaptureType::NumberRecognition);
 }
 
 // ============================================================================

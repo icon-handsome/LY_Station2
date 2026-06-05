@@ -72,7 +72,52 @@ bool HikSmartCameraSession::sendCommand(const QString& command)
 
 bool HikSmartCameraSession::sendStartCapture()
 {
-    return sendCommand("start");
+    if (!isConnected()) {
+        qWarning(hikTcpLog) << QStringLiteral("无法发送 start：未连接") << m_cameraIp;
+        return false;
+    }
+
+    // 现场协议：TCP 调试助手发 ASCII/5 的纯 "start"（无 \r\n）才能触发拍照
+    static const QByteArray kStartTrigger("start");
+    const qint64 written = m_socket->write(kStartTrigger);
+    if (written != kStartTrigger.size()) {
+        qWarning(hikTcpLog) << QStringLiteral("发送 start 失败") << m_cameraIp;
+        return false;
+    }
+
+    m_socket->flush();
+    qInfo(hikTcpLog) << "发送 start 到" << m_cameraIp;
+    return true;
+}
+
+void HikSmartCameraSession::drainReceiveBuffer()
+{
+    while (true) {
+        if (m_receiveBuffer.contains("\r\n")) {
+            const int index = m_receiveBuffer.indexOf("\r\n");
+            const QByteArray line = m_receiveBuffer.left(index);
+            m_receiveBuffer.remove(0, index + 2);
+            processReceivedData(line);
+            continue;
+        }
+
+        // OCR 回包形如 X2025-1297; / PX2025-1297;（分号结尾，无换行）
+        if (m_receiveBuffer.contains(';')) {
+            const int index = m_receiveBuffer.indexOf(';');
+            const QByteArray line = m_receiveBuffer.left(index + 1);
+            m_receiveBuffer.remove(0, index + 1);
+            processReceivedData(line);
+            continue;
+        }
+
+        if (m_receiveBuffer == "hello") {
+            processReceivedData(m_receiveBuffer);
+            m_receiveBuffer.clear();
+            continue;
+        }
+
+        break;
+    }
 }
 
 void HikSmartCameraSession::onReadyRead()
@@ -81,17 +126,8 @@ void HikSmartCameraSession::onReadyRead()
         return;
     }
 
-    QByteArray data = m_socket->readAll();
-    m_receiveBuffer.append(data);
-
-    // 处理接收到的数据（按行分割）
-    while (m_receiveBuffer.contains("\r\n")) {
-        int index = m_receiveBuffer.indexOf("\r\n");
-        QByteArray line = m_receiveBuffer.left(index);
-        m_receiveBuffer.remove(0, index + 2);
-
-        processReceivedData(line);
-    }
+    m_receiveBuffer.append(m_socket->readAll());
+    drainReceiveBuffer();
 
     // 防止缓冲区无限增长
     if (m_receiveBuffer.size() > 1024 * 1024) {  // 1MB
@@ -103,6 +139,9 @@ void HikSmartCameraSession::onReadyRead()
 void HikSmartCameraSession::processReceivedData(const QByteArray& data)
 {
     QString message = QString::fromUtf8(data).trimmed();
+    if (message.endsWith(QLatin1Char(';'))) {
+        message.chop(1);
+    }
 
     if (message.isEmpty()) {
         return;
@@ -240,7 +279,12 @@ bool HikSmartCameraTcpServer::sendCommandToCamera(const QString& cameraIp, const
 
 bool HikSmartCameraTcpServer::sendStartCaptureToCamera(const QString& cameraIp)
 {
-    return sendCommandToCamera(cameraIp, "start");
+    if (!m_sessions.contains(cameraIp)) {
+        qWarning(hikTcpLog) << QStringLiteral("相机未连接：") << cameraIp;
+        return false;
+    }
+
+    return m_sessions[cameraIp]->sendStartCapture();
 }
 
 void HikSmartCameraTcpServer::onNewConnection()

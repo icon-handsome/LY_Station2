@@ -1,8 +1,7 @@
 #pragma once
 
-// 海康相机 C 控制器
-// 独立管理第三台海康相机（智能相机/视觉传感器）
-// 使用 TCP 通信协议进行控制和图像获取
+// 海康相机 C 控制器（智能相机/视觉传感器）
+// 纯 TCP + FTP 模式：不通过 MVS SDK 打开设备，可与 SCMVS 共存
 
 #include <QtCore/QObject>
 #include <QtCore/QTimer>
@@ -14,7 +13,6 @@
 namespace scan_tracking {
 namespace vision {
 
-class HikCameraService;
 class HikSmartCameraTcpServer;
 class HikSmartCameraFtpMonitor;
 
@@ -32,9 +30,7 @@ class HikCameraCController : public QObject {
     Q_OBJECT
 
 public:
-    explicit HikCameraCController(
-        HikCameraService* hikCameraCService,
-        QObject* parent = nullptr);
+    explicit HikCameraCController(QObject* parent = nullptr);
     ~HikCameraCController() override;
 
     void start(const scan_tracking::common::VisionConfig& config);
@@ -63,9 +59,6 @@ signals:
     void imageReceived(CaptureType type, QString filePath, qint64 fileSize);  // FTP图像接收信号
 
 private slots:
-    void onCameraCStateChanged(QString roleName, QString stateText, QString description);
-    void onCameraError(scan_tracking::vision::VisionErrorCode code, QString message);
-    
     // TCP 服务器信号槽
     void onTcpServerStarted(QString listenIp, quint16 port);
     void onTcpServerStopped();
@@ -96,7 +89,6 @@ private:
     bool saveImageToFile(const QByteArray& imageData, CaptureType type);
     QString getCaptureTypeString(CaptureType type) const;
 
-    HikCameraService* m_hikCameraCService = nullptr;
     HikSmartCameraTcpServer* m_tcpServer = nullptr;
     HikSmartCameraFtpMonitor* m_ftpMonitor = nullptr;
     QTimer* m_testCaptureTimer = nullptr;
@@ -109,6 +101,11 @@ private:
     QString m_ftpDirectory;       // FTP 落图目录，来自配置 hikCameraCFtpDirectory
     CaptureType m_currentCaptureType = CaptureType::SurfaceDefect;
     int m_captureCounter = 0;
+
+    // OCR 结果限频（避免相机回包过快刷屏）
+    QString m_lastOcrText;
+    qint64 m_lastOcrLogMs = 0;
+    int m_suppressedOcrLogCount = 0;
 };
 
 }  // namespace vision

@@ -30,7 +30,6 @@
 #include "scan_tracking/modbus/modbus_service.h"
 #include "scan_tracking/tracking/tracking_service.h"
 #include "scan_tracking/vision/hik_cxp_camera_service.h"
-#include "scan_tracking/vision/hik_camera_service.h"
 #include "scan_tracking/vision/vision_pipeline_service.h"
 #include "scan_tracking/vision/hik_camera_c_controller.h"
 #include "scan_tracking/vision/hik_mono_io.h"
@@ -178,31 +177,8 @@ void ConsoleRuntime::initModules()
         qInfo(appLog) << QStringLiteral("CXP 双目相机服务已启动。");
     }
 
-    // 第三台海康相机（独立用途，不同型号 - 读码相机）
-    hikCameraCService_ = std::make_unique<scan_tracking::vision::HikCameraService>(
-        QStringLiteral("hik_camera_c"));
-
-    QObject::connect(
-        hikCameraCService_.get(),
-        &scan_tracking::vision::HikCameraService::stateChanged,
-        [](const QString& roleName, const QString& stateText, const QString& description) {
-            qInfo(appLog) << QStringLiteral("[海康]") << roleName << stateText << description;
-        });
-    QObject::connect(
-        hikCameraCService_.get(),
-        &scan_tracking::vision::HikCameraService::fatalError,
-        [](scan_tracking::vision::VisionErrorCode code, const QString& message) {
-            qCritical(appLog) << QStringLiteral("[海康] hik_camera_c 致命错误：")
-                              << static_cast<int>(code) << message;
-        });
-
-    hikCameraCService_->start(visionConfig.hikCameraC, visionConfig.hikCaptureTimeoutMs);
-    qInfo(appLog) << QStringLiteral("海康 C 相机服务已启动（仅连接，不采集）。");
-
-    // 海康相机 C 控制器（独立管理第三台相机 - 智能相机）
-    // 使用 TCP 通信协议进行控制和图像获取
-    hikCameraCController_ = std::make_unique<scan_tracking::vision::HikCameraCController>(
-        hikCameraCService_.get());
+    // 海康相机 C（智能相机）：纯 TCP 控制，不通过 MVS SDK 打开设备，避免与 SCMVS 冲突
+    hikCameraCController_ = std::make_unique<scan_tracking::vision::HikCameraCController>();
 
     QObject::connect(
         hikCameraCController_.get(),
@@ -292,7 +268,7 @@ void ConsoleRuntime::initModules()
         hmiTcpServer_->setVisionPipelineService(visionPipelineService_.get());
         hmiTcpServer_->setTrackingService(trackingService_.get());
         hmiTcpServer_->setHikCameraServices(
-            hikCxpCameraAService_.get(), hikCxpCameraBService_.get(), hikCameraCService_.get());
+            hikCxpCameraAService_.get(), hikCxpCameraBService_.get(), nullptr);
         hmiTcpServer_->setHikCameraCController(hikCameraCController_.get());
         hmiTcpServer_->bindServiceSignals();
 
@@ -593,9 +569,6 @@ void ConsoleRuntime::printShutdownStatus()
     }
     if (hikCxpCameraBService_) {
         hikCxpCameraBService_->stop();
-    }
-    if (hikCameraCService_) {
-        hikCameraCService_->stop();
     }
     if (mechEyeService_) {
         mechEyeService_->stop();
