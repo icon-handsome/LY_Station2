@@ -253,6 +253,7 @@ void HmiTcpServer::onNewConnection()
 
         sendToClient(buildEnvelope(QStringLiteral("core.hello"), nextEventId(), QJsonObject()));
         pushAllStatusToClient();
+        publishInitialInspectionDisplay();
         syncCameraConnectivityCache();
     }
 }
@@ -550,6 +551,7 @@ void HmiTcpServer::handleCmdGetConfig(const QJsonObject& message)
     recipeObj[QLatin1String("bevel_type")] = recipe.bevelType;
     recipeObj[QLatin1String("angle_deg")] = static_cast<double>(recipe.angleDeg);
     recipeObj[QLatin1String("length")] = static_cast<double>(recipe.lengthMm);
+    recipeObj[QLatin1String("has_hole")] = recipe.hasHole;
     bevelObj[QLatin1String("recipe")] = recipeObj;
     QJsonArray presetArray;
     for (const common::BevelRecipePreset& preset : common::standardBevelRecipePresets()) {
@@ -811,6 +813,7 @@ void HmiTcpServer::handleCmdSetBevelRecipe(const QJsonObject& message)
     recipe.bevelType = bevelType;
     recipe.angleDeg = static_cast<float>(angleDeg);
     recipe.lengthMm = static_cast<float>(lengthMm);
+    recipe.hasHole = payload.value(QLatin1String("has_hole")).toBool(false);
     cfgMgr->setBevelRecipe(recipe);
 
     QJsonObject responsePayload = buildResponsePayload(
@@ -818,6 +821,7 @@ void HmiTcpServer::handleCmdSetBevelRecipe(const QJsonObject& message)
     responsePayload[QLatin1String("bevel_type")] = recipe.bevelType;
     responsePayload[QLatin1String("angle_deg")] = static_cast<double>(recipe.angleDeg);
     responsePayload[QLatin1String("length")] = static_cast<double>(recipe.lengthMm);
+    responsePayload[QLatin1String("has_hole")] = recipe.hasHole;
     responsePayload[QLatin1String("angleTolDeg")] =
         static_cast<double>(cfgMgr->bevelConfig().angleTolDeg);
     responsePayload[QLatin1String("lengthTolMm")] =
@@ -835,7 +839,8 @@ void HmiTcpServer::handleCmdSetBevelRecipe(const QJsonObject& message)
         << QStringLiteral("[TCPIP] 坡口配方已更新")
         << QStringLiteral(" bevel_type=") << recipe.bevelType
         << QStringLiteral(" angle_deg=") << recipe.angleDeg
-        << QStringLiteral(" length=") << recipe.lengthMm;
+        << QStringLiteral(" length=") << recipe.lengthMm
+        << QStringLiteral(" has_hole=") << recipe.hasHole;
 }
 
 void HmiTcpServer::handleCmdCaptureMechEye(const QJsonObject& message)
@@ -1628,11 +1633,33 @@ QJsonObject HmiTcpServer::buildInspectionFinishedPayload(const tracking::Inspect
         payload[QLatin1String("expected_bevel_type")] = recipe.bevelType;
         payload[QLatin1String("expected_angle_deg")] = static_cast<double>(recipe.angleDeg);
         payload[QLatin1String("expected_length")] = static_cast<double>(recipe.lengthMm);
+        payload[QLatin1String("has_hole")] = recipe.hasHole;
         payload[QLatin1String("angle_tol_deg")] = static_cast<double>(bevelConfig.angleTolDeg);
         payload[QLatin1String("length_tol_mm")] = static_cast<double>(bevelConfig.lengthTolMm);
     }
 
     return payload;
+}
+
+void HmiTcpServer::publishInitialInspectionDisplay()
+{
+    if (!hasClient()) {
+        return;
+    }
+
+    tracking::InspectionResult idle;
+    idle.resultCode = 0;
+    idle.measureItemCount = 0;
+    idle.sourcePointCount = 0;
+    idle.message = QStringLiteral("等待检测");
+    idle.measurement.bevelType = 0;
+    idle.measurement.qualityCode = 0;
+
+    const QJsonObject payload = buildInspectionFinishedPayload(idle);
+    sendToClient(buildEnvelope(QLatin1String(msg_type::kEventInspectionFinished), nextEventId(), payload));
+
+    qInfo(LOG_HMI_SERVER).noquote()
+        << QStringLiteral("[TCPIP] 显控连接后已推送初始检测展示帧 event.inspection.finished（全零占位）");
 }
 
 void HmiTcpServer::publishInspectionResult(const tracking::InspectionResult& result)

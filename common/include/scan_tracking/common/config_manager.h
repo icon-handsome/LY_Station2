@@ -107,6 +107,7 @@ struct BevelRecipe {
     int bevelType = 0;
     float angleDeg = 0.0f;
     float lengthMm = 0.0f;
+    bool hasHole = false; ///< 是否有孔；未下发时默认 false（无孔）
 };
 
 /// 标准坡口型号（与 Po_Kou type_{n} 模板一一对应）

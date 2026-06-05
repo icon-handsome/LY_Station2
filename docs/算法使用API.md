@@ -54,23 +54,38 @@ defaultAngleDeg=45.0
 defaultLengthMm=1.0
 ```
 
-### 两种标准型号
+### 两种标准坡口型号
 
 | `bevel_type` | 坡口角 | 钝边长度 | 模板 |
 |--------------|--------|----------|------|
 | 0 | 45° | 1 mm | `type_0_*` |
 | 1 | 30° | 6 mm | `type_1_*` |
 
-`cmd.get_config` 的 `bevel.presets` 返回上表；Qt 换型时可只发 `bevel_type`，Core 自动填充角度与长度：
+坡口型号与有孔/无孔**独立**：通过 `has_hole`（bool）区分，**未传默认 `false`（无孔）**。
+
+| `has_hole` | 含义 | Core 行为 |
+|------------|------|-----------|
+| `false` | 无孔 | 记录为无孔，**不调用**测孔径算法；`headMetrics.hole_opening_mm` 为 0 |
+| `true` | 有孔 | 记录为有孔；测孔算法接入后将填充 `hole_opening_mm` |
+
+`cmd.get_config` 的 `bevel.presets` 返回坡口型号表；`bevel.recipe` 含当前生效配方（含 `has_hole`）。
+
+Qt 换型示例（45° 无孔，仅传型号时 `has_hole` 默认为 false）：
 
 ```json
-{ "type": "cmd.set_bevel_recipe", "payload": { "bevel_type": 1 } }
+{ "type": "cmd.set_bevel_recipe", "payload": { "bevel_type": 0 } }
+```
+
+30° 有孔：
+
+```json
+{ "type": "cmd.set_bevel_recipe", "payload": { "bevel_type": 1, "has_hole": true } }
 ```
 
 也可显式下发（会覆盖标准值）：
 
 ```json
-{ "type": "cmd.set_bevel_recipe", "payload": { "bevel_type": 0, "angle_deg": 45.0, "length": 1.0 } }
+{ "type": "cmd.set_bevel_recipe", "payload": { "bevel_type": 0, "angle_deg": 45.0, "length": 1.0, "has_hole": false } }
 ```
 
 环境变量：`SCAN_TRACKING_BEVEL_CONFIG_DIR`（指向含 `config.txt` 与 `data/` 的目录）。

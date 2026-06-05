@@ -141,6 +141,10 @@ InspectionResult TrackingService::inspectPointCloud(
     const auto detection = scan_tracking::vision::bevel::runBevelMeasurement(
         pointCloud, recipe, bevelConfig.angleTolDeg, bevelConfig.lengthTolMm);
 
+    if (recipe.hasHole) {
+        // TODO(hole-measurement): 有孔时在此调用测孔径算法并写入 headMetrics.hole_opening_mm
+    }
+
     if (!detection.invoked) {
         result.resultCode = 2;
         result.ngReasonWord0 = (1u << 4);
