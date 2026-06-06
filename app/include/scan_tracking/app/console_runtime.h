@@ -1,5 +1,15 @@
 #pragma once
 
+// ConsoleRuntime 是控制台版扫描跟踪应用的生命周期管理器。
+//
+// 职责：
+//   - 按依赖顺序创建并启动各业务模块（Modbus → Mech-Eye → CXP 双目 → 视觉流水线 → 状态机 → HMI）
+//   - 注册 Ctrl+C 等控制台信号，驱动 Qt 事件循环
+//   - 退出时按依赖逆序安全停止，避免异步回调落到已析构对象
+//   - 可选：读取 config.ini [Debug] 自动触发组合采集延时测试（LatencyTest）
+//
+// 启动阶段可通过环境变量 SCAN_TRACKING_STARTUP_STAGE（0~5）截断模块加载，便于分步联调。
+
 #include <QtCore/QCoreApplication>
 #include <memory>
 
@@ -28,26 +38,36 @@ public:
     explicit ConsoleRuntime(QCoreApplication& application);
     ~ConsoleRuntime();
 
+    /* 注册信号处理、初始化模块并进入 application_.exec() 事件循环 */
     int run();
 
 private:
     void printStartupStatus();
     void printShutdownStatus();
+
+    /* 按 startupStage 分级创建模块、连接信号、启动服务 */
     void initModules();
+
+    /* [Debug] 自动延时测试：读取 config.ini 并调度定时器 */
     void scheduleAutoLatencyBundleTest();
+
+    /* 向 VisionPipeline 发起一次 Mech 2D + CXP 双目组合采集 */
     void triggerAutoLatencyBundleTest();
+
+    /* 组合采集完成回调：打印各相机耗时汇总并落盘 PNG/BMP */
     void onAutoLatencyBundleFinished(const scan_tracking::vision::MultiCameraCaptureBundle& bundle);
 
     void stopAutoLatencyBundleTest();
 
-    qint64 m_autoLatencyTriggerMs = 0;
-    bool m_autoLatencyTestPending = false;
-    bool m_autoLatencyPeriodic = false;
-    int m_autoLatencyIntervalMs = 20000;
-    quint32 m_latencyBundleSeq = 0;
+    // ---- 自动延时测试状态 ----
+    qint64 m_autoLatencyTriggerMs = 0;   // 本次触发时刻（epoch ms），用于计算墙钟耗时
+    bool m_autoLatencyTestPending = false; // 是否有采集尚未完成
+    bool m_autoLatencyPeriodic = false;    // true=周期模式，false=单次
+    int m_autoLatencyIntervalMs = 20000; // 触发间隔（ms）
+    quint32 m_latencyBundleSeq = 0;        // 轮次序号，taskId = 90001 + round
     QTimer* m_autoLatencyTimer = nullptr;
 
-    /// 指针成员声明
+    // ---- 业务模块（unique_ptr 持有，析构顺序与声明顺序相反） ----
     QCoreApplication& application_;
     std::unique_ptr<scan_tracking::modbus::ModbusService> modbusService_;
     std::unique_ptr<scan_tracking::mech_eye::MechEyeService> mechEyeService_;

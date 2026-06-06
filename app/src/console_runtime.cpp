@@ -45,6 +45,7 @@ namespace scan_tracking::app {
 namespace {
 
 #ifdef _WIN32
+// Windows 控制台 Ctrl+C / 关闭事件 → 排队调用 QCoreApplication::quit()
 BOOL WINAPI handleConsoleSignal(DWORD signal)
 {
     switch (signal) {
@@ -81,6 +82,7 @@ int ConsoleRuntime::run()
     SetConsoleCtrlHandler(handleConsoleSignal, TRUE);
 #endif
 
+    // aboutToQuit 时按逆序 stop 各模块（见 printShutdownStatus）
     QObject::connect(
         &application_,
         &QCoreApplication::aboutToQuit,
@@ -95,6 +97,8 @@ int ConsoleRuntime::run()
 void ConsoleRuntime::initModules()
 {
     qInfo(appLog) << "正在初始化模块...";
+
+    // SCAN_TRACKING_STARTUP_STAGE 用于分步联调：0=仅 Modbus，5=全量模块
     int startupStage = 5;
     const QByteArray startupStageEnv = qgetenv("SCAN_TRACKING_STARTUP_STAGE");
 	bool startupStageOk = false;
@@ -110,6 +114,7 @@ void ConsoleRuntime::initModules()
     modbusService_ = std::make_unique<scan_tracking::modbus::ModbusService>(&application_);
     qInfo(appLog) << "Modbus 服务已创建。";
 
+    // stage 0：仅 Modbus，用于 PLC 通信单独验证
     if (startupStage < 1) {
         qInfo(appLog) << "启动阶段仅到 Modbus。";
         if (!modbusService_->connectDevice()) {
@@ -146,6 +151,7 @@ void ConsoleRuntime::initModules()
     if (!visionConfig.hikCxpEnabled) {
         qCritical(appLog) << QStringLiteral("hikCxpEnabled=false，CXP 双目未启动；请在 config.ini [Vision] 中启用。");
     } else {
+        // CXP 左/右目各一个 HikCxpCameraService 实例，roleName 区分 ch250_a / ch250_b
         hikCxpCameraAService_ = std::make_unique<scan_tracking::vision::HikCxpCameraService>(
             QStringLiteral("ch250_a"));
         hikCxpCameraBService_ = std::make_unique<scan_tracking::vision::HikCxpCameraService>(
@@ -250,6 +256,7 @@ void ConsoleRuntime::initModules()
 
     trackingService_ = std::make_unique<scan_tracking::tracking::TrackingService>();
 
+    // StateMachine 是主流程编排核心，注入 Modbus / 视觉 / 跟踪等依赖
     stateMachine_ = std::make_unique<scan_tracking::flow_control::StateMachine>(
         modbusService_.get(),
         mechEyeService_.get(),
@@ -300,6 +307,8 @@ void ConsoleRuntime::initModules()
         qWarning(appLog) << "Modbus 连接初始化失败。";
     }
     qInfo(appLog) << "所有模块已初始化。";
+
+    // 全模块就绪后，可选启动 [Debug] 自动延时测试
     scheduleAutoLatencyBundleTest();
 }
 
@@ -316,6 +325,7 @@ void ConsoleRuntime::scheduleAutoLatencyBundleTest()
         return;
     }
 
+    // 优先读 exe 上级目录的 config.ini（开发树），否则读 applicationDirPath
     QString iniPath = QCoreApplication::applicationDirPath() + QStringLiteral("/config.ini");
     QDir rootDir(QCoreApplication::applicationDirPath());
     if (rootDir.cdUp() && rootDir.cdUp() && rootDir.cdUp()) {
@@ -327,6 +337,7 @@ void ConsoleRuntime::scheduleAutoLatencyBundleTest()
 
     QSettings settings(iniPath, QSettings::IniFormat);
     settings.beginGroup(QStringLiteral("Debug"));
+    // autoLatencyBundleTestEnabled / DelayMs / Periodic 控制延时测试行为
     const bool enabled = settings.value(QStringLiteral("autoLatencyBundleTestEnabled"), false).toBool();
     const int delayMs = settings.value(QStringLiteral("autoLatencyBundleTestDelayMs"), 20000).toInt();
     const bool periodic = settings.value(QStringLiteral("autoLatencyBundleTestPeriodic"), false).toBool();
@@ -371,6 +382,7 @@ void ConsoleRuntime::triggerAutoLatencyBundleTest()
         return;
     }
 
+    // 上一轮未完成时不重叠触发，避免 m_pending 冲突
     if (m_autoLatencyTestPending) {
         const QString modeText =
             m_autoLatencyPeriodic ? QStringLiteral("周期") : QStringLiteral("单次");
@@ -395,6 +407,7 @@ void ConsoleRuntime::triggerAutoLatencyBundleTest()
                .arg(triggerMs)
                .arg(roundIndex);
 
+    // 仅 Mech 2D 模式，不测 3D 点云；segment=1 为固定测试段号
     const quint64 requestId = visionPipelineService_->requestCaptureBundle(
         kTestSegmentIndex,
         taskId,
@@ -432,9 +445,10 @@ void ConsoleRuntime::onAutoLatencyBundleFinished(
     const qint64 finishedMs = QDateTime::currentMSecsSinceEpoch();
     qint64 wallMs = -1;
     if (triggerMs > 0) {
-        wallMs = finishedMs - triggerMs;
+        wallMs = finishedMs - triggerMs; // 从 requestCaptureBundle 到 bundle 完成的墙钟耗时
     }
 
+    // 分别汇总 Mech 2D 与海康 A/B 的成功标志、耗时、分辨率、时间戳
     const bool mechOk = bundle.mechEyeResult.success();
     const qint64 mechElapsedMs = bundle.mechEyeResult.elapsedMs;
     const int mechTexW = bundle.mechEyeResult.texture2D.width;
@@ -495,6 +509,7 @@ void ConsoleRuntime::onAutoLatencyBundleFinished(
         << QStringLiteral("[LatencyTest] 日志中搜索 [ScanSync] 可对比触发时刻 / 梅卡 / 海康_a / 海康_b 的 epoch ms");
     qInfo(appLog).noquote() << QStringLiteral("[LatencyTest] ================================");
 
+    // 将 Mech 2D 纹理与海康 A/B 单目帧落盘，便于离线分析延时与图像质量
     const auto* configManager = scan_tracking::common::ConfigManager::instance();
     const QString configuredRoot = configManager != nullptr
         ? configManager->flowControlConfig().scanCacheDirectory

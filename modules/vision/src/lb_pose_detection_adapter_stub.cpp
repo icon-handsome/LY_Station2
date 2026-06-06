@@ -1,5 +1,6 @@
 #include "scan_tracking/vision/lb_pose_detection_adapter.h"
 
+// 未链接 TR_Mark 库时的占位实现，invoked=false 表示算法未真正执行
 namespace scan_tracking::vision {
 
 LbPoseResult runLbPoseDetection(

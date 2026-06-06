@@ -1,7 +1,10 @@
 #pragma once
 
-// MechEyeService 是主线程侧的门面类。
-// 它只负责组织异步请求和转发结果，不直接执行任何阻塞式 SDK 操作。
+// Mech-Eye 3D 相机服务（主线程门面）。
+//
+// 在独立 QThread 中托管 MechEyeWorker，所有阻塞式 SDK 调用（发现、连接、采图）
+// 均在 worker 线程完成，结果经 Qt 信号异步回传主线程。
+// 供 VisionPipelineService / StateMachine 发起分段点云采集。
 
 #include <QtCore/QObject>
 
@@ -16,6 +19,7 @@ namespace mech_eye {
 
 class MechEyeWorker;
 
+/// 主线程侧 Mech-Eye 门面：请求排队、busy 互斥、状态转发
 class MechEyeService : public QObject {
     Q_OBJECT
 

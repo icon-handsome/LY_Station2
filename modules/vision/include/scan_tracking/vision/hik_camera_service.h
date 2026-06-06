@@ -1,8 +1,10 @@
 #pragma once
 
-// 海康相机服务骨架。
-// 当前版本已经接入 MVS SDK 的设备枚举与打开流程，
-// 并将连接与采集请求放到后台线程执行，避免阻塞主线程和 PLC 轮询链路。
+// 海康 GigE / USB 相机服务（MVS SDK）。
+//
+// 通过设备枚举与序列号/IP 匹配打开相机，连接与采图在独立 std::thread 中执行，
+// 避免阻塞主线程和 PLC 轮询。用于非 CXP 场景或 monitor 只读模式（可与 SCMVS 共存）。
+// 支持运行时读写曝光、增益等 GenICam 参数。
 
 #include <QtCore/QObject>
 
@@ -18,14 +20,18 @@ class HikCameraService : public QObject {
     Q_OBJECT
 
 public:
+    /* @param roleName 逻辑角色名，用于日志与 stateChanged 区分多路相机 */
     explicit HikCameraService(const QString& roleName, QObject* parent = nullptr);
     ~HikCameraService() override;
 
+    /* 启动服务并后台异步连接；写入默认曝光/增益 */
     void start(
         const scan_tracking::common::VisionCameraEndpointConfig& endpointConfig,
         int defaultCaptureTimeoutMs,
         float exposureTimeUs = 50000.0f,
         float gain = 0.0f);
+
+    /* 停止服务并释放设备 */
     void stop();
 
     bool isStarted() const;
@@ -33,13 +39,15 @@ public:
     QString roleName() const;
     const scan_tracking::common::VisionCameraEndpointConfig& endpointConfig() const;
 
+    /* 请求一次 Mono 采图，结果经 poseCaptureFinished 异步返回 */
     quint64 requestPoseCapture(const QString& preferredCameraKey = {}, int timeoutMs = 0);
 
-    // 读取相机当前参数快照（需已连接，线程安全）
+    /* 读取相机当前参数快照（需已连接，线程安全） */
     HikCameraParams readParams(QString* errorMessage = nullptr);
 
-    // 修改相机参数（需已连接，线程安全）
-    // 只修改 params 中 valid==true 的字段；调用前请确保相机未在采图
+    /* 修改相机参数（需已连接，线程安全）
+     * 只修改 params 中 valid==true 的字段；调用前请确保相机未在采图
+     */
     bool writeParams(const HikCameraParams& params, QString* errorMessage = nullptr);
 
 signals:
@@ -48,7 +56,7 @@ signals:
     void fatalError(scan_tracking::vision::VisionErrorCode code, QString message);
 
 private:
-    class Impl;
+    class Impl;  ///< PIMPL：MVS 设备句柄、采图缓冲与参数读写实现
 
     static void registerMetaTypes();
     QString resolveCameraKey(const QString& preferredCameraKey) const;

@@ -16,6 +16,7 @@ namespace vision {
 
 namespace {
 
+// 标记点未安装时的 LBN 旁路结果：返回 4×4 单位阵，供调试/联调使用
 LbnPoseResult makeIdentityLbnBypassResult()
 {
     LbnPoseResult result;
@@ -30,6 +31,7 @@ LbnPoseResult makeIdentityLbnBypassResult()
 
 }  // namespace
 
+// 注册跨线程信号槽所需的 Qt 元类型（仅执行一次）
 void VisionPipelineService::registerMetaTypes()
 {
     static bool registered = false;
@@ -56,6 +58,7 @@ VisionPipelineService::VisionPipelineService(
 {
     registerMetaTypes();
 
+    // 三路相机服务的完成信号均通过 QueuedConnection 回到主线程槽
     if (m_mechEyeService != nullptr) {
         connect(
             m_mechEyeService,
@@ -114,8 +117,10 @@ void VisionPipelineService::stop()
 
 namespace {
 
+// 梅卡与 CXP 之间的时间间隔（ms），避免两路相机同时曝光造成干扰
 constexpr int kMechToHikCaptureDelayMs = 2000;
 
+// 判断梅卡采集结果是否包含有效载荷（2D 模式看纹理，3D 模式看点云）
 bool mechCapturePayloadReady(const scan_tracking::mech_eye::CaptureResult& result)
 {
     if (!result.success()) {
@@ -134,6 +139,7 @@ quint64 VisionPipelineService::requestCaptureBundle(
     quint32 taskId,
     scan_tracking::mech_eye::CaptureMode mechCaptureMode)
 {
+    // ---- 前置校验 ----
     if (!m_started) {
         emit fatalError(VisionErrorCode::NotStarted, QStringLiteral("视觉流水线未启动。"));
         return 0;
@@ -147,11 +153,13 @@ quint64 VisionPipelineService::requestCaptureBundle(
         return 0;
     }
 
+    // ---- 组装请求并启动梅卡采集（CXP 在梅卡回调中延迟触发） ----
     MultiCameraCaptureRequest request;
     request.requestId = m_nextRequestId++;
     request.taskId = taskId;
     request.segmentIndex = segmentIndex;
     request.mechCaptureMode = mechCaptureMode;
+    // Capture2DAnd3D 表示转盘段，后续会跑 LBN 而非 LB
     request.needMechEye2D =
         mechCaptureMode == scan_tracking::mech_eye::CaptureMode::Capture2DAnd3D;
     request.mechEyeCameraKey = m_config.mechEyeCameraKey;
@@ -188,8 +196,10 @@ quint64 VisionPipelineService::requestCaptureBundle(
     return request.requestId;
 }
 
+// 梅卡延迟到期后调用：并行发起 CXP 左/右目 poseCapture
 void VisionPipelineService::startPendingHikCapture()
 {
+    // hikARequestId != 0 表示 CXP 已启动，防止定时器重复触发
     if (!m_pending.active || m_pending.hikARequestId != 0) {
         return;
     }
@@ -220,6 +230,7 @@ void VisionPipelineService::startPendingHikCapture()
 
 void VisionPipelineService::onMechEyeCaptureFinished(scan_tracking::mech_eye::CaptureResult result)
 {
+    // 忽略非当前请求的过期回调
     if (!m_pending.active || result.requestId != m_pending.mechRequestId) {
         return;
     }
@@ -227,6 +238,7 @@ void VisionPipelineService::onMechEyeCaptureFinished(scan_tracking::mech_eye::Ca
     m_pending.bundle.mechEyeResult = result;
     m_pending.mechDone = true;
 
+    // 梅卡先完成，延迟后再启动 CXP，避免硬件/光照冲突
     qInfo() << QStringLiteral("[VisionPipeline] 梅卡采集结束，%1ms 后启动 CXP 双目")
                    .arg(kMechToHikCaptureDelayMs);
     QTimer::singleShot(kMechToHikCaptureDelayMs, this, [this]() {
@@ -260,6 +272,7 @@ void VisionPipelineService::setState(VisionPipelineState state, const QString& d
     emit stateChanged(state, description);
 }
 
+// 三路采集全部完成后：校验梅卡载荷，再在后台线程分支执行 LBN / LB 位姿检测
 void VisionPipelineService::finishBundleIfReady()
 {
     if (!m_pending.active || !m_pending.mechDone || !m_pending.hikADone || !m_pending.hikBDone) {
@@ -269,6 +282,7 @@ void VisionPipelineService::finishBundleIfReady()
     const auto bundle = m_pending.bundle;
     m_pending = PendingCaptureContext{};
 
+    // 梅卡载荷无效时直接结束，不再跑位姿算法
     if (!mechCapturePayloadReady(bundle.mechEyeResult)) {
         m_processing = false;
         setState(
@@ -280,6 +294,7 @@ void VisionPipelineService::finishBundleIfReady()
 
     const bool hikReady =
         bundle.hikCameraAResult.success() && bundle.hikCameraBResult.success();
+    // 转盘段 + 配置启用 → LBN；封头段 → LB（见下方 runLb 分支）
     const bool runLbn = bundle.request.needMechEye2D && m_lbnPoseConfig.enabled;
 
     m_processing = true;
@@ -292,6 +307,7 @@ void VisionPipelineService::finishBundleIfReady()
     const auto lbConfig = m_lbPoseConfig;
     const auto lbnConfig = m_lbnPoseConfig;
     QPointer<VisionPipelineService> self(this);
+    // 位姿检测为 CPU 密集型，放到 detached 后台线程，完成后 invokeMethod 回主线程
     std::thread([self, bundle, lbConfig, lbnConfig, hikReady, runLbn]() mutable {
         auto completedBundle = bundle;
 
@@ -357,9 +373,10 @@ void VisionPipelineService::finishBundleIfReady()
         }
 
         if (!self) {
-            return;
+            return; // 对象已销毁，放弃回传
         }
 
+        // 切回主线程 emit 结果，保证线程安全
         QMetaObject::invokeMethod(
             self.data(),
             [self, completedBundle, hikReady]() mutable {

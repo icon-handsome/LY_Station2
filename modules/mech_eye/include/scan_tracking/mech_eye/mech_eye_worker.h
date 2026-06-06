@@ -1,7 +1,9 @@
 #pragma once
 
-// Worker 只负责在独立线程中操作 SDK。
-// Facade 会把上层请求投递到这里，避免主线程直接触碰阻塞式接口。
+// Mech-Eye SDK 工作线程实现。
+//
+// 由 MechEyeService 所在 QThread 驱动，执行相机发现、连接、2D/3D 采图及
+// Frame3D → PointCloudFrame 转换。禁止在主线程直接调用本类槽函数。
 
 #include <QtCore/QObject>
 #include <QtCore/QString>
@@ -19,6 +21,7 @@ class Frame2DAnd3D;
 namespace scan_tracking {
 namespace mech_eye {
 
+/// SDK 操作执行体；与 MechEyeService 通过 QueuedConnection 通信
 class MechEyeWorker : public QObject {
     Q_OBJECT
 
@@ -67,7 +70,7 @@ signals:
     void fatalError(scan_tracking::mech_eye::CaptureErrorCode code, QString message);
 
 private:
-    class Impl;
+    class Impl;  ///< PIMPL：mmind::eye::Camera 实例与 SDK 帧缓冲，隔离 Mech-Eye 头文件
 
     /* 设置运行状态并向外发射通知
      * @param newState 新状态

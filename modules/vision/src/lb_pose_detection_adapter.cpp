@@ -15,13 +15,14 @@ namespace vision {
 
 namespace {
 
+// 双目立体标定参数集合，对应 config.ini [LbPose] 中的内参/畸变/外参
 struct StereoCalibSet {
-    cv::Mat I1;
-    cv::Mat D1;
-    cv::Mat E1;
-    cv::Mat I2;
-    cv::Mat D2;
-    cv::Mat E2;
+    cv::Mat I1; // 左目 3×3 内参
+    cv::Mat D1; // 左目 1×5 畸变
+    cv::Mat E1; // 左目 4×4 外参
+    cv::Mat I2; // 右目 3×3 内参
+    cv::Mat D2; // 右目 1×5 畸变
+    cv::Mat E2; // 右目 4×4 外参
 };
 
 bool vectorHasSize(const QVector<double>& values, int expectedCount)
@@ -29,6 +30,7 @@ bool vectorHasSize(const QVector<double>& values, int expectedCount)
     return values.size() == expectedCount;
 }
 
+// 将行优先 QVector<double> 转为 OpenCV 矩阵（标定参数均为行优先存储）
 cv::Mat matrixFromRowMajor(const QVector<double>& values, int rows, int cols)
 {
     cv::Mat matrix(rows, cols, CV_64F);
@@ -41,6 +43,7 @@ cv::Mat matrixFromRowMajor(const QVector<double>& values, int rows, int cols)
     return matrix;
 }
 
+// 从 LbPoseConfig 解析立体标定；任一数组长度不符则返回空 I1 作为失败标记
 StereoCalibSet makeStereoCalibSetFromConfig(const scan_tracking::common::LbPoseConfig& config)
 {
     StereoCalibSet calib;
@@ -93,6 +96,7 @@ LbPoseResult makeCalibFailure()
     return makeFailure(QStringLiteral("LB 立体标定参数无效，请检查 config.ini [LbPose]。"));
 }
 
+// 海康 Mono8 帧 → cv::Mat 灰度图（clone 避免引用外部 buffer 生命周期）
 cv::Mat frameToGrayMat(const HikMonoFrame& frame)
 {
     if (!frame.isValid() || frame.pixels == nullptr || frame.width <= 0 || frame.height <= 0) {
@@ -106,6 +110,7 @@ cv::Mat frameToGrayMat(const HikMonoFrame& frame)
     return view.clone();
 }
 
+// TR_Mark 输出的 4×4 double Rt → PoseMatrix4x4（行优先 float）
 PoseMatrix4x4 toPoseMatrix(const cv::Mat& rt, const QString& sourceCameraKey, quint64 frameId)
 {
     PoseMatrix4x4 pose;
@@ -124,6 +129,7 @@ PoseMatrix4x4 toPoseMatrix(const cv::Mat& rt, const QString& sourceCameraKey, qu
     return pose;
 }
 
+// 模板点云路径：优先 templateFile，否则 dataRoot/template-3D-ALL-Shift-Cut-Cut.txt
 QString buildTemplatePath(const scan_tracking::common::LbPoseConfig& config)
 {
     if (!config.templateFile.trimmed().isEmpty()) {
@@ -149,6 +155,7 @@ LbPoseResult runLbPoseDetection(
     result.rightImageWidth = rightFrame.width;
     result.rightImageHeight = rightFrame.height;
 
+    // ---- 1. 输入校验与图像转换 ----
     if (!leftFrame.isValid() || !rightFrame.isValid()) {
         return makeFailure(QStringLiteral("LB 位姿检测需要两个有效的灰度图像帧。"));
     }
@@ -160,6 +167,7 @@ LbPoseResult runLbPoseDetection(
     }
 
     try {
+        // ---- 2. 立体 3D 重建：标定 + 极线匹配 → frame_3d_points ----
         TR_INSPECT_3D_Recon_Marker recon;
         const auto calib = makeStereoCalibSetFromConfig(config);
         if (calib.I1.empty()) {
@@ -181,6 +189,7 @@ LbPoseResult runLbPoseDetection(
             return makeFailure(QStringLiteral("TR_INSPECT_3D_Recon_Marker 重建立体点云失败。"));
         }
 
+        // ---- 3. 几何哈希模板匹配：加载模板 → build → Get_Track_Pose → Rt ----
         FastGeoHash geoHash(config.maxDistance, config.minDistance);
         if (geoHash.set_template_config(config.minDistance, config.maxDistance) != 0) {
             return makeFailure(QStringLiteral("设置 LB 模板配置失败。"));
@@ -215,6 +224,7 @@ LbPoseResult runLbPoseDetection(
         }
         return result;
     } catch (const std::exception& ex) {
+        // TR_Mark / OpenCV 可能抛出 std::exception，统一转为 LbPoseResult 失败
         return makeFailure(QStringLiteral("LB 位姿检测抛出异常：%1").arg(QString::fromLocal8Bit(ex.what())));
     } catch (...) {
         return makeFailure(QStringLiteral("LB 位姿检测抛出未知异常。"));

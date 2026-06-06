@@ -134,12 +134,12 @@ QString resolveBevelTemplateDir()
     return defaultTemplateDir.exists() ? defaultTemplateDir.absolutePath() : QString();
 }
 
-::bevel::BevelSolveOptions buildBevelSolveOptions(
+BevelSolveOptions buildBevelSolveOptions(
     const scan_tracking::common::BevelRecipe& recipe,
     float angleTolDeg,
     float lengthTolMm)
 {
-    ::bevel::BevelSolveOptions options;
+    BevelSolveOptions options;
     options.forcedBevelType = recipe.bevelType;
     options.overrideStandard = true;
     options.standardAngleMinDeg =
@@ -182,14 +182,22 @@ BevelInspectionResult runBevelMeasurement(
 
         const std::string configPathUtf8 = configPath.toLocal8Bit().toStdString();
         const std::string templateDirUtf8 = templateDir.toLocal8Bit().toStdString();
-        const ::bevel::BevelSolveOptions options =
+        const BevelSolveOptions solveOptions =
             buildBevelSolveOptions(recipe, angleTolDeg, lengthTolMm);
+        ::bevel::BevelSolveOptions algorithmOptions;
+        algorithmOptions.forcedBevelType = solveOptions.forcedBevelType;
+        algorithmOptions.overrideStandard = solveOptions.overrideStandard;
+        algorithmOptions.standardAngleMinDeg = solveOptions.standardAngleMinDeg;
+        algorithmOptions.standardAngleMaxDeg = solveOptions.standardAngleMaxDeg;
+        algorithmOptions.standardLengthMin = solveOptions.standardLengthMin;
+        algorithmOptions.standardLengthMax = solveOptions.standardLengthMax;
 
         const ::bevel::BevelMeasurementResult algorithmResult =
             templateDir.isEmpty()
-                ? ::bevel::solveBevelFromRawCloud(pclCloud, configPathUtf8, std::string(), options)
+                ? ::bevel::solveBevelFromRawCloud(
+                      pclCloud, configPathUtf8, std::string(), algorithmOptions)
                 : ::bevel::solveBevelFromRawCloud(
-                      pclCloud, configPathUtf8, templateDirUtf8, options);
+                      pclCloud, configPathUtf8, templateDirUtf8, algorithmOptions);
 
         result.ok = algorithmResult.ok;
         result.bevelType = algorithmResult.bevelType;
