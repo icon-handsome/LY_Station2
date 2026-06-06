@@ -1,0 +1,114 @@
+{
+  // 输入点云：支持多帧扫描点云，程序会逐帧预处理后合并
+  "input_frames": [
+    "D:/3 Data/11 LanYou_S1/0 Template/Zhu_Mian_Yu_Kai_Kong_Ce_Liang/Feng_Tou_Wan_Zheng1_sample.pcd"
+  ],
+
+  // 模板点云：用于模板特征和扫描点云对齐
+  "template_cloud": "D:/3 Data/11 LanYou_S1/0 Template/Zhu_Mian_Yu_Kai_Kong_Ce_Liang/Feng_Tou_template_sample.pcd",
+
+  // 位姿矫正矩阵：按行填写 4x4 矩阵，单位 mm
+  "pose_correction": [
+    1, 0, 0, 0,
+    0, 1, 0, 0,
+    0, 0, 1, 0,
+    0, 0, 0, 1
+  ],
+
+  // 全局裁剪包围盒：用于扫描点云预处理裁剪
+  "crop_min": [-793.858551, -622.153976, 1453.552124],
+  "crop_max": [706.141449, 877.846024, 2253.552124],
+
+  // 离群点滤波与体素降采样
+  "statistical_mean_k": 10,
+  "statistical_stddev_mul": 3.0,
+  "voxel_leaf_mm": 1.5,
+
+  // 封头直边圆柱拟合参数
+  "cylinder_distance_threshold_mm": 2.0,
+  "cylinder_max_iterations": 2000,
+
+  // ICP 匹配参数：模板匹配和局部开孔匹配共用
+  "icp_max_correspondence_distance_mm": 200.0,
+  "icp_max_iterations": 300,
+  "icp_transformation_epsilon": 1e-8,
+  "icp_fitness_epsilon": 0.001,
+
+  // 圆度切片参数：每个有效切片单独计算圆度，最终圆度取中值
+  "slice_spacing_mm": 5.0,
+  "slice_count": 5,
+  "slice_min_points": 30,
+  "slice_thickness_mm": 2.0,
+  "circle_max_fit_error_mm": 3.0,
+
+  // 顶平面模板特征点：在对齐后的扫描点云上查最近点拟合顶平面
+  "template_top_plane_feature_points": [
+    567.534729004,141.268814087,1788.76647949,
+    -619.841369629,234.665466309,1678.5760498,
+    -494.670776367,-256.877410889,1936.98730469,
+    -568.902038574,-158.416122437,1883.9642334,
+    294.849487305,556.813415527,1558.75610352,
+    531.012939453,-63.5137825012,1889.44934082,
+    -586.341430664,310.903320313,1639.57055664,
+    497.084442139,363.964019775,1668.82470703,
+    -637.081970215,53.846950531,1768.65429688,
+    476.125823975,-168.131118774,1939.79077148
+  ],
+  "template_top_plane_normal": [0.0, 0.0, 1.0],
+  "top_feature_search_radius_mm": 30.0,
+
+  // 直边点云裁剪：圆柱拟合使用较短高度，直边参数检测保留坡口特征使用较长高度
+  "straight_side_offset_below_top_mm": 10.0,
+  "straight_side_cylinder_crop_height_mm": 35.0,
+  "straight_side_crop_height_mm": 80.0,
+
+  // 直边参数检测：B 点模板最近点、切片厚度、A/B 限制和 B 点定位方法
+  "straight_endpoint_search_radius_mm": 20.0,
+  "straight_endpoint_slice_thickness_mm": 2.0,
+  "straight_line_distance_threshold_mm": 4.0,
+  "straight_a_to_b_max_distance_mm": 100.0,
+  "straight_b_method": "nearest",
+  "straight_b_line_fit_length_mm": 35.0,
+  "straight_b_residual_min_threshold_mm": 0.2,
+  "straight_b_residual_window_count": 3,
+
+  // 坡口类型与顶平面偏移：用于从顶平面往下裁掉坡口后寻找直边 A 点
+  "straight_bevel_30_offset_mm": 4.0,
+  "straight_bevel_45_offset_mm": 4.0,
+  "straight_bevel_type": 45,
+
+  // 模板直边 B 点：可配置多个候选，最终直边长度和斜度取中值
+  "straight_endpoint_pairs": [
+    {
+      "name": "S1",
+      "point_b": [-585.983398,342.758636,1705.794067]
+    }
+  ],
+
+  // 开孔检测：先投影定位圆孔，再局部 ICP，最后用模板圆柱特征点拟合开孔柱面
+  "template_openings": [
+    {
+      "name": "N1",
+      "search_radius_mm": 120.0,
+      "expected_diameter_mm": 40.0,
+      "diameter_tolerance_mm": 15.0,
+      "projection_direction": [-0.058931,-0.691358,-0.720105],
+      "projection_image_width": 600,
+      "projection_image_height": 600,
+      "projection_crop_min": [-332.1987, 383.9700, 1604.8325],
+      "projection_crop_max": [213.4593, 677.0280, 1980.7475],
+      "cylinder_feature_points": [
+        -60.142242,591.126465,1834.232300,
+        -50.741436,589.848206,1837.645264,
+        -37.576523,593.263550,1833.500854,
+        -32.741409,598.745544,1828.503296,
+        -37.628986,605.972473,1836.060669,
+        -50.855869,598.329102,1841.789551,
+        -61.455460,603.048157,1838.010864,
+        -42.583817,608.868958,1844.836792,
+        -52.209534,607.363037,1847.518433,
+        -60.414013,608.104614,1842.520874
+      ]
+    }
+  ]
+}

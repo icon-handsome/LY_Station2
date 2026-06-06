@@ -170,6 +170,34 @@ if(SCAN_TRACKING_ENABLE_BEVEL_MEASUREMENT)
     scan_tracking_deploy_opencv_runtime(scan_tracking_bevel_smoke_test)
 endif()
 
+if(SCAN_TRACKING_ENABLE_HOLE_MEASUREMENT)
+    add_library(scan_tracking_hole_adapter STATIC
+        src/hole_measurement_adapter.cpp
+        include/scan_tracking/vision/hole_measurement_adapter.h
+    )
+
+    target_include_directories(scan_tracking_hole_adapter
+        PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+        PRIVATE
+            ${CMAKE_SOURCE_DIR}/third_party/Hole/include
+    )
+
+    target_link_libraries(scan_tracking_hole_adapter
+        PUBLIC
+            Qt5::Core
+            scan_tracking_common
+            scan_tracking_mech_eye
+            Hole::Measurement
+    )
+
+    target_compile_features(scan_tracking_hole_adapter PUBLIC cxx_std_17)
+
+    set_target_properties(scan_tracking_hole_adapter PROPERTIES
+        FOLDER "modules"
+    )
+endif()
+
 if(SCAN_TRACKING_ENABLE_LBN_POSE_DETECTION)
     add_executable(scan_tracking_lbn_offline_runner
         tests/lbn_offline_runner.cpp

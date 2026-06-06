@@ -178,6 +178,48 @@ const FlowControlConfig& ConfigManager::flowControlConfig() const { return m_flo
 const TrackingConfig& ConfigManager::trackingConfig() const { return m_trackingConfig; }
 const BevelConfig& ConfigManager::bevelConfig() const { return m_bevelConfig; }
 
+const HoleConfig& ConfigManager::holeConfig() const { return m_holeConfig; }
+
+InspectionType inspectionTypeFromString(const QString& value)
+{
+    const QString normalized = value.trimmed().toLower();
+    if (normalized == QStringLiteral("hole") || normalized == QStringLiteral("opening")) {
+        return InspectionType::Hole;
+    }
+    return InspectionType::Bevel;
+}
+
+QString inspectionTypeToString(InspectionType type)
+{
+    switch (type) {
+    case InspectionType::Hole:
+        return QStringLiteral("hole");
+    case InspectionType::Bevel:
+    default:
+        return QStringLiteral("bevel");
+    }
+}
+
+InspectionType ConfigManager::inspectionTypeForPath(int pathId) const
+{
+    for (const ScanPathConfig& path : m_scanPathsConfig.scanPaths) {
+        if (path.pathId == pathId) {
+            return path.inspectionType;
+        }
+    }
+    return InspectionType::Bevel;
+}
+
+QString ConfigManager::holeConfigPathForPath(int pathId) const
+{
+    for (const ScanPathConfig& path : m_scanPathsConfig.scanPaths) {
+        if (path.pathId == pathId && !path.holeConfigPath.trimmed().isEmpty()) {
+            return path.holeConfigPath.trimmed();
+        }
+    }
+    return m_holeConfig.configPath;
+}
+
 QVector<BevelRecipePreset> standardBevelRecipePresets()
 {
     return {
@@ -350,6 +392,12 @@ void ConfigManager::writeDefaults(QSettings& settings)
     settings.setValue("defaultBevelType", 0);
     settings.setValue("defaultAngleDeg", 45.0);
     settings.setValue("defaultLengthMm", 1.0);
+    settings.endGroup();
+
+    settings.beginGroup("Hole");
+    settings.setValue("configPath", "hole/config/default.json");
+    settings.setValue("icpRmsMaxMm", 5.0);
+    settings.setValue("cylinderRmsMaxMm", 3.0);
     settings.endGroup();
 
     settings.beginGroup("Hmi");
@@ -555,6 +603,15 @@ void ConfigManager::load(const QString& filePath)
         && m_bevelConfig.defaultRecipe.lengthMm > 0.0f;
     settings.endGroup();
 
+    settings.beginGroup("Hole");
+    m_holeConfig.configPath =
+        settings.value("configPath", QStringLiteral("hole/config/default.json")).toString();
+    m_holeConfig.icpRmsMaxMm =
+        settings.value("icpRmsMaxMm", 5.0).toDouble();
+    m_holeConfig.cylinderRmsMaxMm =
+        settings.value("cylinderRmsMaxMm", 3.0).toDouble();
+    settings.endGroup();
+
     settings.beginGroup("Hmi");
     m_hmiConfig.enabled = settings.value("enabled", true).toBool();
     {
@@ -677,6 +734,9 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
         pathConfig.pathId = pathObj.value("pathId").toInt();
         pathConfig.enabled = pathObj.value("enabled").toBool(true);
         pathConfig.totalPoints = pathObj.value("totalPoints").toInt();
+        pathConfig.inspectionType = inspectionTypeFromString(
+            pathObj.value("inspectionType").toString(QStringLiteral("bevel")));
+        pathConfig.holeConfigPath = pathObj.value("holeConfigPath").toString().trimmed();
         
         // 读取点位列表
         const QJsonArray pointsArray = pathObj.value("points").toArray();
@@ -733,7 +793,11 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
         qInfo(LOG_CONFIG).noquote()
             << "  路径" << path.pathId
             << "启用=" << path.enabled
-            << "点位数=" << path.points.size();
+            << "点位数=" << path.points.size()
+            << "inspectionType=" << inspectionTypeToString(path.inspectionType)
+            << (path.holeConfigPath.isEmpty()
+                    ? QString()
+                    : QStringLiteral(" holeConfig=") + path.holeConfigPath);
     }
 }
 

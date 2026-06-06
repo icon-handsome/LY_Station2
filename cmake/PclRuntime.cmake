@@ -73,6 +73,26 @@ function(scan_tracking_deploy_vtk_runtime target_name)
     )
 endfunction()
 
+function(scan_tracking_deploy_hole_runtime target_name)
+    set(_hole_source_root "${CMAKE_SOURCE_DIR}/third_party/Hole")
+    if(NOT EXISTS "${_hole_source_root}/config/default.json")
+        message(WARNING "Hole runtime source not found: ${_hole_source_root}")
+        return()
+    endif()
+
+    add_custom_command(TARGET ${target_name} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target_name}>/hole/config"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target_name}>/hole/template"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${_hole_source_root}/config/default.json"
+            "$<TARGET_FILE_DIR:${target_name}>/hole/config/default.json"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${_hole_source_root}/config/path2.json"
+            "$<TARGET_FILE_DIR:${target_name}>/hole/config/path2.json"
+        COMMENT "Deploying Hole measurement runtime config"
+    )
+endfunction()
+
 function(scan_tracking_deploy_bevel_runtime target_name)
     set(_bevel_source_root "${CMAKE_SOURCE_DIR}/third_party/Po_Kou_Ce_Liang")
     if(NOT EXISTS "${_bevel_source_root}/config.txt")

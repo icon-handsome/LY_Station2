@@ -108,7 +108,7 @@ public:
      * @brief HMI 调试：用缓存点云跑蓝友综合检测
      *
      * 不写 PLC、不清缓存、不占用 PLC 任务槽；结果由调用方推送显控。
-     * TODO(multipath): 多路径多点位时须按 pathId 筛选/融合缓存，再调用蓝友 detectMultiPath
+     * TODO(multipath): 多路径多点位时须按 pathId 与 inspectionType 筛选/融合缓存，再调用对应检测算法
      */
     tracking::InspectionResult runDebugInspectionOnCachedSegments() const;
 

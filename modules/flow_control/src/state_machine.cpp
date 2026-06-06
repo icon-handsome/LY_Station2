@@ -2376,7 +2376,13 @@ tracking::InspectionResult StateMachine::runDebugInspectionOnCachedSegments() co
         return failure;
     }
 
-    return m_tracking->inspectPointCloud(mergedCloud, totalPointCount, false);
+    int inspectPathId = m_activeTask.inspectionPathId;
+    if (inspectPathId <= 0) {
+        inspectPathId = mutableSelf->resolvePathIdForInspection();
+    }
+
+    return m_tracking->inspectPointCloud(
+        mergedCloud, totalPointCount, inspectPathId, false);
 }
 
 void StateMachine::executeInspectionTask()
@@ -2444,7 +2450,8 @@ void StateMachine::executeInspectionTask()
     }
 
     const tracking::InspectionResult trackingResult =
-        m_tracking->inspectPointCloud(mergedCloud, totalPointCount);
+        m_tracking->inspectPointCloud(
+            mergedCloud, totalPointCount, m_activeTask.inspectionPathId);
 
     InspectionSummary summary;
     summary.resultCode = trackingResult.resultCode;

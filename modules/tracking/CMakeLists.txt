@@ -44,6 +44,19 @@ if(SCAN_TRACKING_ENABLE_BEVEL_MEASUREMENT)
     scan_tracking_deploy_opencv_runtime(scan_tracking_tracking_smoke_test)
 endif()
 
+if(SCAN_TRACKING_ENABLE_HOLE_MEASUREMENT)
+    target_compile_definitions(scan_tracking_tracking
+        PRIVATE SCAN_TRACKING_HAS_HOLE_MEASUREMENT=1)
+    target_link_libraries(scan_tracking_tracking
+        PRIVATE
+            scan_tracking_hole_adapter
+    )
+
+    if(TARGET scan_tracking_tracking_smoke_test)
+        scan_tracking_deploy_hole_runtime(scan_tracking_tracking_smoke_test)
+    endif()
+endif()
+
 set_target_properties(scan_tracking_tracking PROPERTIES
     FOLDER "modules"
 )

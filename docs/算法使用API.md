@@ -113,3 +113,83 @@ bevel::BevelMeasurementResult solveBevelFromRawCloud(
 1. **配置文件找不到**：确认 exe 旁存在 `bevel/config.txt`，或设置 `SCAN_TRACKING_BEVEL_CONFIG_DIR`。
 2. **模板加载失败**：确认 `bevel/data/templates/type_0_*` 已部署。
 3. **PCL/OpenCV DLL**：使用与 LB 相同的运行时部署（`scan_tracking_deploy_pcl_runtime` / `scan_tracking_deploy_opencv_runtime`）。
+
+---
+
+# 柱面/开孔测量算法（HeadMeasure / Hole）集成说明
+
+本文档说明 `third_party/Hole` 在 scan-tracking 项目中的用途、API 与主流程接入方式。
+
+## 目录与构建
+
+- 算法源码：`third_party/Hole`
+- CMake 目标：`head_measure`（别名 `Hole::Measurement`）
+- 开关：`SCAN_TRACKING_ENABLE_HOLE_MEASUREMENT=ON`
+- 依赖：PCL 1.12
+
+## 主流程（与坡口并存）
+
+```
+PLC Trig_Inspection
+  → StateMachine::loadMergedPointCloudForInspection(pathId)
+  → TrackingService::inspectPointCloud(cloud, count, inspectionPathId)
+  → [path inspectionType == hole]
+      hole_measurement_adapter::runHoleMeasurement()
+      → hm::MeasurePipeline::runWithScanCloud()
+  → HMI event.inspection.finished / PLC NG 寄存器
+```
+
+路径分流由 `scan_paths_config.json` 每条路径的 `inspectionType` 决定：
+
+| `inspectionType` | 算法 |
+|------------------|------|
+| `bevel`（默认） | Po_Kou 坡口测量 |
+| `hole` | HeadMeasure 柱面/开孔测量 |
+
+示例：
+
+```json
+{ "pathId": 1, "inspectionType": "bevel", ... }
+{ "pathId": 2, "inspectionType": "hole", "holeConfigPath": "hole/config/path2.json", ... }
+```
+
+## 适配层 API
+
+头文件：`modules/vision/include/scan_tracking/vision/hole_measurement_adapter.h`
+
+```cpp
+scan_tracking::vision::hole::HoleInspectionResult runHoleMeasurement(
+    const scan_tracking::mech_eye::PointCloudFrame& cloud,
+    int inspectionPathId = 0);
+```
+
+## headMetrics 映射
+
+| Hole `MeasureResult` | HMI `headMetrics` |
+|----------------------|-------------------|
+| `innerDiameterMm` | `inner_diameter_mm` |
+| `innerCircumferenceMm` | `inner_circumference_mm` |
+| `roundnessToleranceMm` | `roundness_tol` |
+| `straightSideSlopeDeg` | `straight_slope_tol` |
+| `straightSideHeightMm` | `straight_height_mm` |
+| `opening.centerToInnerWallDistanceMm` | `hole_opening_mm` |
+| `opening.axisToHeadAxisAngleDeg` | `joint_fit_up_angle_deg` |
+
+## 配置
+
+`config.ini`：
+
+```ini
+[Hole]
+configPath=hole/config/default.json
+icpRmsMaxMm=5.0
+cylinderRmsMaxMm=3.0
+```
+
+Hole 算法 JSON（`hole/config/default.json`）含模板点云路径、裁剪盒、开孔特征等；扫描点云由 IPC 内存注入，`input_frames` 留空即可。
+
+模板 PCD 部署目录：`hole/template/`（与 JSON 中 `template_cloud` 相对路径对应）。
+
+环境变量：`SCAN_TRACKING_HOLE_CONFIG_DIR`（指向含 `default.json` 的目录）。
+
+运行时资源由构建后处理复制到 exe 旁 `hole/config/`。

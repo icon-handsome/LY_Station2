@@ -142,3 +142,7 @@ endif()
 if(SCAN_TRACKING_ENABLE_BEVEL_MEASUREMENT)
     add_subdirectory(Po_Kou_Ce_Liang)
 endif()
+
+if(SCAN_TRACKING_ENABLE_HOLE_MEASUREMENT)
+    add_subdirectory(Hole)
+endif()

@@ -1,0 +1,99 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="12.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{4C21A42D-88E5-4B0F-8C7D-6207E5D82442}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>HeadMeasure</RootNamespace>
+    <ProjectName>head_measure</ProjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v120</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v120</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>MultiByte</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <PCLRoot>F:\software install\PCL 1.8.0</PCLRoot>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <OutDir>$(ProjectDir)build_vs2013\Release\</OutDir>
+    <IntDir>$(ProjectDir)build_vs2013\obj\</IntDir>
+    <TargetName>head_measure</TargetName>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <OutDir>$(ProjectDir)build_vs2013\Debug\</OutDir>
+    <IntDir>$(ProjectDir)build_vs2013\obj_debug\</IntDir>
+    <TargetName>head_measure</TargetName>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <Optimization>Disabled</Optimization>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;_CRT_SECURE_NO_WARNINGS;_SCL_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;$(PCLRoot)\include\pcl-1.8;$(PCLRoot)\3rdParty\Eigen\eigen3;$(PCLRoot)\3rdParty\Boost\include\boost-1_59;$(PCLRoot)\3rdParty\FLANN\include;$(PCLRoot)\3rdParty\Qhull\include;$(PCLRoot)\3rdParty\OpenNI2\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <MinimalRebuild>false</MinimalRebuild>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>$(PCLRoot)\lib;$(PCLRoot)\3rdParty\Boost\lib;$(PCLRoot)\3rdParty\FLANN\lib;$(PCLRoot)\3rdParty\Qhull\lib;$(PCLRoot)\3rdParty\OpenNI2\Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>pcl_common_debug.lib;pcl_io_debug.lib;pcl_io_ply_debug.lib;pcl_filters_debug.lib;pcl_registration_debug.lib;pcl_search_debug.lib;pcl_kdtree_debug.lib;flann-gd.lib;qhullstatic-gd.lib;OpenNI2.lib;libboost_system-vc120-mt-gd-1_59.lib;libboost_filesystem-vc120-mt-gd-1_59.lib;libboost_thread-vc120-mt-gd-1_59.lib;libboost_date_time-vc120-mt-gd-1_59.lib;libboost_iostreams-vc120-mt-gd-1_59.lib;libboost_serialization-vc120-mt-gd-1_59.lib;libboost_chrono-vc120-mt-gd-1_59.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <Optimization>MaxSpeed</Optimization>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;_CRT_SECURE_NO_WARNINGS;_SCL_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;$(PCLRoot)\include\pcl-1.8;$(PCLRoot)\3rdParty\Eigen\eigen3;$(PCLRoot)\3rdParty\Boost\include\boost-1_59;$(PCLRoot)\3rdParty\FLANN\include;$(PCLRoot)\3rdParty\Qhull\include;$(PCLRoot)\3rdParty\OpenNI2\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <AdditionalLibraryDirectories>$(PCLRoot)\lib;$(PCLRoot)\3rdParty\Boost\lib;$(PCLRoot)\3rdParty\FLANN\lib;$(PCLRoot)\3rdParty\Qhull\lib;$(PCLRoot)\3rdParty\OpenNI2\Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>pcl_common_release.lib;pcl_io_release.lib;pcl_io_ply_release.lib;pcl_filters_release.lib;pcl_registration_release.lib;pcl_search_release.lib;pcl_kdtree_release.lib;flann.lib;qhullstatic.lib;OpenNI2.lib;libboost_system-vc120-mt-1_59.lib;libboost_filesystem-vc120-mt-1_59.lib;libboost_thread-vc120-mt-1_59.lib;libboost_date_time-vc120-mt-1_59.lib;libboost_iostreams-vc120-mt-1_59.lib;libboost_serialization-vc120-mt-1_59.lib;libboost_chrono-vc120-mt-1_59.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClInclude Include="include\HeadMeasure\Config.h" />
+    <ClInclude Include="include\HeadMeasure\Geometry.h" />
+    <ClInclude Include="include\HeadMeasure\MeasurePipeline.h" />
+    <ClInclude Include="include\HeadMeasure\Types.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\Config.cpp" />
+    <ClCompile Include="src\Geometry.cpp" />
+    <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\MeasurePipeline.cpp" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>
+

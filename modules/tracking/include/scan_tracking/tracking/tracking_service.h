@@ -23,12 +23,25 @@ namespace scan_tracking {
 namespace tracking {
 
 /// 坡口测量算法输出（对应 HMI event.inspection.finished 协议字段）
+enum class InspectionAlgorithm {
+    Bevel = 0,
+    Hole = 1,
+};
+
 struct InspectionMeasurement {
+    InspectionAlgorithm algorithm = InspectionAlgorithm::Bevel;
     float headAngleTol = 0.0f;   ///< head_angle_tol 坡口角（deg）
     float bluntHeightTol = 0.0f; ///< blunt_height_tol 钝边长度（mm）
     int bevelType = -1;          ///< bevel_type 坡口类型
     float icpFitness = 0.0f;     ///< icp_fitness ICP 拟合度
     int qualityCode = 10000;     ///< quality_code 0=合格
+    float innerDiameterMm = 0.0f;
+    float innerCircumferenceMm = 0.0f;
+    float roundnessToleranceMm = 0.0f;
+    float straightSideSlopeDeg = 0.0f;
+    float straightSideHeightMm = 0.0f;
+    float holeOpeningMm = 0.0f;
+    float jointFitUpAngleDeg = 0.0f;
 };
 
 /// 将测量项写入 JSON payload（协议 snake_case 字段名）
@@ -81,14 +94,11 @@ public:
     /// 注册综合检测结果回调：inspectPointCloud 返回前必定触发
     void setInspectionResultNotifier(InspectionResultNotifier notifier);
 
-    /// 执行单点云坡口综合检测
-    // @param pointCloud 合并后的检测点云
-    // @param sourcePointCount 输入点数量（用于日志/HMI）
-    // @param notifyListener 是否触发 InspectionResultNotifier
-    // @return 检测结果结构体
+    /// 执行单点云综合检测（按路径 inspectionType 分流坡口或 Hole）
     InspectionResult inspectPointCloud(
         const scan_tracking::mech_eye::PointCloudFrame& pointCloud,
         int sourcePointCount,
+        int inspectionPathId = 0,
         bool notifyListener = true) const;
 
     /// 执行位姿校验（LB位姿检测）

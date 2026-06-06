@@ -29,6 +29,7 @@
         "CMAKE_MAKE_PROGRAM": "C:/Program Files/Microsoft Visual Studio/18/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe",
         "SCAN_TRACKING_MECHEYE_SDK_DIR": "D:/work/LY/IPC-192.168.110.173_track-main/third_party/Mech-Eye SDK-2.5.4/API",
         "SCAN_TRACKING_ENABLE_BEVEL_MEASUREMENT": "ON",
+        "SCAN_TRACKING_ENABLE_HOLE_MEASUREMENT": "ON",
         "SCAN_TRACKING_ENABLE_LB_POSE_DETECTION": "ON",
         "SCAN_TRACKING_ENABLE_LBN_POSE_DETECTION": "ON",
         "SCAN_TRACKING_OPENCV_DIR": "D:/work/LY/IPC-192.168.110.173_track-main/third_party/LB/opencv-3.4.3-vc14_vc15/opencv/build/x64/vc15/lib",

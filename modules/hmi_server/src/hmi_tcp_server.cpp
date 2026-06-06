@@ -696,7 +696,7 @@ void HmiTcpServer::handleCmdDebugTriggerInspection(const QJsonObject& message)
     // 2. 读取当前缓存段位（多路径场景下 cache 可能含多段，见 multiPathNote）
     const QVector<int> cachedSegments = m_stateMachine->cachedScanSegmentIndices();
 
-    // 3. 用缓存跑坡口测量（不写 PLC、不清缓存）；notifyListener=false 避免与下方 publish 重复
+    // 3. 用缓存跑综合检测（按路径 inspectionType 分流坡口/Hole；不写 PLC、不清缓存）
     const tracking::InspectionResult inspectionResult = m_stateMachine->runDebugInspectionOnCachedSegments();
 
     // 4. 无论合格/不合格都推 event.inspection.finished 给显控
@@ -717,7 +717,7 @@ void HmiTcpServer::handleCmdDebugTriggerInspection(const QJsonObject& message)
     payload[QLatin1String("cachedSegmentIndices")] = segmentArray;
     payload[QLatin1String("inspectionMessage")] = inspectionResult.message;
     payload[QLatin1String("multiPathNote")] = QStringLiteral(
-        "综合检测会将当前可检测路径上的分段点云合并为单云后调用 Po_Kou 坡口测量算法。");
+        "综合检测会将当前可检测路径上的分段点云合并为单云，并按 scan_paths 配置的 inspectionType 调用坡口（Po_Kou）或 Hole（HeadMeasure）算法。");
 
     QJsonObject envelope;
     envelope[QStringLiteral("version")] = QLatin1String(kProtocolVersion);

@@ -21,6 +21,7 @@
     {
       "pathId": 1,
       "pathName": "单路径-转盘+封头×2",
+      "inspectionType": "bevel",
       "description": "段1/7转盘(3D+2D+LBN)；段2-6、8-12封头各5点(仅3D)",
       "enabled": true,
       "totalPoints": 12,
@@ -42,6 +43,8 @@
     {
       "pathId": 2,
       "pathName": "路径2-内圈扫描",
+      "inspectionType": "hole",
+      "holeConfigPath": "hole/config/path2.json",
       "description": "本轮单路径联调未启用",
       "enabled": false,
       "totalPoints": 6,

@@ -133,6 +133,22 @@ struct BevelConfig {
     BevelRecipe defaultRecipe;
 };
 
+/// 柱面/开孔测量（HeadMeasure）算法配置（[Hole]）
+struct HoleConfig {
+    QString configPath = QStringLiteral("hole/config/default.json");
+    double icpRmsMaxMm = 5.0;
+    double cylinderRmsMaxMm = 3.0;
+};
+
+/// 综合检测算法类型（按 scan_paths 路径配置）
+enum class InspectionType {
+    Bevel,
+    Hole,
+};
+
+InspectionType inspectionTypeFromString(const QString& value);
+QString inspectionTypeToString(InspectionType type);
+
 /// HMI 显控 TCP 服务配置（[Hmi]）
 struct HmiConfig {
     bool enabled = true;       ///< 是否启动 HMI TCP 服务端
@@ -205,6 +221,8 @@ struct ScanPathConfig {
     int pathId;               // 路径唯一标识符
     bool enabled;             // 是否启用此路径
     int totalPoints;          // 路径包含的点位总数
+    InspectionType inspectionType = InspectionType::Bevel;  // 综合检测算法类型
+    QString holeConfigPath;   // Hole JSON 配置（可选，缺省用 [Hole] configPath）
     std::vector<ScanPointConfig> points;  // 点位配置列表
 };
 
@@ -249,9 +267,12 @@ public:
     const FlowControlConfig& flowControlConfig() const;
     const TrackingConfig& trackingConfig() const;
     const BevelConfig& bevelConfig() const;
+    const HoleConfig& holeConfig() const;
     void setBevelRecipe(const BevelRecipe& recipe);
     BevelRecipe bevelRecipe() const;
     bool hasActiveBevelRecipe() const;
+    InspectionType inspectionTypeForPath(int pathId) const;
+    QString holeConfigPathForPath(int pathId) const;
     const HmiConfig& hmiConfig() const;
     const LbPoseConfig& lbPoseConfig() const;
     const LbnPoseConfig& lbnPoseConfig() const;
@@ -284,6 +305,7 @@ CameraConfig m_cameraConfig;
     FlowControlConfig m_flowControlConfig;
     TrackingConfig m_trackingConfig;
     BevelConfig m_bevelConfig;
+    HoleConfig m_holeConfig;
     mutable std::mutex m_bevelRecipeMutex;
     BevelRecipe m_runtimeBevelRecipe;
     bool m_runtimeRecipeSet = false;
