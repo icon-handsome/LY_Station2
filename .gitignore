@@ -42,11 +42,20 @@ third_party/*
 !third_party/MVS/**
 !third_party/Hole/
 !third_party/Hole/**
+!third_party/Thicknessmeasurement/
+!third_party/Thicknessmeasurement/**
 third_party/Po_Kou_Ce_Liang/x64/
 # Hole: standalone VS2013 local build output only
 third_party/Hole/build_vs2013/
 third_party/Hole/*.suo
 third_party/Hole/src/*副本*
+# Thickness: standalone VS local build output only
+third_party/Thicknessmeasurement/bin/
+third_party/Thicknessmeasurement/obj/
+third_party/Thicknessmeasurement/*.sdf
+third_party/Thicknessmeasurement/*.suo
+third_party/Thicknessmeasurement/*.vcxproj.user
+third_party/Thicknessmeasurement/thickness_result.json
 # LB: bundled OpenCV tree/installer (local path only, see third_party/LBN/CMakeLists.txt)
 third_party/LB/opencv-3.4.3-vc14_vc15/
 third_party/LB/opencv-3.4.3-vc14_vc15.exe

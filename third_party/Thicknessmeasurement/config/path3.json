@@ -1,0 +1,45 @@
+{
+  "point_cloud": {
+    "template_cloud_path": "../input/Feng_Tou_template_sample.pcd"
+  },
+  "preprocess": {
+    "enable_outlier_removal": true,
+    "mean_k": 10,
+    "stddev_mul_thresh": 5.0,
+    "enable_voxel_downsample": true,
+    "leaf_size": 1.0
+  },
+  "icp": {
+    "max_iterations": 100,
+    "max_correspondence_distance": 200.0,
+    "transformation_epsilon": 0.001,
+    "euclidean_fitness_epsilon": 0.001
+  },
+  "template_cylinder": {
+    "axis_point": {
+      "x": -40.3683,
+      "y": 160.9239,
+      "z": 1875.7435
+    },
+    "axis_direction": {
+      "x": 0.0195,
+      "y": -0.5138,
+      "z": -0.8577
+    }
+  },
+  "template_feature_points": [
+    {
+      "x": -573.36621094,
+      "y": -143.84236145,
+      "z": 1969.37170410
+    },
+    {
+      "x": -539.16583252,
+      "y": -131.10850525,
+      "z": 1955.75463867
+    }
+  ],
+  "output": {
+    "result_path": "thickness_result.json"
+  }
+}
