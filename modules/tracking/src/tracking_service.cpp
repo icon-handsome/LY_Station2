@@ -13,6 +13,9 @@
 #ifdef SCAN_TRACKING_HAS_HOLE_MEASUREMENT
 #include "scan_tracking/vision/hole_measurement_adapter.h"
 #endif
+#ifdef SCAN_TRACKING_HAS_THICKNESS_MEASUREMENT
+#include "scan_tracking/vision/thickness_measurement_adapter.h"
+#endif
 
 namespace scan_tracking::tracking {
 
@@ -38,6 +41,13 @@ double measurementJsonValue(float value)
 quint16 countMeasuredItems(const InspectionMeasurement& measurement)
 {
     quint16 count = 0;
+    if (measurement.algorithm == InspectionAlgorithm::Thickness) {
+        if (std::isfinite(measurement.thicknessMm) && measurement.thicknessMm > 0.0f) {
+            ++count;
+        }
+        return count;
+    }
+
     if (measurement.algorithm == InspectionAlgorithm::Hole) {
         if (std::isfinite(measurement.innerDiameterMm) && measurement.innerDiameterMm > 0.0f) {
             ++count;
@@ -101,6 +111,19 @@ InspectionMeasurement measurementFromHoleResult(
 }
 #endif
 
+#ifdef SCAN_TRACKING_HAS_THICKNESS_MEASUREMENT
+InspectionMeasurement measurementFromThicknessResult(
+    const scan_tracking::vision::thickness::ThicknessInspectionResult& detection)
+{
+    InspectionMeasurement measurement;
+    measurement.algorithm = InspectionAlgorithm::Thickness;
+    measurement.thicknessMm = static_cast<float>(detection.thicknessMm);
+    measurement.icpFitness = static_cast<float>(detection.icpFitnessScore);
+    measurement.qualityCode = detection.ok ? 0 : 1;
+    return measurement;
+}
+#endif
+
 scan_tracking::common::InspectionType resolveInspectionType(
     const scan_tracking::common::ConfigManager* configManager,
     int inspectionPathId)
@@ -118,9 +141,13 @@ scan_tracking::common::InspectionType resolveInspectionType(
 
 void appendInspectionMeasurementFields(QJsonObject& payload, const InspectionMeasurement& measurement)
 {
-    payload[QStringLiteral("inspection_algorithm")] =
-        measurement.algorithm == InspectionAlgorithm::Hole ? QStringLiteral("hole")
-                                                           : QStringLiteral("bevel");
+    QString algorithmName = QStringLiteral("bevel");
+    if (measurement.algorithm == InspectionAlgorithm::Hole) {
+        algorithmName = QStringLiteral("hole");
+    } else if (measurement.algorithm == InspectionAlgorithm::Thickness) {
+        algorithmName = QStringLiteral("thickness");
+    }
+    payload[QStringLiteral("inspection_algorithm")] = algorithmName;
     payload[QStringLiteral("head_angle_tol")] = measurementJsonValue(measurement.headAngleTol);
     payload[QStringLiteral("blunt_height_tol")] = measurementJsonValue(measurement.bluntHeightTol);
     payload[QStringLiteral("bevel_type")] = measurement.bevelType;
@@ -138,6 +165,7 @@ void appendInspectionMeasurementFields(QJsonObject& payload, const InspectionMea
     payload[QStringLiteral("hole_opening_mm")] = measurementJsonValue(measurement.holeOpeningMm);
     payload[QStringLiteral("joint_fit_up_angle_deg")] =
         measurementJsonValue(measurement.jointFitUpAngleDeg);
+    payload[QStringLiteral("thickness_mm")] = measurementJsonValue(measurement.thicknessMm);
 }
 
 void appendHeadDisplayMetricsFields(QJsonObject& payload, const InspectionMeasurement& measurement)
@@ -159,7 +187,7 @@ void appendHeadDisplayMetricsFields(QJsonObject& payload, const InspectionMeasur
     headMetrics[QStringLiteral("hole_opening_mm")] = measurementJsonValue(measurement.holeOpeningMm);
     headMetrics[QStringLiteral("joint_fit_up_angle_deg")] =
         measurementJsonValue(measurement.jointFitUpAngleDeg);
-    headMetrics[QStringLiteral("thickness_mm")] = 0.0;
+    headMetrics[QStringLiteral("thickness_mm")] = measurementJsonValue(measurement.thicknessMm);
     headMetrics[QStringLiteral("head_volume_m3")] = 0.0;
     payload[QStringLiteral("headMetrics")] = headMetrics;
 }
@@ -204,6 +232,24 @@ InspectionResult TrackingService::inspectPointCloud(
     const auto* configManager = scan_tracking::common::ConfigManager::instance();
     const scan_tracking::common::InspectionType inspectionType =
         resolveInspectionType(configManager, inspectionPathId);
+
+#ifdef SCAN_TRACKING_HAS_THICKNESS_MEASUREMENT
+    if (inspectionType == scan_tracking::common::InspectionType::Thickness) {
+        result.resultCode = 2;
+        result.ngReasonWord0 = (1u << 4);
+        result.message = QStringLiteral(
+            "厚度测量需要 inner/outer 双点云，请使用 inspectThicknessPointClouds。");
+        return deliverInspectionResult(result, notifyListener);
+    }
+#else
+    if (inspectionType == scan_tracking::common::InspectionType::Thickness) {
+        result.resultCode = 2;
+        result.ngReasonWord0 = (1u << 4);
+        result.message = QStringLiteral(
+            "厚度测量未编译（SCAN_TRACKING_ENABLE_THICKNESS_MEASUREMENT=OFF）。");
+        return deliverInspectionResult(result, notifyListener);
+    }
+#endif
 
 #ifdef SCAN_TRACKING_HAS_HOLE_MEASUREMENT
     if (inspectionType == scan_tracking::common::InspectionType::Hole) {
@@ -295,6 +341,62 @@ InspectionResult TrackingService::inspectPointCloud(
                          .arg(detection.bevelType)
                          .arg(detection.icpFitness, 0, 'f', 6);
     return deliverInspectionResult(result, notifyListener);
+}
+
+InspectionResult TrackingService::inspectThicknessPointClouds(
+    const scan_tracking::mech_eye::PointCloudFrame& innerCloud,
+    const scan_tracking::mech_eye::PointCloudFrame& outerCloud,
+    int innerPointCount,
+    int outerPointCount,
+    int inspectionPathId,
+    bool notifyListener) const
+{
+    ensureInspectionMeasurementMetaTypeRegistered();
+
+    InspectionResult result;
+    result.sourcePointCount = innerPointCount + outerPointCount;
+
+    if (!innerCloud.isValid() || !outerCloud.isValid() || innerPointCount <= 0 || outerPointCount <= 0) {
+        result.resultCode = 2;
+        result.ngReasonWord0 = (1u << 4);
+        result.message = QStringLiteral("厚度测量没有可用的 inner/outer 点云。");
+        return deliverInspectionResult(result, notifyListener);
+    }
+
+#ifdef SCAN_TRACKING_HAS_THICKNESS_MEASUREMENT
+    const auto detection = scan_tracking::vision::thickness::runThicknessMeasurement(
+        innerCloud, outerCloud, inspectionPathId);
+
+    if (!detection.invoked) {
+        result.resultCode = 2;
+        result.ngReasonWord0 = (1u << 4);
+        result.message = detection.message.isEmpty()
+            ? QStringLiteral("厚度测量适配层未启动。")
+            : detection.message;
+        return deliverInspectionResult(result, notifyListener);
+    }
+
+    result.measurement = measurementFromThicknessResult(detection);
+
+    if (!detection.ok) {
+        result.resultCode = 2;
+        result.ngReasonWord0 = (1u << 5);
+        result.message = detection.message.isEmpty()
+            ? QStringLiteral("厚度测量算法失败。")
+            : detection.message;
+        return deliverInspectionResult(result, notifyListener);
+    }
+
+    result.resultCode = 1;
+    result.measureItemCount = countMeasuredItems(result.measurement);
+    result.message = detection.message;
+    return deliverInspectionResult(result, notifyListener);
+#else
+    result.resultCode = 2;
+    result.ngReasonWord0 = (1u << 4);
+    result.message = QStringLiteral("厚度测量未编译（SCAN_TRACKING_ENABLE_THICKNESS_MEASUREMENT=OFF）。");
+    return deliverInspectionResult(result, notifyListener);
+#endif
 }
 
 PoseCheckResult TrackingService::checkPose() const

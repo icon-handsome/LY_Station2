@@ -2345,6 +2345,146 @@ bool StateMachine::loadMergedPointCloudForInspection(
     return true;
 }
 
+bool StateMachine::loadThicknessPointCloudsForInspection(
+    scan_tracking::mech_eye::PointCloudFrame* outInnerCloud,
+    scan_tracking::mech_eye::PointCloudFrame* outOuterCloud,
+    int* innerPointCount,
+    int* outerPointCount,
+    int* innerSegmentIndex,
+    int* outerSegmentIndex,
+    QString* errorMessage)
+{
+    if (outInnerCloud == nullptr || outOuterCloud == nullptr) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("厚度检测失败：输出点云指针为空。");
+        }
+        return false;
+    }
+
+    int maxJoinMs = kBackgroundRefinementJoinTimeoutMs;
+    if (m_activeTask.definition != nullptr &&
+        m_activeTask.definition->stage == protocol::Stage::Inspection &&
+        m_activeTask.timeoutSeconds > 0) {
+        maxJoinMs = std::min(
+            kBackgroundRefinementJoinTimeoutMs,
+            std::max(5000, static_cast<int>(m_activeTask.timeoutSeconds) * 1000 - 5000));
+    }
+    joinAllBackgroundRefinementJobs(maxJoinMs);
+
+    int pendingAfterJoin = pendingRefinementJobCount();
+    if (pendingAfterJoin < 0) {
+        reconcilePendingRefinementJobCounter("厚度检测前计数异常");
+        pendingAfterJoin = 0;
+    } else if (pendingAfterJoin > 0) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("厚度检测 join 超时后仍有 refinement 在途=") << pendingAfterJoin
+            << QStringLiteral("，将使用当前缓存点云");
+        reconcilePendingRefinementJobCounter("厚度检测前 join 未清空");
+    }
+
+    const auto* configManager = scan_tracking::common::ConfigManager::instance();
+    if (configManager == nullptr) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("厚度检测失败：ConfigManager 不可用。");
+        }
+        return false;
+    }
+
+    int inspectPathId = m_activeTask.inspectionPathId;
+    if (inspectPathId <= 0) {
+        inspectPathId = resolvePathIdForInspection();
+    }
+    if (inspectPathId <= 0) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("厚度检测失败：没有已扫满的可检测路径。");
+        }
+        return false;
+    }
+
+    const int innerSeg = configManager->innerScanSegmentIndexForPath(inspectPathId);
+    const int outerSeg = configManager->outerScanSegmentIndexForPath(inspectPathId);
+    if (innerSeg <= 0 || outerSeg <= 0) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral(
+                "厚度检测失败：路径 %1 未配置 innerScanSegmentIndex/outerScanSegmentIndex。")
+                                 .arg(inspectPathId);
+        }
+        return false;
+    }
+
+    scan_tracking::mech_eye::PointCloudFrame innerCloud;
+    scan_tracking::mech_eye::PointCloudFrame outerCloud;
+    int innerCount = 0;
+    int outerCount = 0;
+
+    {
+        std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
+
+        if (!m_pathSegmentCaptureResults.contains(inspectPathId)) {
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral(
+                    "厚度检测失败：路径 %1 不存在（尚未扫描）。").arg(inspectPathId);
+            }
+            return false;
+        }
+
+        const auto& pathSegments = m_pathSegmentCaptureResults[inspectPathId];
+        const auto loadSegment = [&](int segmentIndex, scan_tracking::mech_eye::PointCloudFrame* outCloud, int* outCount) -> bool {
+            if (!pathSegments.contains(segmentIndex)) {
+                return false;
+            }
+            const auto& captureResult = pathSegments[segmentIndex];
+            if (!captureResult.success() || !captureResult.pointCloud.isValid()) {
+                return false;
+            }
+            *outCloud = clonePointCloudFrame(captureResult.pointCloud);
+            *outCount = outCloud->pointCount;
+            return *outCount > 0;
+        };
+
+        if (!loadSegment(innerSeg, &innerCloud, &innerCount)) {
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral(
+                    "厚度检测失败：路径 %1 段 %2（inner）点云不可用。")
+                                     .arg(inspectPathId)
+                                     .arg(innerSeg);
+            }
+            return false;
+        }
+        if (!loadSegment(outerSeg, &outerCloud, &outerCount)) {
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral(
+                    "厚度检测失败：路径 %1 段 %2（outer）点云不可用。")
+                                     .arg(inspectPathId)
+                                     .arg(outerSeg);
+            }
+            return false;
+        }
+    }
+
+    *outInnerCloud = std::move(innerCloud);
+    *outOuterCloud = std::move(outerCloud);
+    if (innerPointCount != nullptr) {
+        *innerPointCount = innerCount;
+    }
+    if (outerPointCount != nullptr) {
+        *outerPointCount = outerCount;
+    }
+    if (innerSegmentIndex != nullptr) {
+        *innerSegmentIndex = innerSeg;
+    }
+    if (outerSegmentIndex != nullptr) {
+        *outerSegmentIndex = outerSeg;
+    }
+
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("[多路径] 厚度点云已加载 pathId=") << inspectPathId
+        << QStringLiteral(" inner段=") << innerSeg << QStringLiteral(" 点数=") << innerCount
+        << QStringLiteral(" outer段=") << outerSeg << QStringLiteral(" 点数=") << outerCount;
+
+    return true;
+}
+
 tracking::InspectionResult StateMachine::runDebugInspectionOnCachedSegments() const
 {
     tracking::InspectionResult failure;
@@ -2364,6 +2504,48 @@ tracking::InspectionResult StateMachine::runDebugInspectionOnCachedSegments() co
 
     QString loadError;
     auto* mutableSelf = const_cast<StateMachine*>(this);
+
+    int inspectPathId = m_activeTask.inspectionPathId;
+    if (inspectPathId <= 0) {
+        inspectPathId = mutableSelf->resolvePathIdForInspection();
+    }
+
+    const auto* configManager = scan_tracking::common::ConfigManager::instance();
+    const auto inspectionType = configManager != nullptr
+        ? configManager->inspectionTypeForPath(inspectPathId)
+        : scan_tracking::common::InspectionType::Bevel;
+
+    if (inspectionType == scan_tracking::common::InspectionType::Thickness) {
+        scan_tracking::mech_eye::PointCloudFrame innerCloud;
+        scan_tracking::mech_eye::PointCloudFrame outerCloud;
+        int innerPointCount = 0;
+        int outerPointCount = 0;
+        int innerSegmentIndex = 0;
+        int outerSegmentIndex = 0;
+        if (!mutableSelf->loadThicknessPointCloudsForInspection(
+                &innerCloud,
+                &outerCloud,
+                &innerPointCount,
+                &outerPointCount,
+                &innerSegmentIndex,
+                &outerSegmentIndex,
+                &loadError)) {
+            failure.ngReasonWord0 = (1u << 4);
+            failure.message = loadError.isEmpty()
+                ? QStringLiteral("调试综合检测失败：无法加载厚度 inner/outer 点云。")
+                : loadError;
+            return failure;
+        }
+
+        return m_tracking->inspectThicknessPointClouds(
+            innerCloud,
+            outerCloud,
+            innerPointCount,
+            outerPointCount,
+            inspectPathId,
+            false);
+    }
+
     scan_tracking::mech_eye::PointCloudFrame mergedCloud;
     int totalPointCount = 0;
     int segmentCount = 0;
@@ -2374,11 +2556,6 @@ tracking::InspectionResult StateMachine::runDebugInspectionOnCachedSegments() co
             ? QStringLiteral("调试综合检测失败：无法加载合并点云。")
             : loadError;
         return failure;
-    }
-
-    int inspectPathId = m_activeTask.inspectionPathId;
-    if (inspectPathId <= 0) {
-        inspectPathId = mutableSelf->resolvePathIdForInspection();
     }
 
     return m_tracking->inspectPointCloud(
@@ -2416,42 +2593,95 @@ void StateMachine::executeInspectionTask()
     }
 
     QString loadError;
-    scan_tracking::mech_eye::PointCloudFrame mergedCloud;
-    int totalPointCount = 0;
-    int segmentCount = 0;
     ensurePoseStitchRunRootDirectory();
     persistLastPoseStitchArtifactToDisk();
-    if (!loadMergedPointCloudForInspection(
-            &mergedCloud, &totalPointCount, &segmentCount, &loadError)) {
-        qWarning(LOG_FLOW).noquote()
-            << QStringLiteral("Trig_Inspection 加载内存点云失败：") << loadError
-            << multiPathCacheStatusText();
-        writeInspectionResult({2, 1u << 4, 0, 0});
-        if (m_inspectionResultPublisher) {
-            tracking::InspectionResult failure;
-            failure.resultCode = 2;
-            failure.ngReasonWord0 = (1u << 4);
-            failure.message = loadError.isEmpty()
-                ? QStringLiteral("综合检测失败：无法加载必需分段点云。")
-                : loadError;
-            m_inspectionResultPublisher(failure);
-        }
-        // TODO(field-commissioning): 真实失败码为 7；PLC 侧临时强制 Res_Inspection=1(OK)
-        // 多路径未齐时保留缓存，便于 PLC 继续扫路径 2/3
-        const quint16 plcRes = inspectionResForPlcHandshake(7);
-        completeActiveTask(plcRes, protocol::AckState::Completed, plcRes == kInspectionResOk);
-        clearActiveTask();
-        m_ipcState = protocol::IpcState::Ready;
-        m_currentStage = protocol::Stage::Idle;
-        m_progress = 0;
-        setState(AppState::Ready);
-        publishIpcStatus();
-        return;
-    }
 
-    const tracking::InspectionResult trackingResult =
-        m_tracking->inspectPointCloud(
+    const auto* configManager = scan_tracking::common::ConfigManager::instance();
+    const auto inspectionType = configManager != nullptr
+        ? configManager->inspectionTypeForPath(m_activeTask.inspectionPathId)
+        : scan_tracking::common::InspectionType::Bevel;
+
+    tracking::InspectionResult trackingResult;
+    int segmentCount = 0;
+
+    if (inspectionType == scan_tracking::common::InspectionType::Thickness) {
+        scan_tracking::mech_eye::PointCloudFrame innerCloud;
+        scan_tracking::mech_eye::PointCloudFrame outerCloud;
+        int innerPointCount = 0;
+        int outerPointCount = 0;
+        int innerSegmentIndex = 0;
+        int outerSegmentIndex = 0;
+        if (!loadThicknessPointCloudsForInspection(
+                &innerCloud,
+                &outerCloud,
+                &innerPointCount,
+                &outerPointCount,
+                &innerSegmentIndex,
+                &outerSegmentIndex,
+                &loadError)) {
+            qWarning(LOG_FLOW).noquote()
+                << QStringLiteral("Trig_Inspection 加载厚度点云失败：") << loadError
+                << multiPathCacheStatusText();
+            writeInspectionResult({2, 1u << 4, 0, 0});
+            if (m_inspectionResultPublisher) {
+                tracking::InspectionResult failure;
+                failure.resultCode = 2;
+                failure.ngReasonWord0 = (1u << 4);
+                failure.message = loadError.isEmpty()
+                    ? QStringLiteral("综合检测失败：无法加载厚度 inner/outer 点云。")
+                    : loadError;
+                m_inspectionResultPublisher(failure);
+            }
+            const quint16 plcRes = inspectionResForPlcHandshake(7);
+            completeActiveTask(plcRes, protocol::AckState::Completed, plcRes == kInspectionResOk);
+            clearActiveTask();
+            m_ipcState = protocol::IpcState::Ready;
+            m_currentStage = protocol::Stage::Idle;
+            m_progress = 0;
+            setState(AppState::Ready);
+            publishIpcStatus();
+            return;
+        }
+
+        segmentCount = 2;
+        trackingResult = m_tracking->inspectThicknessPointClouds(
+            innerCloud,
+            outerCloud,
+            innerPointCount,
+            outerPointCount,
+            m_activeTask.inspectionPathId);
+    } else {
+        scan_tracking::mech_eye::PointCloudFrame mergedCloud;
+        int totalPointCount = 0;
+        if (!loadMergedPointCloudForInspection(
+                &mergedCloud, &totalPointCount, &segmentCount, &loadError)) {
+            qWarning(LOG_FLOW).noquote()
+                << QStringLiteral("Trig_Inspection 加载内存点云失败：") << loadError
+                << multiPathCacheStatusText();
+            writeInspectionResult({2, 1u << 4, 0, 0});
+            if (m_inspectionResultPublisher) {
+                tracking::InspectionResult failure;
+                failure.resultCode = 2;
+                failure.ngReasonWord0 = (1u << 4);
+                failure.message = loadError.isEmpty()
+                    ? QStringLiteral("综合检测失败：无法加载必需分段点云。")
+                    : loadError;
+                m_inspectionResultPublisher(failure);
+            }
+            const quint16 plcRes = inspectionResForPlcHandshake(7);
+            completeActiveTask(plcRes, protocol::AckState::Completed, plcRes == kInspectionResOk);
+            clearActiveTask();
+            m_ipcState = protocol::IpcState::Ready;
+            m_currentStage = protocol::Stage::Idle;
+            m_progress = 0;
+            setState(AppState::Ready);
+            publishIpcStatus();
+            return;
+        }
+
+        trackingResult = m_tracking->inspectPointCloud(
             mergedCloud, totalPointCount, m_activeTask.inspectionPathId);
+    }
 
     InspectionSummary summary;
     summary.resultCode = trackingResult.resultCode;
@@ -2465,6 +2695,7 @@ void StateMachine::executeInspectionTask()
         << QStringLiteral(" 总点数=") << trackingResult.sourcePointCount
         << QStringLiteral(" angleDeg=") << trackingResult.measurement.headAngleTol
         << QStringLiteral(" lengthMm=") << trackingResult.measurement.bluntHeightTol
+        << QStringLiteral(" thicknessMm=") << trackingResult.measurement.thicknessMm
         << QStringLiteral(" 说明=") << trackingResult.message;
 
     // 将检测结果写入 PLC 寄存器（NG 字等仍写真实算法结果，供联调日志/后续恢复）

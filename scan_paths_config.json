@@ -60,7 +60,11 @@
     {
       "pathId": 3,
       "pathName": "路径3-焊缝检测",
-      "description": "本轮单路径联调未启用",
+      "inspectionType": "thickness",
+      "thicknessConfigPath": "thickness/config/path3.json",
+      "innerScanSegmentIndex": 1,
+      "outerScanSegmentIndex": 2,
+      "description": "厚度测量：段1=内表面，段2=外表面",
       "enabled": false,
       "totalPoints": 6,
       "points": [

@@ -93,6 +93,29 @@ function(scan_tracking_deploy_hole_runtime target_name)
     )
 endfunction()
 
+function(scan_tracking_deploy_thickness_runtime target_name)
+    set(_thickness_source_root "${CMAKE_SOURCE_DIR}/third_party/Thicknessmeasurement")
+    if(NOT EXISTS "${_thickness_source_root}/config/thickness_config.json")
+        message(WARNING "Thickness runtime source not found: ${_thickness_source_root}")
+        return()
+    endif()
+
+    add_custom_command(TARGET ${target_name} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target_name}>/thickness/config"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target_name}>/thickness/input"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${_thickness_source_root}/config/thickness_config.json"
+            "$<TARGET_FILE_DIR:${target_name}>/thickness/config/thickness_config.json"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${_thickness_source_root}/config/path3.json"
+            "$<TARGET_FILE_DIR:${target_name}>/thickness/config/path3.json"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${_thickness_source_root}/input"
+            "$<TARGET_FILE_DIR:${target_name}>/thickness/input"
+        COMMENT "Deploying thickness measurement runtime assets"
+    )
+endfunction()
+
 function(scan_tracking_deploy_bevel_runtime target_name)
     set(_bevel_source_root "${CMAKE_SOURCE_DIR}/third_party/Po_Kou_Ce_Liang")
     if(NOT EXISTS "${_bevel_source_root}/config.txt")

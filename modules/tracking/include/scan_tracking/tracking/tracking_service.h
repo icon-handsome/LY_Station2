@@ -26,6 +26,7 @@ namespace tracking {
 enum class InspectionAlgorithm {
     Bevel = 0,
     Hole = 1,
+    Thickness = 2,
 };
 
 struct InspectionMeasurement {
@@ -42,6 +43,7 @@ struct InspectionMeasurement {
     float straightSideHeightMm = 0.0f;
     float holeOpeningMm = 0.0f;
     float jointFitUpAngleDeg = 0.0f;
+    float thicknessMm = 0.0f;
 };
 
 /// 将测量项写入 JSON payload（协议 snake_case 字段名）
@@ -98,6 +100,15 @@ public:
     InspectionResult inspectPointCloud(
         const scan_tracking::mech_eye::PointCloudFrame& pointCloud,
         int sourcePointCount,
+        int inspectionPathId = 0,
+        bool notifyListener = true) const;
+
+    /// 执行厚度综合检测（inner/outer 双点云，按路径 inspectionType=thickness）
+    InspectionResult inspectThicknessPointClouds(
+        const scan_tracking::mech_eye::PointCloudFrame& innerCloud,
+        const scan_tracking::mech_eye::PointCloudFrame& outerCloud,
+        int innerPointCount,
+        int outerPointCount,
         int inspectionPathId = 0,
         bool notifyListener = true) const;
 

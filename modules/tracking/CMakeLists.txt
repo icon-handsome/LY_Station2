@@ -57,6 +57,15 @@ if(SCAN_TRACKING_ENABLE_HOLE_MEASUREMENT)
     endif()
 endif()
 
+if(SCAN_TRACKING_ENABLE_THICKNESS_MEASUREMENT)
+    target_compile_definitions(scan_tracking_tracking
+        PRIVATE SCAN_TRACKING_HAS_THICKNESS_MEASUREMENT=1)
+    target_link_libraries(scan_tracking_tracking
+        PRIVATE
+            scan_tracking_thickness_adapter
+    )
+endif()
+
 set_target_properties(scan_tracking_tracking PROPERTIES
     FOLDER "modules"
 )

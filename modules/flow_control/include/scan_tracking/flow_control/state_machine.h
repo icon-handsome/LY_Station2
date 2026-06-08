@@ -352,6 +352,16 @@ private:
         int* segmentCount,
         QString* errorMessage);
 
+    // 厚度检测：按路径配置段号加载 inner/outer 两帧点云
+    bool loadThicknessPointCloudsForInspection(
+        scan_tracking::mech_eye::PointCloudFrame* outInnerCloud,
+        scan_tracking::mech_eye::PointCloudFrame* outOuterCloud,
+        int* innerPointCount,
+        int* outerPointCount,
+        int* innerSegmentIndex,
+        int* outerSegmentIndex,
+        QString* errorMessage);
+
     /// 所有启用路径的 1..scanSegmentTotal 段均已缓存
     bool hasAllScanSegmentsCached() const;
 

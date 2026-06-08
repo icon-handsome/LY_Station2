@@ -140,10 +140,17 @@ struct HoleConfig {
     double cylinderRmsMaxMm = 3.0;
 };
 
+/// 厚度测量算法配置（[Thickness]）
+struct ThicknessConfig {
+    QString configPath = QStringLiteral("thickness/config/thickness_config.json");
+    double icpFitnessMax = 50.0;
+};
+
 /// 综合检测算法类型（按 scan_paths 路径配置）
 enum class InspectionType {
     Bevel,
     Hole,
+    Thickness,
 };
 
 InspectionType inspectionTypeFromString(const QString& value);
@@ -223,6 +230,9 @@ struct ScanPathConfig {
     int totalPoints;          // 路径包含的点位总数
     InspectionType inspectionType = InspectionType::Bevel;  // 综合检测算法类型
     QString holeConfigPath;   // Hole JSON 配置（可选，缺省用 [Hole] configPath）
+    QString thicknessConfigPath;  // 厚度 JSON 配置（可选，缺省用 [Thickness] configPath）
+    int innerScanSegmentIndex = 0;  // 厚度：内表面段号（scan_paths 点位 pointIndex）
+    int outerScanSegmentIndex = 0;  // 厚度：外表面段号
     std::vector<ScanPointConfig> points;  // 点位配置列表
 };
 
@@ -268,11 +278,15 @@ public:
     const TrackingConfig& trackingConfig() const;
     const BevelConfig& bevelConfig() const;
     const HoleConfig& holeConfig() const;
+    const ThicknessConfig& thicknessConfig() const;
     void setBevelRecipe(const BevelRecipe& recipe);
     BevelRecipe bevelRecipe() const;
     bool hasActiveBevelRecipe() const;
     InspectionType inspectionTypeForPath(int pathId) const;
     QString holeConfigPathForPath(int pathId) const;
+    QString thicknessConfigPathForPath(int pathId) const;
+    int innerScanSegmentIndexForPath(int pathId) const;
+    int outerScanSegmentIndexForPath(int pathId) const;
     const HmiConfig& hmiConfig() const;
     const LbPoseConfig& lbPoseConfig() const;
     const LbnPoseConfig& lbnPoseConfig() const;
@@ -306,6 +320,7 @@ CameraConfig m_cameraConfig;
     TrackingConfig m_trackingConfig;
     BevelConfig m_bevelConfig;
     HoleConfig m_holeConfig;
+    ThicknessConfig m_thicknessConfig;
     mutable std::mutex m_bevelRecipeMutex;
     BevelRecipe m_runtimeBevelRecipe;
     bool m_runtimeRecipeSet = false;

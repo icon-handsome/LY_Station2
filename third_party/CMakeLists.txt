@@ -146,3 +146,7 @@ endif()
 if(SCAN_TRACKING_ENABLE_HOLE_MEASUREMENT)
     add_subdirectory(Hole)
 endif()
+
+if(SCAN_TRACKING_ENABLE_THICKNESS_MEASUREMENT)
+    add_subdirectory(Thicknessmeasurement)
+endif()

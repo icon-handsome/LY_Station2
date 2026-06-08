@@ -180,11 +180,18 @@ const BevelConfig& ConfigManager::bevelConfig() const { return m_bevelConfig; }
 
 const HoleConfig& ConfigManager::holeConfig() const { return m_holeConfig; }
 
+const ThicknessConfig& ConfigManager::thicknessConfig() const { return m_thicknessConfig; }
+
 InspectionType inspectionTypeFromString(const QString& value)
 {
     const QString normalized = value.trimmed().toLower();
     if (normalized == QStringLiteral("hole") || normalized == QStringLiteral("opening")) {
         return InspectionType::Hole;
+    }
+    if (normalized == QStringLiteral("thickness")
+        || normalized == QStringLiteral("weld")
+        || normalized == QStringLiteral("焊缝")) {
+        return InspectionType::Thickness;
     }
     return InspectionType::Bevel;
 }
@@ -194,6 +201,8 @@ QString inspectionTypeToString(InspectionType type)
     switch (type) {
     case InspectionType::Hole:
         return QStringLiteral("hole");
+    case InspectionType::Thickness:
+        return QStringLiteral("thickness");
     case InspectionType::Bevel:
     default:
         return QStringLiteral("bevel");
@@ -218,6 +227,36 @@ QString ConfigManager::holeConfigPathForPath(int pathId) const
         }
     }
     return m_holeConfig.configPath;
+}
+
+QString ConfigManager::thicknessConfigPathForPath(int pathId) const
+{
+    for (const ScanPathConfig& path : m_scanPathsConfig.scanPaths) {
+        if (path.pathId == pathId && !path.thicknessConfigPath.trimmed().isEmpty()) {
+            return path.thicknessConfigPath.trimmed();
+        }
+    }
+    return m_thicknessConfig.configPath;
+}
+
+int ConfigManager::innerScanSegmentIndexForPath(int pathId) const
+{
+    for (const ScanPathConfig& path : m_scanPathsConfig.scanPaths) {
+        if (path.pathId == pathId) {
+            return path.innerScanSegmentIndex;
+        }
+    }
+    return 0;
+}
+
+int ConfigManager::outerScanSegmentIndexForPath(int pathId) const
+{
+    for (const ScanPathConfig& path : m_scanPathsConfig.scanPaths) {
+        if (path.pathId == pathId) {
+            return path.outerScanSegmentIndex;
+        }
+    }
+    return 0;
 }
 
 QVector<BevelRecipePreset> standardBevelRecipePresets()
@@ -612,6 +651,12 @@ void ConfigManager::load(const QString& filePath)
         settings.value("cylinderRmsMaxMm", 3.0).toDouble();
     settings.endGroup();
 
+    settings.beginGroup("Thickness");
+    m_thicknessConfig.configPath = settings.value(
+        "configPath", QStringLiteral("thickness/config/thickness_config.json")).toString();
+    m_thicknessConfig.icpFitnessMax = settings.value("icpFitnessMax", 50.0).toDouble();
+    settings.endGroup();
+
     settings.beginGroup("Hmi");
     m_hmiConfig.enabled = settings.value("enabled", true).toBool();
     {
@@ -737,7 +782,10 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
         pathConfig.inspectionType = inspectionTypeFromString(
             pathObj.value("inspectionType").toString(QStringLiteral("bevel")));
         pathConfig.holeConfigPath = pathObj.value("holeConfigPath").toString().trimmed();
-        
+        pathConfig.thicknessConfigPath = pathObj.value("thicknessConfigPath").toString().trimmed();
+        pathConfig.innerScanSegmentIndex = pathObj.value("innerScanSegmentIndex").toInt(0);
+        pathConfig.outerScanSegmentIndex = pathObj.value("outerScanSegmentIndex").toInt(0);
+
         // 读取点位列表
         const QJsonArray pointsArray = pathObj.value("points").toArray();
         pathConfig.points.clear();
@@ -797,7 +845,16 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
             << "inspectionType=" << inspectionTypeToString(path.inspectionType)
             << (path.holeConfigPath.isEmpty()
                     ? QString()
-                    : QStringLiteral(" holeConfig=") + path.holeConfigPath);
+                    : QStringLiteral(" holeConfig=") + path.holeConfigPath)
+            << (path.thicknessConfigPath.isEmpty()
+                    ? QString()
+                    : QStringLiteral(" thicknessConfig=") + path.thicknessConfigPath)
+            << (path.innerScanSegmentIndex > 0
+                    ? QStringLiteral(" innerSeg=") + QString::number(path.innerScanSegmentIndex)
+                    : QString())
+            << (path.outerScanSegmentIndex > 0
+                    ? QStringLiteral(" outerSeg=") + QString::number(path.outerScanSegmentIndex)
+                    : QString());
     }
 }
 
