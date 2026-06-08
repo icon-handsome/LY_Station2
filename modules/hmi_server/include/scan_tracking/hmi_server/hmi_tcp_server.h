@@ -179,6 +179,9 @@ private:
 
     /// 设置坡口工艺配方（Qt 用户输入）
     void handleCmdSetBevelRecipe(const QJsonObject& message);
+
+    /// 显控上报监控区域有无人员（暂仅解析打印，不写 PLC）
+    void handleCmdReportPersonZoneAlarm(const QJsonObject& message);
     
     /// 处理单独通过 Mech-Eye 进行采图的指令（多用于独立标定或调试测试）
     void handleCmdCaptureMechEye(const QJsonObject& message);
@@ -308,6 +311,9 @@ private:
         bool valid = false;
     };
     CameraConnectivityCache m_cameraConnectivityCache;
+
+    bool m_personZoneAlarm = false;          ///< 上次显控上报的人员区域 alarm 值
+    bool m_personZoneAlarmCacheValid = false; ///< 是否已收到过至少一次人员区域上报
 
     bool m_serviceSignalsBound = false;      ///< 是否已 bindServiceSignals
 

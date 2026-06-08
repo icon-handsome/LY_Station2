@@ -85,6 +85,12 @@ inline constexpr const char* kCmdDebugTriggerInspection = "cmd.debug_trigger_ins
 /// 设置坡口工艺配方（bevel_type / angle_deg / length）
 inline constexpr const char* kCmdSetBevelRecipe = "cmd.set_bevel_recipe";
 
+/// 显控上报监控区域人员状态：payload.alarm true=有人，false=无人（可周期重复上报）
+inline constexpr const char* kCmdReportPersonZoneAlarm = "cmd.report_person_zone_alarm";
+
+/// 显控早期拼写别名（zome → zone），与 kCmdReportPersonZoneAlarm 同义
+inline constexpr const char* kCmdReportPersonZoneAlarmTypo = "cmd.report_person_zome_alarm";
+
 }  // namespace msg_type
 
 // ============================================================

@@ -266,6 +266,7 @@ void HmiTcpServer::onSessionDisconnected()
         m_session = nullptr;
     }
     invalidateStatusPushCache();
+    m_personZoneAlarmCacheValid = false;
     m_statusPushTimer->stop();
     m_heartbeatTimer->stop();
 }
@@ -317,6 +318,11 @@ void HmiTcpServer::initializeMessageHandlers()
         &HmiTcpServer::handleCmdDebugTriggerInspection;
     m_messageHandlers[QString::fromLatin1(msg_type::kCmdSetBevelRecipe)] =
         &HmiTcpServer::handleCmdSetBevelRecipe;
+    m_messageHandlers[QString::fromLatin1(msg_type::kCmdReportPersonZoneAlarm)] =
+        &HmiTcpServer::handleCmdReportPersonZoneAlarm;
+    // 兼容显控侧 zone 误拼为 zome
+    m_messageHandlers[QString::fromLatin1(msg_type::kCmdReportPersonZoneAlarmTypo)] =
+        &HmiTcpServer::handleCmdReportPersonZoneAlarm;
 }
 
 // 处理接收到的客户端消息，根据 type 字段分发到不同的处理函数
@@ -841,6 +847,48 @@ void HmiTcpServer::handleCmdSetBevelRecipe(const QJsonObject& message)
         << QStringLiteral(" angle_deg=") << recipe.angleDeg
         << QStringLiteral(" length=") << recipe.lengthMm
         << QStringLiteral(" has_hole=") << recipe.hasHole;
+}
+
+void HmiTcpServer::handleCmdReportPersonZoneAlarm(const QJsonObject& message)
+{
+    const QString msgId = message.value(QLatin1String("msgId")).toString();
+    const QJsonObject payload = message.value(QLatin1String("payload")).toObject();
+
+    const QString requestType = message.value(QLatin1String("type")).toString();
+
+    if (!payload.contains(QLatin1String("alarm"))) {
+        qWarning(LOG_HMI_SERVER).noquote()
+            << QStringLiteral("[TCPIP] 人员区域上报缺少 alarm 字段 type=") << requestType
+            << QStringLiteral(" msgId=") << msgId;
+        sendResponse(
+            requestType.isEmpty() ? QLatin1String(msg_type::kCmdReportPersonZoneAlarm) : requestType,
+            msgId,
+            false,
+            QStringLiteral("缺少必填字段：alarm"));
+        return;
+    }
+
+    const bool alarm = payload.value(QLatin1String("alarm")).toBool();
+    const bool stateChanged =
+        !m_personZoneAlarmCacheValid || alarm != m_personZoneAlarm;
+
+    qInfo(LOG_HMI_SERVER).noquote()
+        << QStringLiteral("[TCPIP] 人员区域上报")
+        << QStringLiteral(" alarm=") << (alarm ? QStringLiteral("true(有人)") : QStringLiteral("false(无人)"))
+        << QStringLiteral(" msgId=") << msgId
+        << (stateChanged ? QStringLiteral(" [状态变化]") : QStringLiteral(" [重复上报]"));
+
+    m_personZoneAlarm = alarm;
+    m_personZoneAlarmCacheValid = true;
+
+    // 暂不写 PLC / 不改状态机，仅 ACK 便于显控确认链路
+    sendResponse(
+        requestType.isEmpty() ? QLatin1String(msg_type::kCmdReportPersonZoneAlarm) : requestType,
+        msgId,
+        true,
+        stateChanged
+            ? QStringLiteral("人员区域状态已更新")
+            : QStringLiteral("人员区域状态已接收（与上次相同）"));
 }
 
 void HmiTcpServer::handleCmdCaptureMechEye(const QJsonObject& message)
