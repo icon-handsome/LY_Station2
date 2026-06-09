@@ -176,6 +176,14 @@ struct LivoxMid360Config {
     int discoveryTimeoutMs = 10000;
 };
 
+struct TfminiPlusConfig {
+    bool enabled = false;
+    QString portName;
+    int baudRate = 115200;
+    int collisionThresholdMm = 0;
+    bool printRawData = true;
+};
+
 struct HmiConfig {
     bool enabled = true;       ///< 是否启动 HMI TCP 服务端
     quint16 tcpPort = 9900;    ///< 监听端口
@@ -308,6 +316,7 @@ public:
     int outerScanSegmentIndexForPath(int pathId) const;
     const OrbbecGeminiConfig& orbbecGeminiConfig() const;
     const LivoxMid360Config& livoxMid360Config() const;
+    const TfminiPlusConfig& tfminiPlusConfig() const;
     QString configFilePath() const;
     const HmiConfig& hmiConfig() const;
     const LbPoseConfig& lbPoseConfig() const;
@@ -350,6 +359,7 @@ CameraConfig m_cameraConfig;
     bool m_runtimeRecipeSet = false;
     OrbbecGeminiConfig m_orbbecGeminiConfig;
     LivoxMid360Config m_livoxMid360Config;
+    TfminiPlusConfig m_tfminiPlusConfig;
     QString m_configFilePath;
     HmiConfig m_hmiConfig;
     LbPoseConfig m_lbPoseConfig;

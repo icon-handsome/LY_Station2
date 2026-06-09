@@ -393,6 +393,7 @@ bool ConfigManager::hasActiveBevelRecipe() const
 
 const OrbbecGeminiConfig& ConfigManager::orbbecGeminiConfig() const { return m_orbbecGeminiConfig; }
 const LivoxMid360Config& ConfigManager::livoxMid360Config() const { return m_livoxMid360Config; }
+const TfminiPlusConfig& ConfigManager::tfminiPlusConfig() const { return m_tfminiPlusConfig; }
 QString ConfigManager::configFilePath() const { return m_configFilePath; }
 const HmiConfig& ConfigManager::hmiConfig() const { return m_hmiConfig; }
 const LbPoseConfig& ConfigManager::lbPoseConfig() const { return m_lbPoseConfig; }
@@ -543,6 +544,14 @@ void ConfigManager::writeDefaults(QSettings& settings)
     settings.setValue("livoxMid360ConfigFile", QStringLiteral("bin/mid360_config.json"));
     settings.setValue("livoxMid360Serial", QStringLiteral("47MCNCN0035510"));
     settings.setValue("livoxMid360DiscoveryTimeoutMs", 10000);
+    settings.endGroup();
+
+    settings.beginGroup("TfminiPlus");
+    settings.setValue("tfminiPlusEnabled", false);
+    settings.setValue("tfminiPlusPort", QString());
+    settings.setValue("tfminiPlusBaudRate", 115200);
+    settings.setValue("collisionThresholdMm", 0);
+    settings.setValue("tfminiPlusPrintRawData", true);
     settings.endGroup();
 
     settings.beginGroup("Hmi");
@@ -823,6 +832,16 @@ void ConfigManager::load(const QString& filePath)
     m_livoxMid360Config.serial = settings.value("livoxMid360Serial", QString()).toString();
     m_livoxMid360Config.discoveryTimeoutMs =
         settings.value("livoxMid360DiscoveryTimeoutMs", 10000).toInt();
+    settings.endGroup();
+
+    settings.beginGroup("TfminiPlus");
+    m_tfminiPlusConfig.enabled = settings.value("tfminiPlusEnabled", false).toBool();
+    m_tfminiPlusConfig.portName = settings.value("tfminiPlusPort", QString()).toString().trimmed();
+    m_tfminiPlusConfig.baudRate = settings.value("tfminiPlusBaudRate", 115200).toInt();
+    m_tfminiPlusConfig.collisionThresholdMm =
+        settings.value("collisionThresholdMm", 0).toInt();
+    m_tfminiPlusConfig.printRawData =
+        settings.value("tfminiPlusPrintRawData", true).toBool();
     settings.endGroup();
 
     settings.beginGroup("Hmi");

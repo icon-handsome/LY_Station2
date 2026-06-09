@@ -20,6 +20,7 @@ target_link_libraries(scan_tracking
         scan_tracking_mech_eye
         scan_tracking_orbbec_gemini
         scan_tracking_livox_mid360
+        scan_tracking_tfmini_plus
         scan_tracking_vision
         scan_tracking_tracking
         scan_tracking_modbus

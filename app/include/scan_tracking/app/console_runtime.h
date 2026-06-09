@@ -22,6 +22,7 @@ namespace modbus { class ModbusService; }
 namespace mech_eye { class MechEyeService; }
 namespace orbbec_gemini { class OrbbecGeminiService; }
 namespace livox_mid360 { class LivoxMid360Service; }
+namespace tfmini_plus { class TfminiPlusService; }
 namespace tracking { class TrackingService; }
 namespace flow_control { class StateMachine; }
 namespace vision {
@@ -75,6 +76,7 @@ private:
     std::unique_ptr<scan_tracking::mech_eye::MechEyeService> mechEyeService_;
     std::unique_ptr<scan_tracking::orbbec_gemini::OrbbecGeminiService> orbbecGeminiService_;
     std::unique_ptr<scan_tracking::livox_mid360::LivoxMid360Service> livoxMid360Service_;
+    std::unique_ptr<scan_tracking::tfmini_plus::TfminiPlusService> tfminiPlusService_;
     std::unique_ptr<scan_tracking::vision::HikCxpCameraService> hikCxpCameraAService_;
     std::unique_ptr<scan_tracking::vision::HikCxpCameraService> hikCxpCameraBService_;
     std::unique_ptr<scan_tracking::vision::VisionPipelineService> visionPipelineService_;

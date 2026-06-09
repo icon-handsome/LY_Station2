@@ -29,6 +29,7 @@
 #include "scan_tracking/mech_eye/mech_eye_types.h"
 #include "scan_tracking/orbbec_gemini/orbbec_gemini_service.h"
 #include "scan_tracking/livox_mid360/livox_mid360_service.h"
+#include "scan_tracking/tfmini_plus/tfmini_plus_service.h"
 #include "scan_tracking/modbus/modbus_service.h"
 #include "scan_tracking/tracking/tracking_service.h"
 #include "scan_tracking/vision/hik_cxp_camera_service.h"
@@ -238,6 +239,51 @@ void ConsoleRuntime::initModules()
                 });
             livoxMid360Service_->start();
             qInfo(appLog) << QStringLiteral("[LivoxMid360] service started.");
+        }
+
+        const auto& tfminiConfig = configManager->tfminiPlusConfig();
+        if (!tfminiConfig.enabled) {
+            qInfo(appLog) << QStringLiteral("[TfminiPlus] disabled (tfminiPlusEnabled=false)");
+        } else {
+            // 第二工位吊装/内壁防碰辅助测距；本阶段仅并行读串口和打日志，不写 PLC 安全位。
+            tfminiPlusService_ = std::make_unique<scan_tracking::tfmini_plus::TfminiPlusService>();
+            QObject::connect(
+                tfminiPlusService_.get(),
+                &scan_tracking::tfmini_plus::TfminiPlusService::logMessage,
+                [](const QString& message) {
+                    qInfo(appLog).noquote() << message;
+                });
+            QObject::connect(
+                tfminiPlusService_.get(),
+                &scan_tracking::tfmini_plus::TfminiPlusService::stateChanged,
+                [](scan_tracking::tfmini_plus::TfminiPlusRuntimeState state,
+                   const QString& description) {
+                    qInfo(appLog).noquote()
+                        << QStringLiteral("[TfminiPlus] state=")
+                        << static_cast<int>(state)
+                        << description;
+                });
+            QObject::connect(
+                tfminiPlusService_.get(),
+                &scan_tracking::tfmini_plus::TfminiPlusService::openFinished,
+                [](bool success, const QString& errorMessage) {
+                    if (!success && !errorMessage.isEmpty()) {
+                        qWarning(appLog).noquote()
+                            << QStringLiteral("[TfminiPlus] Open failed:")
+                            << errorMessage;
+                    }
+                });
+            QObject::connect(
+                tfminiPlusService_.get(),
+                &scan_tracking::tfmini_plus::TfminiPlusService::distanceUpdated,
+                [](int distanceCm, int strength) {
+                    qInfo(appLog).noquote()
+                        << QStringLiteral("[TfminiPlus] distance=%1 cm strength=%2")
+                               .arg(distanceCm)
+                               .arg(strength);
+                });
+            tfminiPlusService_->start();
+            qInfo(appLog) << QStringLiteral("[TfminiPlus] service started.");
         }
     }
 
@@ -687,6 +733,9 @@ void ConsoleRuntime::printShutdownStatus()
     }
     if (livoxMid360Service_) {
         livoxMid360Service_->stop();
+    }
+    if (tfminiPlusService_) {
+        tfminiPlusService_->stop();
     }
     if (mechEyeService_) {
         mechEyeService_->stop();

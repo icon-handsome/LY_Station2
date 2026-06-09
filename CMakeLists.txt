@@ -68,8 +68,8 @@ option(SCAN_TRACKING_ENABLE_THICKNESS_MEASUREMENT "Build thickness measurement a
 option(SCAN_TRACKING_ENABLE_LB_POSE_DETECTION "Build the legacy LB pose detection module" ON)
 option(SCAN_TRACKING_ENABLE_LBN_POSE_DETECTION "Build the LBN Mech-Eye pose detection library" ON)
 
-find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core Gui Network)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Network)
+find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core Gui Network SerialPort)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Network SerialPort)
 
 if(SCAN_TRACKING_STRICT_TOOLCHAIN AND WIN32)
     if(NOT QT_VERSION_MAJOR EQUAL 5 OR NOT Qt5Core_VERSION VERSION_EQUAL 5.15.2)
