@@ -392,6 +392,8 @@ bool ConfigManager::hasActiveBevelRecipe() const
 }
 
 const OrbbecGeminiConfig& ConfigManager::orbbecGeminiConfig() const { return m_orbbecGeminiConfig; }
+const LivoxMid360Config& ConfigManager::livoxMid360Config() const { return m_livoxMid360Config; }
+QString ConfigManager::configFilePath() const { return m_configFilePath; }
 const HmiConfig& ConfigManager::hmiConfig() const { return m_hmiConfig; }
 const LbPoseConfig& ConfigManager::lbPoseConfig() const { return m_lbPoseConfig; }
 const LbnPoseConfig& ConfigManager::lbnPoseConfig() const { return m_lbnPoseConfig; }
@@ -533,6 +535,16 @@ void ConfigManager::writeDefaults(QSettings& settings)
     settings.setValue("orbbecGeminiDeviceIndex", 0);
     settings.endGroup();
 
+    settings.beginGroup("LivoxMid360");
+    settings.setValue("livoxMid360Enabled", false);
+    settings.setValue(
+        "livoxMid360SdkRoot",
+        QStringLiteral("third_party/Livox-SDK2"));
+    settings.setValue("livoxMid360ConfigFile", QStringLiteral("bin/mid360_config.json"));
+    settings.setValue("livoxMid360Serial", QStringLiteral("47MCNCN0035510"));
+    settings.setValue("livoxMid360DiscoveryTimeoutMs", 10000);
+    settings.endGroup();
+
     settings.beginGroup("Hmi");
     settings.setValue("enabled", true);
     settings.setValue("tcpPort", 9900);
@@ -583,6 +595,7 @@ void ConfigManager::load(const QString& filePath)
 {
     const QFileInfo fileInfo(filePath);
     const bool fileExists = fileInfo.exists() && fileInfo.size() > 0;
+    m_configFilePath = QDir::cleanPath(filePath);
 
     QSettings settings(filePath, QSettings::IniFormat);
     if (!fileExists) {
@@ -797,6 +810,19 @@ void ConfigManager::load(const QString& filePath)
         QStringLiteral("C:/Program Files/OrbbecSDK 2.8.6")).toString();
     m_orbbecGeminiConfig.serial = settings.value("orbbecGeminiSerial", QString()).toString();
     m_orbbecGeminiConfig.deviceIndex = settings.value("orbbecGeminiDeviceIndex", 0).toInt();
+    settings.endGroup();
+
+    settings.beginGroup("LivoxMid360");
+    m_livoxMid360Config.enabled = settings.value("livoxMid360Enabled", false).toBool();
+    m_livoxMid360Config.sdkRoot = settings.value(
+        "livoxMid360SdkRoot",
+        QStringLiteral("third_party/Livox-SDK2")).toString();
+    m_livoxMid360Config.configFile = settings.value(
+        "livoxMid360ConfigFile",
+        QStringLiteral("bin/mid360_config.json")).toString();
+    m_livoxMid360Config.serial = settings.value("livoxMid360Serial", QString()).toString();
+    m_livoxMid360Config.discoveryTimeoutMs =
+        settings.value("livoxMid360DiscoveryTimeoutMs", 10000).toInt();
     settings.endGroup();
 
     settings.beginGroup("Hmi");

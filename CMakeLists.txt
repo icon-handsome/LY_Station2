@@ -58,6 +58,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(ProjectOptions)
 include(MechEyeSdk)
 include(OrbbecSdk)
+include(LivoxSdk2)
 include(HikMvsSdk)
 include(PclRuntime)
 

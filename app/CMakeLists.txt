@@ -19,6 +19,7 @@ target_link_libraries(scan_tracking
         Qt5::Gui
         scan_tracking_mech_eye
         scan_tracking_orbbec_gemini
+        scan_tracking_livox_mid360
         scan_tracking_vision
         scan_tracking_tracking
         scan_tracking_modbus
@@ -46,6 +47,7 @@ endif()
 
 scan_tracking_deploy_mech_eye_runtime(scan_tracking)
 scan_tracking_deploy_orbbec_runtime(scan_tracking)
+scan_tracking_deploy_livox_runtime(scan_tracking)
 scan_tracking_deploy_hik_mvs_runtime(scan_tracking)
 scan_tracking_deploy_pcl_runtime(scan_tracking)
 scan_tracking_deploy_opencv_runtime(scan_tracking)

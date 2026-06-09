@@ -166,6 +166,16 @@ struct OrbbecGeminiConfig {
     int deviceIndex = 0;
 };
 
+struct LivoxMid360Config {
+    bool enabled = false;
+    QString sdkRoot;
+    /// Livox SDK2 JSON 配置，相对 sdkRoot 或绝对路径
+    QString configFile;
+    /// 空则连接第一台已发现设备
+    QString serial;
+    int discoveryTimeoutMs = 10000;
+};
+
 struct HmiConfig {
     bool enabled = true;       ///< 是否启动 HMI TCP 服务端
     quint16 tcpPort = 9900;    ///< 监听端口
@@ -297,6 +307,8 @@ public:
     int innerScanSegmentIndexForPath(int pathId) const;
     int outerScanSegmentIndexForPath(int pathId) const;
     const OrbbecGeminiConfig& orbbecGeminiConfig() const;
+    const LivoxMid360Config& livoxMid360Config() const;
+    QString configFilePath() const;
     const HmiConfig& hmiConfig() const;
     const LbPoseConfig& lbPoseConfig() const;
     const LbnPoseConfig& lbnPoseConfig() const;
@@ -337,6 +349,8 @@ CameraConfig m_cameraConfig;
     BevelRecipe m_runtimeBevelRecipe;
     bool m_runtimeRecipeSet = false;
     OrbbecGeminiConfig m_orbbecGeminiConfig;
+    LivoxMid360Config m_livoxMid360Config;
+    QString m_configFilePath;
     HmiConfig m_hmiConfig;
     LbPoseConfig m_lbPoseConfig;
     LbnPoseConfig m_lbnPoseConfig;

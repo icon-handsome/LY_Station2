@@ -28,6 +28,7 @@
 #include "scan_tracking/mech_eye/mech_eye_service.h"
 #include "scan_tracking/mech_eye/mech_eye_types.h"
 #include "scan_tracking/orbbec_gemini/orbbec_gemini_service.h"
+#include "scan_tracking/livox_mid360/livox_mid360_service.h"
 #include "scan_tracking/modbus/modbus_service.h"
 #include "scan_tracking/tracking/tracking_service.h"
 #include "scan_tracking/vision/hik_cxp_camera_service.h"
@@ -200,6 +201,43 @@ void ConsoleRuntime::initModules()
                 });
             orbbecGeminiService_->start();
             qInfo(appLog) << QStringLiteral("[OrbbecGemini] service started.");
+        }
+
+        const auto& livoxConfig = configManager->livoxMid360Config();
+        if (!livoxConfig.enabled) {
+            qInfo(appLog) << QStringLiteral("[LivoxMid360] disabled (livoxMid360Enabled=false)");
+        } else {
+            livoxMid360Service_ = std::make_unique<scan_tracking::livox_mid360::LivoxMid360Service>();
+            QObject::connect(
+                livoxMid360Service_.get(),
+                &scan_tracking::livox_mid360::LivoxMid360Service::logMessage,
+                [](const QString& message) {
+                    qInfo(appLog).noquote() << message;
+                });
+            QObject::connect(
+                livoxMid360Service_.get(),
+                &scan_tracking::livox_mid360::LivoxMid360Service::stateChanged,
+                [](scan_tracking::livox_mid360::LivoxMid360RuntimeState state,
+                   const QString& description) {
+                    qInfo(appLog).noquote()
+                        << QStringLiteral("[LivoxMid360] state=")
+                        << static_cast<int>(state)
+                        << description;
+                });
+            QObject::connect(
+                livoxMid360Service_.get(),
+                &scan_tracking::livox_mid360::LivoxMid360Service::openFinished,
+                [](bool success,
+                   scan_tracking::livox_mid360::LivoxMid360DeviceSummary,
+                   const QString& errorMessage) {
+                    if (!success && !errorMessage.isEmpty()) {
+                        qWarning(appLog).noquote()
+                            << QStringLiteral("[LivoxMid360] Open failed:")
+                            << errorMessage;
+                    }
+                });
+            livoxMid360Service_->start();
+            qInfo(appLog) << QStringLiteral("[LivoxMid360] service started.");
         }
     }
 
@@ -646,6 +684,9 @@ void ConsoleRuntime::printShutdownStatus()
     }
     if (orbbecGeminiService_) {
         orbbecGeminiService_->stop();
+    }
+    if (livoxMid360Service_) {
+        livoxMid360Service_->stop();
     }
     if (mechEyeService_) {
         mechEyeService_->stop();
