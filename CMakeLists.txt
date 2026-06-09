@@ -57,6 +57,7 @@ endif()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(ProjectOptions)
 include(MechEyeSdk)
+include(OrbbecSdk)
 include(HikMvsSdk)
 include(PclRuntime)
 

@@ -391,6 +391,7 @@ bool ConfigManager::hasActiveBevelRecipe() const
     return bevelRecipe().active;
 }
 
+const OrbbecGeminiConfig& ConfigManager::orbbecGeminiConfig() const { return m_orbbecGeminiConfig; }
 const HmiConfig& ConfigManager::hmiConfig() const { return m_hmiConfig; }
 const LbPoseConfig& ConfigManager::lbPoseConfig() const { return m_lbPoseConfig; }
 const LbnPoseConfig& ConfigManager::lbnPoseConfig() const { return m_lbnPoseConfig; }
@@ -523,6 +524,13 @@ void ConfigManager::writeDefaults(QSettings& settings)
     settings.setValue("configPath", "hole/config/default.json");
     settings.setValue("icpRmsMaxMm", 5.0);
     settings.setValue("cylinderRmsMaxMm", 3.0);
+    settings.endGroup();
+
+    settings.beginGroup("OrbbecGemini");
+    settings.setValue("orbbecGeminiEnabled", false);
+    settings.setValue("orbbecGeminiSdkRoot", QStringLiteral("C:/Program Files/OrbbecSDK 2.8.6"));
+    settings.setValue("orbbecGeminiSerial", QString());
+    settings.setValue("orbbecGeminiDeviceIndex", 0);
     settings.endGroup();
 
     settings.beginGroup("Hmi");
@@ -782,8 +790,16 @@ void ConfigManager::load(const QString& filePath)
     m_thicknessConfig.icpFitnessMax = settings.value("icpFitnessMax", 50.0).toDouble();
     settings.endGroup();
 
+    settings.beginGroup("OrbbecGemini");
+    m_orbbecGeminiConfig.enabled = settings.value("orbbecGeminiEnabled", false).toBool();
+    m_orbbecGeminiConfig.sdkRoot = settings.value(
+        "orbbecGeminiSdkRoot",
+        QStringLiteral("C:/Program Files/OrbbecSDK 2.8.6")).toString();
+    m_orbbecGeminiConfig.serial = settings.value("orbbecGeminiSerial", QString()).toString();
+    m_orbbecGeminiConfig.deviceIndex = settings.value("orbbecGeminiDeviceIndex", 0).toInt();
+    settings.endGroup();
+
     settings.beginGroup("Hmi");
-    m_hmiConfig.enabled = settings.value("enabled", true).toBool();
     {
         const int port = settings.value("tcpPort", 9900).toInt();
         m_hmiConfig.tcpPort = static_cast<quint16>(

@@ -159,6 +159,13 @@ InspectionType inspectionTypeFromString(const QString& value);
 QString inspectionTypeToString(InspectionType type);
 
 /// HMI 显控 TCP 服务配置（[Hmi]）
+struct OrbbecGeminiConfig {
+    bool enabled = false;
+    QString sdkRoot;
+    QString serial;
+    int deviceIndex = 0;
+};
+
 struct HmiConfig {
     bool enabled = true;       ///< 是否启动 HMI TCP 服务端
     quint16 tcpPort = 9900;    ///< 监听端口
@@ -289,6 +296,7 @@ public:
     QString thicknessConfigPathForPath(int pathId) const;
     int innerScanSegmentIndexForPath(int pathId) const;
     int outerScanSegmentIndexForPath(int pathId) const;
+    const OrbbecGeminiConfig& orbbecGeminiConfig() const;
     const HmiConfig& hmiConfig() const;
     const LbPoseConfig& lbPoseConfig() const;
     const LbnPoseConfig& lbnPoseConfig() const;
@@ -328,6 +336,7 @@ CameraConfig m_cameraConfig;
     mutable std::mutex m_bevelRecipeMutex;
     BevelRecipe m_runtimeBevelRecipe;
     bool m_runtimeRecipeSet = false;
+    OrbbecGeminiConfig m_orbbecGeminiConfig;
     HmiConfig m_hmiConfig;
     LbPoseConfig m_lbPoseConfig;
     LbnPoseConfig m_lbnPoseConfig;

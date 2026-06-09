@@ -1,4 +1,5 @@
 add_subdirectory(mech_eye)
+add_subdirectory(orbbec_gemini)
 add_subdirectory(vision)
 add_subdirectory(tracking)
 add_subdirectory(modbus)

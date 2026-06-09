@@ -1,0 +1,141 @@
+#include "scan_tracking/orbbec_gemini/orbbec_gemini_service.h"
+
+#include <QtCore/QLoggingCategory>
+#include <QtCore/QThread>
+
+#include "scan_tracking/common/config_manager.h"
+#include "scan_tracking/orbbec_gemini/orbbec_gemini_worker.h"
+
+Q_LOGGING_CATEGORY(LOG_ORBBEC_GEMINI_SVC, "orbbec.gemini.service")
+
+namespace scan_tracking {
+namespace orbbec_gemini {
+
+void OrbbecGeminiService::registerMetaTypes()
+{
+    static bool registered = false;
+    if (registered) {
+        return;
+    }
+
+    qRegisterMetaType<scan_tracking::orbbec_gemini::OrbbecGeminiRuntimeState>(
+        "scan_tracking::orbbec_gemini::OrbbecGeminiRuntimeState");
+    qRegisterMetaType<scan_tracking::orbbec_gemini::OrbbecGeminiOpenConfig>(
+        "scan_tracking::orbbec_gemini::OrbbecGeminiOpenConfig");
+    qRegisterMetaType<scan_tracking::orbbec_gemini::OrbbecGeminiDeviceSummary>(
+        "scan_tracking::orbbec_gemini::OrbbecGeminiDeviceSummary");
+    qRegisterMetaType<QVector<scan_tracking::orbbec_gemini::OrbbecGeminiDeviceSummary>>(
+        "QVector<scan_tracking::orbbec_gemini::OrbbecGeminiDeviceSummary>");
+    registered = true;
+}
+
+OrbbecGeminiService::OrbbecGeminiService(QObject* parent)
+    : QObject(parent)
+{
+}
+
+OrbbecGeminiService::~OrbbecGeminiService()
+{
+    stop();
+}
+
+void OrbbecGeminiService::start()
+{
+    if (m_started) {
+        return;
+    }
+
+    registerMetaTypes();
+
+    const auto* configManager = common::ConfigManager::instance();
+    if (configManager != nullptr) {
+        const auto& config = configManager->orbbecGeminiConfig();
+        m_openConfig.serial = config.serial;
+        m_openConfig.deviceIndex = config.deviceIndex;
+    }
+
+    m_workerThread = new QThread();
+    m_worker = new OrbbecGeminiWorker();
+    m_worker->moveToThread(m_workerThread);
+
+    connect(this, &OrbbecGeminiService::sig_startWorker,
+            m_worker, &OrbbecGeminiWorker::startWorker, Qt::QueuedConnection);
+    connect(this, &OrbbecGeminiService::sig_stopWorker,
+            m_worker, &OrbbecGeminiWorker::stopWorker, Qt::QueuedConnection);
+
+    connect(m_worker, &OrbbecGeminiWorker::enumerateFinished,
+            this, &OrbbecGeminiService::onWorkerEnumerateFinished, Qt::QueuedConnection);
+    connect(m_worker, &OrbbecGeminiWorker::openFinished,
+            this, &OrbbecGeminiService::onWorkerOpenFinished, Qt::QueuedConnection);
+    connect(m_worker, &OrbbecGeminiWorker::stateChanged,
+            this, &OrbbecGeminiService::onWorkerStateChanged, Qt::QueuedConnection);
+    connect(m_worker, &OrbbecGeminiWorker::logMessage,
+            this, &OrbbecGeminiService::onWorkerLogMessage, Qt::QueuedConnection);
+
+    m_workerThread->setObjectName(QStringLiteral("OrbbecGeminiWorkerThread"));
+    m_workerThread->start();
+
+    m_started = true;
+    m_stopping = false;
+    m_currentState = OrbbecGeminiRuntimeState::Idle;
+
+    emit sig_startWorker(m_openConfig);
+}
+
+void OrbbecGeminiService::stop()
+{
+    if (!m_started) {
+        return;
+    }
+
+    m_stopping = true;
+
+    if (m_worker != nullptr) {
+        emit sig_stopWorker();
+    }
+    if (m_workerThread != nullptr) {
+        m_workerThread->quit();
+        if (!m_workerThread->wait(10000)) {
+            qCritical(LOG_ORBBEC_GEMINI_SVC) << "[OrbbecGemini] Worker thread did not exit in time.";
+        }
+    }
+
+    delete m_worker;
+    m_worker = nullptr;
+    delete m_workerThread;
+    m_workerThread = nullptr;
+
+    m_started = false;
+    m_stopping = false;
+    m_currentState = OrbbecGeminiRuntimeState::Stopped;
+}
+
+void OrbbecGeminiService::onWorkerEnumerateFinished(
+    QVector<OrbbecGeminiDeviceSummary> devices)
+{
+    emit enumerateFinished(std::move(devices));
+}
+
+void OrbbecGeminiService::onWorkerOpenFinished(
+    bool success,
+    OrbbecGeminiDeviceSummary deviceInfo,
+    QString errorMessage)
+{
+    emit openFinished(success, deviceInfo, errorMessage);
+}
+
+void OrbbecGeminiService::onWorkerStateChanged(
+    OrbbecGeminiRuntimeState newState,
+    QString description)
+{
+    m_currentState = newState;
+    emit stateChanged(newState, description);
+}
+
+void OrbbecGeminiService::onWorkerLogMessage(QString message)
+{
+    emit logMessage(std::move(message));
+}
+
+}  // namespace orbbec_gemini
+}  // namespace scan_tracking

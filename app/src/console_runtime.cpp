@@ -27,6 +27,7 @@
 #include "scan_tracking/flow_control/state_machine.h"
 #include "scan_tracking/mech_eye/mech_eye_service.h"
 #include "scan_tracking/mech_eye/mech_eye_types.h"
+#include "scan_tracking/orbbec_gemini/orbbec_gemini_service.h"
 #include "scan_tracking/modbus/modbus_service.h"
 #include "scan_tracking/tracking/tracking_service.h"
 #include "scan_tracking/vision/hik_cxp_camera_service.h"
@@ -124,7 +125,8 @@ void ConsoleRuntime::initModules()
         return;
     }
     // MechEye 服务先启动，保证后续状态机和视觉集成层都能复用同一份点云采集入口。
-    if (const auto* configManager = scan_tracking::common::ConfigManager::instance()) {
+    const auto* configManager = scan_tracking::common::ConfigManager::instance();
+    if (configManager != nullptr) {
         const auto& profile = configManager->stationProfile();
         qInfo(appLog).noquote()
             << QStringLiteral("[Station] stationId=") << scan_tracking::common::stationIdToInt(profile.stationId)
@@ -162,7 +164,45 @@ void ConsoleRuntime::initModules()
     mechEyeService_->start();
     qInfo(appLog) << QStringLiteral("梅卡相机服务已启动。");
 
-    const auto* configManager = scan_tracking::common::ConfigManager::instance();
+    if (configManager != nullptr) {
+        const auto& orbbecConfig = configManager->orbbecGeminiConfig();
+        if (!orbbecConfig.enabled) {
+            qInfo(appLog) << QStringLiteral("[OrbbecGemini] disabled (orbbecGeminiEnabled=false)");
+        } else {
+            orbbecGeminiService_ = std::make_unique<scan_tracking::orbbec_gemini::OrbbecGeminiService>();
+            QObject::connect(
+                orbbecGeminiService_.get(),
+                &scan_tracking::orbbec_gemini::OrbbecGeminiService::logMessage,
+                [](const QString& message) {
+                    qInfo(appLog).noquote() << message;
+                });
+            QObject::connect(
+                orbbecGeminiService_.get(),
+                &scan_tracking::orbbec_gemini::OrbbecGeminiService::stateChanged,
+                [](scan_tracking::orbbec_gemini::OrbbecGeminiRuntimeState state,
+                   const QString& description) {
+                    qInfo(appLog).noquote()
+                        << QStringLiteral("[OrbbecGemini] state=")
+                        << static_cast<int>(state)
+                        << description;
+                });
+            QObject::connect(
+                orbbecGeminiService_.get(),
+                &scan_tracking::orbbec_gemini::OrbbecGeminiService::openFinished,
+                [](bool success,
+                   scan_tracking::orbbec_gemini::OrbbecGeminiDeviceSummary,
+                   const QString& errorMessage) {
+                    if (!success && !errorMessage.isEmpty()) {
+                        qWarning(appLog).noquote()
+                            << QStringLiteral("[OrbbecGemini] Open failed:")
+                            << errorMessage;
+                    }
+                });
+            orbbecGeminiService_->start();
+            qInfo(appLog) << QStringLiteral("[OrbbecGemini] service started.");
+        }
+    }
+
     const auto visionConfig = configManager != nullptr
         ? configManager->visionConfig()
         : scan_tracking::common::VisionConfig{};
@@ -603,6 +643,9 @@ void ConsoleRuntime::printShutdownStatus()
     }
     if (hikCxpCameraBService_) {
         hikCxpCameraBService_->stop();
+    }
+    if (orbbecGeminiService_) {
+        orbbecGeminiService_->stop();
     }
     if (mechEyeService_) {
         mechEyeService_->stop();
