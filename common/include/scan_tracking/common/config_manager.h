@@ -181,7 +181,6 @@ struct TfminiPlusConfig {
     QString portName;
     int baudRate = 115200;
     int collisionThresholdMm = 0;
-    bool printRawData = true;
 };
 
 struct HmiConfig {

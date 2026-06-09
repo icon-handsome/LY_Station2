@@ -276,11 +276,8 @@ void ConsoleRuntime::initModules()
             QObject::connect(
                 tfminiPlusService_.get(),
                 &scan_tracking::tfmini_plus::TfminiPlusService::distanceUpdated,
-                [](int distanceCm, int strength) {
-                    qInfo(appLog).noquote()
-                        << QStringLiteral("[TfminiPlus] distance=%1 cm strength=%2")
-                               .arg(distanceCm)
-                               .arg(strength);
+                [](int, int) {
+                    // TODO: 后续接入危险距离、距离过远、变化阈值等过滤策略后，再按条件打印/告警。
                 });
             tfminiPlusService_->start();
             qInfo(appLog) << QStringLiteral("[TfminiPlus] service started.");

@@ -17,7 +17,6 @@ enum class TfminiPlusRuntimeState {
 struct TfminiPlusOpenConfig {
     QString portName;
     int baudRate = 115200;
-    bool printRawData = true;
 };
 
 }  // namespace tfmini_plus

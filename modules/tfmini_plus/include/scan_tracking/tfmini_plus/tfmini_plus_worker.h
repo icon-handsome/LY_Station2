@@ -42,7 +42,6 @@ private:
 
     QSerialPort* m_serialPort = nullptr;
     QByteArray m_buffer;
-    TfminiPlusOpenConfig m_openConfig;
 };
 
 }  // namespace tfmini_plus

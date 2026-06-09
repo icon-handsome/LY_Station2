@@ -48,7 +48,6 @@ void TfminiPlusService::start()
         const auto& config = configManager->tfminiPlusConfig();
         m_openConfig.portName = config.portName;
         m_openConfig.baudRate = config.baudRate;
-        m_openConfig.printRawData = config.printRawData;
     }
 
     m_workerThread = new QThread();

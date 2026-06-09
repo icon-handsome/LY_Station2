@@ -551,7 +551,6 @@ void ConfigManager::writeDefaults(QSettings& settings)
     settings.setValue("tfminiPlusPort", QString());
     settings.setValue("tfminiPlusBaudRate", 115200);
     settings.setValue("collisionThresholdMm", 0);
-    settings.setValue("tfminiPlusPrintRawData", true);
     settings.endGroup();
 
     settings.beginGroup("Hmi");
@@ -840,8 +839,6 @@ void ConfigManager::load(const QString& filePath)
     m_tfminiPlusConfig.baudRate = settings.value("tfminiPlusBaudRate", 115200).toInt();
     m_tfminiPlusConfig.collisionThresholdMm =
         settings.value("collisionThresholdMm", 0).toInt();
-    m_tfminiPlusConfig.printRawData =
-        settings.value("tfminiPlusPrintRawData", true).toBool();
     settings.endGroup();
 
     settings.beginGroup("Hmi");

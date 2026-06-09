@@ -15,11 +15,6 @@ QString logPrefix()
     return QStringLiteral("[TfminiPlus]");
 }
 
-QString bytesToHexLine(const QByteArray& data)
-{
-    return QString::fromLatin1(data.toHex(' ')).toUpper();
-}
-
 int byteAt(const QByteArray& data, int index)
 {
     return static_cast<unsigned char>(data.at(index));
@@ -50,7 +45,6 @@ void TfminiPlusWorker::startWorker(const TfminiPlusOpenConfig& config)
 {
     stopWorker();
 
-    m_openConfig = config;
     m_buffer.clear();
 
     const QString portName = config.portName.trimmed();
@@ -118,10 +112,6 @@ void TfminiPlusWorker::onReadyRead()
         return;
     }
 
-    if (m_openConfig.printRawData) {
-        emit logMessage(QStringLiteral("%1 raw=%2").arg(logPrefix(), bytesToHexLine(data)));
-    }
-
     m_buffer.append(data);
     parseBuffer();
 }
@@ -169,8 +159,6 @@ void TfminiPlusWorker::parseBuffer()
 
         const QByteArray frame = m_buffer.left(kFrameSize);
         if (!hasValidChecksum(frame)) {
-            emit logMessage(QStringLiteral("%1 checksum failed frame=%2")
-                                .arg(logPrefix(), bytesToHexLine(frame)));
             m_buffer.remove(0, 1);
             continue;
         }
