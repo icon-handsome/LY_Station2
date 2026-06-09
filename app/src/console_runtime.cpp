@@ -124,6 +124,25 @@ void ConsoleRuntime::initModules()
         return;
     }
     // MechEye 服务先启动，保证后续状态机和视觉集成层都能复用同一份点云采集入口。
+    if (const auto* configManager = scan_tracking::common::ConfigManager::instance()) {
+        const auto& profile = configManager->stationProfile();
+        qInfo(appLog).noquote()
+            << QStringLiteral("[Station] stationId=") << scan_tracking::common::stationIdToInt(profile.stationId)
+            << QStringLiteral(" name=") << profile.stationName
+            << QStringLiteral(" scanPaths=") << (profile.scanPathsConfigPath.isEmpty()
+                                                    ? QStringLiteral("<fallback scan_paths_config.json>")
+                                                    : profile.scanPathsConfigPath)
+            << QStringLiteral(" workMode=") << scan_tracking::common::workModeIdToString(profile.defaultWorkMode);
+        qInfo(appLog).noquote()
+            << QStringLiteral("[Station] enableLoadGrasp=") << profile.enableLoadGrasp
+            << QStringLiteral(" enableUnloadCalc=") << profile.enableUnloadCalc
+            << QStringLiteral(" enablePoseCheck=") << profile.enablePoseCheck
+            << QStringLiteral(" enableTelescopicScan=") << profile.enableTelescopicScan
+            << QStringLiteral(" enableHoistAssist=") << profile.enableHoistAssist
+            << QStringLiteral(" enableCollisionMonitor=") << profile.enableCollisionMonitor
+            << QStringLiteral(" (reserved, not enforced in stage1)");
+    }
+
     mechEyeService_ = std::make_unique<scan_tracking::mech_eye::MechEyeService>();
 
     QObject::connect(

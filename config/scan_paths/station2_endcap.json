@@ -1,8 +1,8 @@
 {
   "version": "1.0",
-  "description": "封头检测多路径扫描配置文件",
+  "description": "第二工位-封头模式扫描路径占位配置（stage1，基于第一工位复制）",
   "lastModified": "2026-05-27",
-  "_deprecationNote": "推荐改用 config/scan_paths/station1_default.json；本文件保留用于向后兼容。",
+  "_stage1Note": "第二工位业务未启用；本文件仅用于验证 StationProfile 扫描路径切换。",
   "_fieldTestNote": "单路径联调：段1转盘扫→段2-6封头5点→段7转盘扫→段8-12封头5点；PLC Trig_ScanSegment 段号 1..12 后 Trig_Inspection",
 
   "calibrationMatrix": {

@@ -45,6 +45,11 @@
 | `[Vision]` | `hikCxpEnabled` | 必须为 `true`；主流程 CXP 双目 A/B 开关 |
 | `[Vision]` | `hikCxpCameraA/BKey` | CXP 左/右目匹配键（序列号，非 IP） |
 | `[Vision]` | `hikCxpExposureTimeUs` / `hikCxpGain` | CXP 曝光/增益 |
+| `[Station]` | `stationId` | 工位编号，`1`=第一工位封头（默认），`2`=第二工位多模式骨架 |
+| `[Station]` | `stationName` | HMI 与日志展示用工位名称 |
+| `[Station]` | `scanPathsConfigPath` | 当前工位扫描路径 JSON；为空时回退根目录 `scan_paths_config.json` |
+| `[Station]` | `defaultWorkMode` | 工位默认模式：`MODE_END_CAP` / `MODE_CYLINDER_SEMI` / `MODE_SEMI_FINISHED` |
+| `[Station]` | `profileIni` | 可选工位 profile；存在时覆盖 `[Station]` 同名字段 |
 | `[LbPose]` | `leftIntrinsic3x3` 等 | LB 双目标定矩阵与 2D 重建参数 |
 | `[LbnPose]` | `useIdentityRtWithoutMarkers` | 转盘无标记联调时 `true`，Rt 用单位阵 |
 | `[Tracking]` | `scanSegmentTotal` | PLC 扫描总段数（上限 16，现场可设 10） |
@@ -52,6 +57,16 @@
 | `[Hmi]` | `tcpPort` / `allowDebugTriggerInspection` | 显控 TCP 与调试检测开关 |
 
 数据流与联调说明见 [`docs/算法使用API.md`](docs/算法使用API.md) §10.1 与 [`docs/多点位扫描与位姿跟踪完整流程.md`](docs/多点位扫描与位姿跟踪完整流程.md)。
+
+### 双工位配置切换
+
+本仓库采用同一套代码支持工位切换，入口是 `config.ini` 的 `[Station]` 段。默认 `stationId=1`，缺省或未配置 `[Station]` 时仍按第一工位行为运行，并保留根目录 `scan_paths_config.json` 作为兼容回退。
+
+第一工位使用 `profileIni=config/station_profiles/station1_endcap.ini` 与 `scanPathsConfigPath=config/scan_paths/station1_default.json`。第二工位骨架可切换到 `config/station_profiles/station2_endcap.ini`、`station2_cylinder_semi.ini` 或 `station2_semi_finished.ini`；本阶段仅解析和日志透出 `enable*` 开关，不改变模块创建或 PLC 触发处理。
+
+### FlowControl Handler 架构
+
+PLC 触发任务由 `modules/flow_control/include/scan_tracking/flow_control/handlers` 与 `src/handlers` 下的 Handler 分发，`StateMachine` 保留共享状态、握手和异步回调。`enableLoadGrasp`、`enableUnloadCalc`、`enablePoseCheck` 已生效；在第二工位 profile 下误触发 `Trig_LoadGrasp`、`Trig_UnloadCalc`、`Trig_PoseCheck` 会立即拒绝并写 `Res=8`。`Res=8` 表示当前工位 profile 未启用该触发器。
 
 ## 开发文档
 

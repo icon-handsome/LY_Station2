@@ -8,6 +8,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLoggingCategory>
+#include <QStringList>
 
 #include "scan_tracking/common/logger.h"
 
@@ -35,15 +36,44 @@ QString projectRootConfigPath()
     return exeDirConfig;
 }
 
+QString resolveConfigRelativePath(const QString& rawPath, const QString& configFilePath)
+{
+    const QString trimmed = rawPath.trimmed();
+    if (trimmed.isEmpty()) {
+        return QString();
+    }
+
+    const QFileInfo pathInfo(trimmed);
+    if (pathInfo.isAbsolute()) {
+        return QDir::cleanPath(trimmed);
+    }
+
+    const QString configDirPath = QFileInfo(configFilePath).absoluteDir().filePath(trimmed);
+    if (QFileInfo::exists(configDirPath)) {
+        return QDir::cleanPath(configDirPath);
+    }
+
+    const QString exeDirPath = QDir(QCoreApplication::applicationDirPath()).filePath(trimmed);
+    if (QFileInfo::exists(exeDirPath)) {
+        return QDir::cleanPath(exeDirPath);
+    }
+
+    return QDir::cleanPath(configDirPath);
+}
+
 /**
  * @brief 获取扫描路径配置文件的路径
  * 
- * 优先查找项目根目录，如果找不到则使用可执行文件目录。
+ * Stage 1: 工位 profile 显式配置优先；未配置时保持旧 scan_paths_config.json fallback。
  * 
  * @return 扫描路径配置文件的完整路径
  */
-QString scanPathsConfigPath()
+QString scanPathsConfigPath(const StationProfile& stationProfile, const QString& configFilePath)
 {
+    if (!stationProfile.scanPathsConfigPath.trimmed().isEmpty()) {
+        return resolveConfigRelativePath(stationProfile.scanPathsConfigPath, configFilePath);
+    }
+
     const QString exeDirPath =
         QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("scan_paths_config.json"));
     if (QFileInfo::exists(exeDirPath)) {
@@ -59,6 +89,53 @@ QString scanPathsConfigPath()
     }
 
     return exeDirPath;
+}
+
+void applyStationSettings(QSettings& settings, StationProfile& profile, QString* profileIni)
+{
+    if (settings.contains(QStringLiteral("stationId"))) {
+        profile.stationId = stationIdFromInt(settings.value(QStringLiteral("stationId"), 1).toInt());
+    }
+    if (settings.contains(QStringLiteral("stationName"))) {
+        profile.stationName = settings.value(QStringLiteral("stationName"), profile.stationName).toString();
+    }
+    if (settings.contains(QStringLiteral("scanPathsConfigPath"))) {
+        profile.scanPathsConfigPath =
+            settings.value(QStringLiteral("scanPathsConfigPath"), profile.scanPathsConfigPath).toString().trimmed();
+    }
+    if (settings.contains(QStringLiteral("defaultWorkMode"))) {
+        bool ok = false;
+        const QString raw = settings.value(QStringLiteral("defaultWorkMode")).toString();
+        profile.defaultWorkMode = workModeIdFromString(raw, &ok);
+        if (!ok) {
+            qWarning(LOG_CONFIG).noquote()
+                << QStringLiteral("[Station] 未知 defaultWorkMode=") << raw
+                << QStringLiteral("，已回退 Unknown");
+        }
+    }
+    if (settings.contains(QStringLiteral("enableLoadGrasp"))) {
+        profile.enableLoadGrasp = settings.value(QStringLiteral("enableLoadGrasp"), profile.enableLoadGrasp).toBool();
+    }
+    if (settings.contains(QStringLiteral("enableUnloadCalc"))) {
+        profile.enableUnloadCalc = settings.value(QStringLiteral("enableUnloadCalc"), profile.enableUnloadCalc).toBool();
+    }
+    if (settings.contains(QStringLiteral("enablePoseCheck"))) {
+        profile.enablePoseCheck = settings.value(QStringLiteral("enablePoseCheck"), profile.enablePoseCheck).toBool();
+    }
+    if (settings.contains(QStringLiteral("enableTelescopicScan"))) {
+        profile.enableTelescopicScan =
+            settings.value(QStringLiteral("enableTelescopicScan"), profile.enableTelescopicScan).toBool();
+    }
+    if (settings.contains(QStringLiteral("enableHoistAssist"))) {
+        profile.enableHoistAssist = settings.value(QStringLiteral("enableHoistAssist"), profile.enableHoistAssist).toBool();
+    }
+    if (settings.contains(QStringLiteral("enableCollisionMonitor"))) {
+        profile.enableCollisionMonitor =
+            settings.value(QStringLiteral("enableCollisionMonitor"), profile.enableCollisionMonitor).toBool();
+    }
+    if (profileIni != nullptr && settings.contains(QStringLiteral("profileIni"))) {
+        *profileIni = settings.value(QStringLiteral("profileIni")).toString().trimmed();
+    }
 }
 
 constexpr const char* kLbDefaultLeftIntrinsic3x3 =
@@ -163,7 +240,7 @@ ConfigManager::ConfigManager()
     load(configPath);
     
     // 加载扫描路径配置
-    const QString scanPathsPath = scanPathsConfigPath();
+    const QString scanPathsPath = scanPathsConfigPath(m_stationProfile, configPath);
     loadScanPathsConfig(scanPathsPath);
 }
 
@@ -322,6 +399,7 @@ const PointCloudProcessingConfig& ConfigManager::pointCloudProcessingConfig() co
     return m_pointCloudProcessingConfig;
 }
 const ScanPathsConfig& ConfigManager::scanPathsConfig() const { return m_scanPathsConfig; }
+const StationProfile& ConfigManager::stationProfile() const { return m_stationProfile; }
 
 void ConfigManager::writeDefaults(QSettings& settings)
 {
@@ -346,6 +424,14 @@ void ConfigManager::writeDefaults(QSettings& settings)
     settings.beginGroup("Camera");
     settings.setValue("defaultCamera", "Mech-Eye Nano");
     settings.setValue("scanTimeoutMs", 5000);
+    settings.endGroup();
+
+    settings.beginGroup("Station");
+    settings.setValue("stationId", 1);
+    settings.setValue("stationName", QStringLiteral("第一工位-封头"));
+    settings.setValue("scanPathsConfigPath", QStringLiteral("config/scan_paths/station1_default.json"));
+    settings.setValue("defaultWorkMode", QStringLiteral("MODE_END_CAP"));
+    settings.setValue("profileIni", QStringLiteral("config/station_profiles/station1_endcap.ini"));
     settings.endGroup();
 
     settings.beginGroup("Vision");
@@ -448,6 +534,43 @@ void ConfigManager::writeDefaults(QSettings& settings)
     qInfo(LOG_CONFIG) << "已在" << settings.fileName() << "生成默认 config.ini";
 }
 
+void ConfigManager::loadStationProfile(QSettings& settings, const QString& configFilePath)
+{
+    StationProfile profile;
+    QString profileIni;
+
+    settings.beginGroup(QStringLiteral("Station"));
+    applyStationSettings(settings, profile, &profileIni);
+    settings.endGroup();
+
+    // Stage 1 merge priority:
+    // 1. config.ini [Station] is the base.
+    // 2. profileIni, when present and existing, overrides same-name fields.
+    // 3. The merged StationProfile is read-only for this stage.
+    const QString resolvedProfileIni = resolveConfigRelativePath(profileIni, configFilePath);
+    if (!resolvedProfileIni.isEmpty() && QFileInfo::exists(resolvedProfileIni)) {
+        QSettings profileSettings(resolvedProfileIni, QSettings::IniFormat);
+        profileSettings.beginGroup(QStringLiteral("Station"));
+        applyStationSettings(profileSettings, profile, nullptr);
+        profileSettings.endGroup();
+        qInfo(LOG_CONFIG).noquote()
+            << QStringLiteral("[Station] 已合并 profileIni=") << resolvedProfileIni;
+    } else if (!profileIni.isEmpty()) {
+        qWarning(LOG_CONFIG).noquote()
+            << QStringLiteral("[Station] profileIni 不存在，忽略：")
+            << resolvedProfileIni;
+    }
+
+    m_stationProfile = profile;
+    qInfo(LOG_CONFIG).noquote()
+        << QStringLiteral("[Station] stationId=") << stationIdToInt(m_stationProfile.stationId)
+        << QStringLiteral(" name=") << m_stationProfile.stationName
+        << QStringLiteral(" scanPaths=") << (m_stationProfile.scanPathsConfigPath.isEmpty()
+                                                ? QStringLiteral("<fallback scan_paths_config.json>")
+                                                : m_stationProfile.scanPathsConfigPath)
+        << QStringLiteral(" workMode=") << workModeIdToString(m_stationProfile.defaultWorkMode);
+}
+
 void ConfigManager::load(const QString& filePath)
 {
     const QFileInfo fileInfo(filePath);
@@ -481,6 +604,8 @@ void ConfigManager::load(const QString& filePath)
     m_cameraConfig.defaultCamera = settings.value("defaultCamera", "Mech-Eye Nano").toString();
     m_cameraConfig.scanTimeoutMs = settings.value("scanTimeoutMs", 5000).toInt();
     settings.endGroup();
+
+    loadStationProfile(settings, filePath);
 
     settings.beginGroup("Vision");
     m_visionConfig.mechEyeCameraKey = settings.value("mechEyeCameraKey", m_cameraConfig.defaultCamera).toString();

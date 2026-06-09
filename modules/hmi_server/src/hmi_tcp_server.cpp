@@ -9,6 +9,7 @@
 
 #include "scan_tracking/flow_control/state_machine.h"
 #include "scan_tracking/flow_control/plc_protocol.h"
+#include "scan_tracking/flow_control/station_trigger_policy.h"
 #include "scan_tracking/modbus/modbus_service.h"
 #include "scan_tracking/mech_eye/mech_eye_service.h"
 #include "scan_tracking/vision/vision_pipeline_service.h"
@@ -1047,6 +1048,21 @@ QJsonObject HmiTcpServer::buildSystemStatusPayload() const
     payload[QLatin1String("warnCode")] = m_stateMachine->warnCode();
     payload[QLatin1String("ipcReady")] = (m_stateMachine->currentState() == flow_control::AppState::Ready) ? 1 : 0;
     payload[QLatin1String("progress")] = m_stateMachine->progress();
+    if (const auto* cfgMgr = scan_tracking::common::ConfigManager::instance()) {
+        const auto& profile = cfgMgr->stationProfile();
+        // stage1: station metadata extension
+        payload[QLatin1String("stationId")] = scan_tracking::common::stationIdToInt(profile.stationId);
+        payload[QLatin1String("stationName")] = profile.stationName;
+        payload[QLatin1String("workMode")] =
+            scan_tracking::common::workModeIdToString(profile.defaultWorkMode);
+        QJsonArray enabledTriggers;
+        for (const auto& trigger : scan_tracking::flow_control::protocol::triggerDefinitions()) {
+            if (scan_tracking::flow_control::isTriggerEnabledForProfile(profile, trigger.trigOffset)) {
+                enabledTriggers.append(QString::fromLatin1(trigger.name));
+            }
+        }
+        payload[QLatin1String("enabledTriggers")] = enabledTriggers;
+    }
     return payload;
 }
 
@@ -1060,6 +1076,14 @@ QJsonObject HmiTcpServer::buildPlcStatusPayload() const
 {
     QJsonObject payload;
     payload[QLatin1String("modbusConnected")] = m_modbusService && m_modbusService->isConnected();
+    if (const auto* cfgMgr = scan_tracking::common::ConfigManager::instance()) {
+        const auto& profile = cfgMgr->stationProfile();
+        // stage1: station metadata extension
+        payload[QLatin1String("stationId")] = scan_tracking::common::stationIdToInt(profile.stationId);
+        payload[QLatin1String("stationName")] = profile.stationName;
+        payload[QLatin1String("stationWorkMode")] =
+            scan_tracking::common::workModeIdToString(profile.defaultWorkMode);
+    }
     if (!m_modbusService) {
         return payload;
     }

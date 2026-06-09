@@ -2,6 +2,8 @@
 
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/common/logger.h"
+#include "scan_tracking/flow_control/station_trigger_policy.h"
+#include "scan_tracking/flow_control/task_handler_registry.h"
 #include "scan_tracking/mech_eye/mech_eye_service.h"
 #include "scan_tracking/mech_eye/point_cloud_io.h"
 #include "scan_tracking/mech_eye/point_cloud_processor.h"
@@ -534,12 +536,27 @@ StateMachine::StateMachine(
     , m_pollTimer(new QTimer(this))
     , m_heartbeatTimer(new QTimer(this))
     , m_timeoutTimer(new QTimer(this))
+    , m_handlerRegistry(std::make_unique<TaskHandlerRegistry>())
     , m_state(AppState::Init)
 {
     // 从配置管理器获取流程控制配置，如果配置不存在则使用默认值
     const auto* configMgr = common::ConfigManager::instance();
     const auto flowConfig = configMgr ? configMgr->flowControlConfig()
                                       : common::FlowControlConfig{100, 1000, 300, {}};
+    if (configMgr) {
+        const auto& profile = configMgr->stationProfile();
+        qInfo(LOG_FLOW).noquote()
+            << QStringLiteral("[Station] StateMachine stationId=")
+            << common::stationIdToInt(profile.stationId)
+            << QStringLiteral(" workMode=")
+            << common::workModeIdToString(profile.defaultWorkMode);
+        qInfo(LOG_FLOW).noquote()
+            << QStringLiteral("[Station] handlers=")
+            << m_handlerRegistry->handlerCount()
+            << QStringLiteral(" enabledTriggers=")
+            << m_handlerRegistry->enabledTriggerNames(profile).join(QLatin1Char(','))
+            << QStringLiteral(" (enableTelescopicScan/enableHoistAssist/enableCollisionMonitor stage3+)");
+    }
 
     // 配置定时器间隔
     m_pollTimer->setInterval(flowConfig.pollIntervalMs);      // PLC 轮询间隔
@@ -1072,6 +1089,14 @@ void StateMachine::processTrigger(const protocol::TriggerDefinition& trigger, co
         return;  // Modbus 未连接，无法处理触发
     }
 
+    if (const auto* configMgr = common::ConfigManager::instance()) {
+        const auto& profile = configMgr->stationProfile();
+        if (!isTriggerEnabledForProfile(profile, trigger.trigOffset)) {
+            rejectDisabledTrigger(trigger);
+            return;
+        }
+    }
+
     // 除了卸载计算和结果复位外，其他触发都需要 Flow_Enable=1 才能执行
     if (trigger.stage != protocol::Stage::UnloadCalc &&
         trigger.stage != protocol::Stage::ResultReset &&
@@ -1182,11 +1207,21 @@ void StateMachine::processTrigger(const protocol::TriggerDefinition& trigger, co
     executeActiveTask();
 }
 
+void StateMachine::rejectDisabledTrigger(const protocol::TriggerDefinition& trigger)
+{
+    qWarning(LOG_FLOW).noquote()
+        << QStringLiteral("[Station] 触发器")
+        << protocol::triggerName(trigger)
+        << QStringLiteral("在当前 profile 未启用，已拒绝，Res=8");
+    sendAck(trigger, protocol::AckState::Running);
+    sendRes(trigger, 8);
+    sendAck(trigger, protocol::AckState::Failed);
+}
+
 /**
  * @brief 执行当前活动任务
  * 
- * 根据触发定义的 trigOffset 分发到具体的任务执行函数。
- * 每个 trigOffset 对应一个特定的 PLC 触发信号。
+ * 根据触发定义的 trigOffset 分发到已注册的 Handler。
  */
 void StateMachine::executeActiveTask()
 {
@@ -1194,35 +1229,10 @@ void StateMachine::executeActiveTask()
         return;  // 没有活动任务，直接返回
     }
 
-    switch (m_activeTask.definition->trigOffset) {
-    case 20:  // Trig_LoadGrasp @40020
-        executeLoadGraspTask();
-        return;
-    case 21:  // Trig_StationMaterialCheck @40021
-        executeStationMaterialCheckTask();
-        return;
-    case 22:  // Trig_PoseCheck @40022
-        executePoseCheckTask();
-        return;
-    case 23:  // Trig_ScanSegment @40023
-        executeScanSegmentTask();
-        return;
-    case 24:  // Trig_Inspection @40024
-        executeInspectionTask();
-        return;
-    case 25:  // Trig_UnloadCalc @40025
-        executeUnloadCalcTask();
-        return;
-    case 26:  // Trig_SelfCheck @40026
-        executeSelfCheckTask();
-        return;
-    case 27:  // Trig_CodeRead @40027
-        executeCodeReadTask();
-        return;
-    case 28:  // Trig_ResultReset @40028
-        executeResultResetTask();
-        return;
-    default:  // 未知触发类型，使用默认响应码完成任务
+    ITaskHandler* handler = m_handlerRegistry
+        ? m_handlerRegistry->handlerForOffset(m_activeTask.definition->trigOffset)
+        : nullptr;
+    if (handler == nullptr) {
         qWarning(LOG_FLOW).noquote()
             << QStringLiteral("拒绝不支持的触发")
             << protocol::triggerName(*m_activeTask.definition)
@@ -1231,161 +1241,9 @@ void StateMachine::executeActiveTask()
         completeActiveTask(9, protocol::AckState::Failed, false);
         return;
     }
-}
 
-/**
- * @brief 执行加载抓取任务（Trig_LoadGrasp）
- * 
- * 向 PLC 写入模拟的加载位姿数据，然后立即完成任务。
- * 这是一个占位实现，实际应用中可能需要调用视觉定位或机器人接口。
- */
-void StateMachine::executeLoadGraspTask()
-{
-    const auto poseSource = resolveLoadGraspPoseSource();
-    qInfo(LOG_FLOW).noquote()
-        << QStringLiteral("LoadGrasp 位姿来源：")
-        << poseSource.sourceName
-        << QStringLiteral(" 可用=") << poseSource.available
-        << QStringLiteral(" 成功=") << poseSource.success
-        << QStringLiteral(" 消息=") << poseSource.message;
-    writeLoadGraspResult();   // 写入加载位姿结果到 PLC 寄存器
-    const quint16 resultCode = poseSource.success ? 1 : 7;
-    completeActiveTask(resultCode, poseSource.success ? protocol::AckState::Completed
-                                                       : protocol::AckState::Failed,
-                       poseSource.success);
-    emit loadGraspFinished(resultCode, poseSource.x, poseSource.y, poseSource.z,
-                           poseSource.rx, poseSource.ry, poseSource.rz);
-}
-
-void StateMachine::executeStationMaterialCheckTask()
-{
-    const bool hasModbus = m_modbus != nullptr && m_modbus->isConnected();
-    const bool hasTracking = m_tracking != nullptr;
-    const bool hasMechEye = m_mechEye != nullptr;
-
-    if (!hasModbus || !hasTracking || !hasMechEye) {
-        qWarning(LOG_FLOW).noquote()
-            << QStringLiteral("工位检材不可用：")
-            << QStringLiteral(" modbus=") << hasModbus
-            << QStringLiteral(" tracking=") << hasTracking
-            << QStringLiteral(" mechEye=") << hasMechEye;
-        writeAsciiPlaceholder(protocol::registers::kSelfCheckFailWord0, 2, QStringLiteral("NO"));
-        completeActiveTask(5, protocol::AckState::Failed, false);
-        return;
-    }
-
-    writeAsciiPlaceholder(protocol::registers::kSelfCheckFailWord0, 2, QStringLiteral("OK"));
-    completeActiveTask(1, protocol::AckState::Completed, true);
-}
-
-/**
- * @brief 执行卸载计算任务（Trig_UnloadCalc）
- * 
- * 向 PLC 写入模拟的卸料位姿数据，然后立即完成任务。
- * 这是一个占位实现，实际应用中可能需要进行路径规划或碰撞检测。
- */
-void StateMachine::executeUnloadCalcTask()
-{
-    const auto poseSource = resolveUnloadCalcPoseSource();
-    qInfo(LOG_FLOW).noquote()
-        << QStringLiteral("UnloadCalc 位姿来源：")
-        << poseSource.sourceName
-        << QStringLiteral(" 可用=") << poseSource.available
-        << QStringLiteral(" 成功=") << poseSource.success
-        << QStringLiteral(" 消息=") << poseSource.message;
-    writeUnloadCalcResult();  // 写入卸料位姿结果到 PLC 寄存器
-    const quint16 resultCode = poseSource.success ? 1 : 7;
-    completeActiveTask(resultCode, poseSource.success ? protocol::AckState::Completed
-                                                       : protocol::AckState::Failed,
-                       poseSource.success);
-    emit unloadCalcFinished(resultCode, poseSource.x, poseSource.y, poseSource.z,
-                            poseSource.rx, poseSource.ry, poseSource.rz);
-}
-
-/**
- * @brief 执行扫描分段任务（Trig_ScanSegment）
- * 
- * 这是整个流程中最复杂的任务，负责控制 Mech-Eye 相机进行 3D 点云采集。
- * 包括参数验证、相机状态检查、异步采集请求发起等步骤。
- * 
- * 关键流程：
- * 1. 验证扫描分段请求的合法性（段号范围、重复检测）
- * 2. 检查相机是否就绪且空闲
- * 3. 发起异步采集请求
- * 4. 等待 onCaptureFinished 回调处理采集结果
- */
-void StateMachine::executeScanSegmentTask()
-{
-    // 优先走视觉编排层：梅卡点云 + 海康双目黑白图同时采集。
-    if (m_visionPipeline == nullptr) {
-        finishScanSegmentFailure(
-            5,                    // Res 码：5 = 设备未就绪
-            3,                    // 报警级别：3 = 严重错误
-            720,                  // 报警代码：720 = 视觉编排服务不可用
-            QStringLiteral("视觉流水线服务不可用"),
-            QStringLiteral("视觉流水线服务不可用"));
-        return;
-    }
-
-    // 验证扫描分段请求的参数合法性
-    QString validationError;
-    if (!validateScanSegmentRequest(m_lastCommandBlock, &validationError)) {
-        // 段号错误或重复触发会污染分段缓存，因此在拍照前就拒绝本次业务。
-        finishScanSegmentFailure(9, 2, 724, validationError, validationError);
-        return;
-    }
-
-    // 检查相机是否处于就绪状态且当前没有正在进行的采集
-    if (m_visionPipeline->state() != vision::VisionPipelineState::Ready || m_visionPipeline->isStarted() == false) {
-        finishScanSegmentFailure(
-            5,                    // Res 码：5 = 设备未就绪
-            2,                    // 报警级别：2 = 警告
-            721,                  // 报警代码：721 = 视觉编排忙或未就绪
-            QStringLiteral("视觉流水线忙或未就绪"),
-            QStringLiteral("视觉流水线忙或未就绪"));
-        return;
-    }
-
-    // 计算采集超时时间：优先使用任务指定的超时，否则使用默认值
-    const int captureTimeoutMs = m_activeTask.timeoutSeconds > 0
-        ? static_cast<int>(m_activeTask.timeoutSeconds) * 1000
-        : kDefaultScanSegmentCaptureTimeoutMs;
-
-    const int pathIdForCapture = resolvePathIdForIncomingSegment(m_activeTask.scanSegmentIndex);
-    const bool needMechEye2D = resolveNeedRotationForSegment(pathIdForCapture, m_activeTask.scanSegmentIndex);
-    qInfo(LOG_FLOW).noquote()
-        << QStringLiteral("[ScanSync] 触发") << QDateTime::currentMSecsSinceEpoch();
-    const auto mechCaptureMode = needMechEye2D
-        ? scan_tracking::mech_eye::CaptureMode::Capture2DAnd3D
-        : scan_tracking::mech_eye::CaptureMode::Capture3DOnly;
-    const quint64 requestId = m_visionPipeline->requestCaptureBundle(
-        m_activeTask.scanSegmentIndex,
-        m_activeTask.taskId,
-        mechCaptureMode);
-
-    if (requestId == 0) {
-        finishScanSegmentFailure(
-            5,                    // Res 码：5 = 设备未就绪
-            2,                    // 报警级别：2 = 警告
-            721,                  // 报警代码：721 = 视觉编排忙或未就绪
-            QStringLiteral("视觉流水线拒绝采集请求"),
-            QStringLiteral("视觉流水线忙或未就绪"));
-        return;
-    }
-
-    // 保存采集请求 ID，用于在回调中匹配响应
-    m_activeTask.captureRequestId = requestId;
-    m_progress = 30;              // 更新进度为 30%（采集中）
-    publishIpcStatus();           // 发布更新的 IPC 状态
-
-    qInfo(LOG_FLOW).noquote()
-        << QStringLiteral("Trig_ScanSegment 已启动组合采集")
-        << QStringLiteral(" 路径=") << pathIdForCapture
-        << QStringLiteral(" 段号=") << m_activeTask.scanSegmentIndex
-        << QStringLiteral(" 段总数=") << m_activeTask.scanSegmentTotal
-        << QStringLiteral(" 需梅卡2D=") << needMechEye2D
-        << QStringLiteral(" 超时ms=") << captureTimeoutMs;
-    emit scanStarted(m_activeTask.scanSegmentIndex, m_activeTask.taskId);
+    TaskHandlerContext ctx{*this, m_lastCommandBlock, m_activeTask};
+    handler->execute(ctx);
 }
 
 void StateMachine::onVisionBundleCaptureFinished(scan_tracking::vision::MultiCameraCaptureBundle bundle)
@@ -1861,115 +1719,6 @@ void StateMachine::applySegmentRefinementOutcome(const SegmentProcessOutcome& ou
         << QStringLiteral(" 点数=") << outcome.processedPointCount;
 
     applySegmentPoseStitching(targetPathId, outcome.segmentIndex);
-}
-
-/**
- * @brief 执行位姿检查任务（Trig_PoseCheck）
- *
- * 直接调用 LB 位姿算法，输出位姿偏差值并按正式 PLC 结果码回写。
- */
-void StateMachine::executePoseCheckTask()
-{
-    const QVector<double> identityRt = {
-        1.0, 0.0, 0.0, 0.0,
-        0.0, 1.0, 0.0, 0.0,
-        0.0, 0.0, 1.0, 0.0,
-        0.0, 0.0, 0.0, 1.0,
-    };
-
-    if (m_tracking == nullptr) {
-        qWarning(LOG_FLOW).noquote() << QStringLiteral("位姿检查：Tracking 服务不可用。");
-        writeFloatPlaceholder(protocol::registers::kPoseDeviationMm, 0.0f);
-        completeActiveTask(7, protocol::AckState::Failed, false);
-        emit poseCheckFinished(false, 7, 0.0, identityRt, QStringLiteral("跟踪服务不可用"));
-        return;
-    }
-
-    const tracking::PoseCheckResult poseResult = m_tracking->checkPose();
-    writeFloatPlaceholder(
-        protocol::registers::kPoseDeviationMm,
-        static_cast<float>(poseResult.poseDeviationMm));
-
-    if (!poseResult.invoked) {
-        qWarning(LOG_FLOW).noquote()
-            << QStringLiteral("位姿检查未调用 LB 算法：")
-            << poseResult.message;
-        completeActiveTask(7, protocol::AckState::Failed, false);
-        emit poseCheckFinished(false, 7, poseResult.poseDeviationMm, identityRt, poseResult.message);
-        return;
-    }
-
-    QVector<double> rt;
-    rt.reserve(static_cast<int>(poseResult.rt.size()));
-    for (double value : poseResult.rt) {
-        rt.append(value);
-    }
-
-    if (!poseResult.success) {
-        const quint16 resultCode = poseResult.resultCode == 0 ? 7 : poseResult.resultCode;
-        qWarning(LOG_FLOW).noquote()
-            << QStringLiteral("位姿检查失败：")
-            << poseResult.message
-            << QStringLiteral(" resultCode=") << resultCode
-            << QStringLiteral(" deviationMm=") << poseResult.poseDeviationMm;
-        completeActiveTask(resultCode, protocol::AckState::Failed, false);
-        emit poseCheckFinished(false, resultCode, poseResult.poseDeviationMm, rt, poseResult.message);
-        return;
-    }
-
-    qInfo(LOG_FLOW).noquote()
-        << QStringLiteral("位姿检查成功")
-        << QStringLiteral(" inputPoints=") << poseResult.inputPointCount
-        << QStringLiteral(" deviationMm=") << poseResult.poseDeviationMm
-        << QStringLiteral(" rt00=") << poseResult.rt[0]
-        << QStringLiteral(" hasPoseMatrix=") << poseResult.hasPoseMatrix();
-    completeActiveTask(1, protocol::AckState::Completed, true);
-    emit poseCheckFinished(true, 1, poseResult.poseDeviationMm, rt, poseResult.message);
-}
-
-void StateMachine::executeSelfCheckTask()
-{
-    const bool modbusReady = m_modbus != nullptr && m_modbus->isConnected();
-    const bool mechEyeReady = m_mechEye != nullptr && m_mechEye->state() != mech_eye::CameraRuntimeState::Error;
-    const bool trackingReady = m_tracking != nullptr;
-    const bool visionReady = m_visionPipeline != nullptr && m_visionPipeline->isStarted();
-
-    QVector<quint16> failWords = {
-        static_cast<quint16>(modbusReady ? 0 : (1u << 1)),
-        static_cast<quint16>(mechEyeReady ? 0 : (1u << 0)),
-    };
-    if (!modbusReady) {
-        qWarning(LOG_FLOW).noquote() << QStringLiteral("自检：Modbus 不可用。");
-    }
-    if (!mechEyeReady) {
-        qWarning(LOG_FLOW).noquote() << QStringLiteral("自检：MechEye 不可用。");
-    }
-    if (!trackingReady) {
-        qWarning(LOG_FLOW).noquote() << QStringLiteral("自检：Tracking 不可用。");
-    }
-    if (!visionReady) {
-        qWarning(LOG_FLOW).noquote() << QStringLiteral("自检：视觉流水线不可用。");
-    }
-
-    const quint16 resultCode = (modbusReady && mechEyeReady && trackingReady && visionReady) ? 1 : 0;
-    if (m_modbus && m_modbus->isConnected()) {
-        m_modbus->writeRegisters(protocol::registers::kSelfCheckFailWord0, failWords);
-        m_modbus->writeRegisters(protocol::registers::kSelfCheckFailWord1, {
-            static_cast<quint16>(trackingReady ? 0 : (1u << 0)),
-        });
-    }
-    completeActiveTask(resultCode, resultCode == 1 ? protocol::AckState::Completed : protocol::AckState::Failed, resultCode == 1);
-    emit selfCheckFinished(resultCode, failWords.value(0));
-}
-
-void StateMachine::executeCodeReadTask()
-{
-    qInfo(LOG_FLOW).noquote() << QStringLiteral("收到 Trig_CodeRead，当前为占位实现。");
-    if (m_modbus && m_modbus->isConnected()) {
-        writeAsciiPlaceholder(protocol::registers::kCodeValueAscii, protocol::registers::kCodeValueRegisterCount, QStringLiteral("RD"));
-    }
-    completeActiveTask(9, protocol::AckState::Failed, false);
-    emit codeReadFinished(9, QStringLiteral("RD"));
 }
 
 /**
@@ -2560,188 +2309,6 @@ tracking::InspectionResult StateMachine::runDebugInspectionOnCachedSegments() co
 
     return m_tracking->inspectPointCloud(
         mergedCloud, totalPointCount, inspectPathId, false);
-}
-
-void StateMachine::executeInspectionTask()
-{
-    if (m_activeTask.inspectionPathId <= 0) {
-        m_activeTask.inspectionPathId = resolvePathIdForInspection();
-    }
-    qInfo(LOG_FLOW).noquote()
-        << QStringLiteral("Trig_Inspection 开始，检测路径ID=") << m_activeTask.inspectionPathId
-        << multiPathCacheStatusText();
-
-    // 检查跟踪服务是否可用
-    if (m_tracking == nullptr) {
-        qWarning(LOG_FLOW) << QStringLiteral("Trig_Inspection：Tracking 服务不可用。");
-        // 写入默认的检测失败结果
-        writeInspectionResult({2, 1u << 4, 0, 0});
-
-        // 演示：tracking 不可用时也向显控推送失败结果（与蓝友出口字段一致）
-        if (m_inspectionResultPublisher) {
-            tracking::InspectionResult failure;
-            failure.resultCode = 2;
-            failure.ngReasonWord0 = (1u << 4);
-            failure.message = QStringLiteral("综合检测失败：Tracking 服务不可用。");
-            m_inspectionResultPublisher(failure);
-        }
-
-        // TODO(field-commissioning): 真实失败码为 7；PLC 侧临时强制 Res_Inspection=1(OK)
-        const quint16 plcRes = inspectionResForPlcHandshake(7);
-        completeActiveTask(plcRes, protocol::AckState::Completed, plcRes == kInspectionResOk);
-        return;
-    }
-
-    QString loadError;
-    ensurePoseStitchRunRootDirectory();
-    persistLastPoseStitchArtifactToDisk();
-
-    const auto* configManager = scan_tracking::common::ConfigManager::instance();
-    const auto inspectionType = configManager != nullptr
-        ? configManager->inspectionTypeForPath(m_activeTask.inspectionPathId)
-        : scan_tracking::common::InspectionType::Bevel;
-
-    tracking::InspectionResult trackingResult;
-    int segmentCount = 0;
-
-    if (inspectionType == scan_tracking::common::InspectionType::Thickness) {
-        scan_tracking::mech_eye::PointCloudFrame innerCloud;
-        scan_tracking::mech_eye::PointCloudFrame outerCloud;
-        int innerPointCount = 0;
-        int outerPointCount = 0;
-        int innerSegmentIndex = 0;
-        int outerSegmentIndex = 0;
-        if (!loadThicknessPointCloudsForInspection(
-                &innerCloud,
-                &outerCloud,
-                &innerPointCount,
-                &outerPointCount,
-                &innerSegmentIndex,
-                &outerSegmentIndex,
-                &loadError)) {
-            qWarning(LOG_FLOW).noquote()
-                << QStringLiteral("Trig_Inspection 加载厚度点云失败：") << loadError
-                << multiPathCacheStatusText();
-            writeInspectionResult({2, 1u << 4, 0, 0});
-            if (m_inspectionResultPublisher) {
-                tracking::InspectionResult failure;
-                failure.resultCode = 2;
-                failure.ngReasonWord0 = (1u << 4);
-                failure.message = loadError.isEmpty()
-                    ? QStringLiteral("综合检测失败：无法加载厚度 inner/outer 点云。")
-                    : loadError;
-                m_inspectionResultPublisher(failure);
-            }
-            const quint16 plcRes = inspectionResForPlcHandshake(7);
-            completeActiveTask(plcRes, protocol::AckState::Completed, plcRes == kInspectionResOk);
-            clearActiveTask();
-            m_ipcState = protocol::IpcState::Ready;
-            m_currentStage = protocol::Stage::Idle;
-            m_progress = 0;
-            setState(AppState::Ready);
-            publishIpcStatus();
-            return;
-        }
-
-        segmentCount = 2;
-        trackingResult = m_tracking->inspectThicknessPointClouds(
-            innerCloud,
-            outerCloud,
-            innerPointCount,
-            outerPointCount,
-            m_activeTask.inspectionPathId);
-    } else {
-        scan_tracking::mech_eye::PointCloudFrame mergedCloud;
-        int totalPointCount = 0;
-        if (!loadMergedPointCloudForInspection(
-                &mergedCloud, &totalPointCount, &segmentCount, &loadError)) {
-            qWarning(LOG_FLOW).noquote()
-                << QStringLiteral("Trig_Inspection 加载内存点云失败：") << loadError
-                << multiPathCacheStatusText();
-            writeInspectionResult({2, 1u << 4, 0, 0});
-            if (m_inspectionResultPublisher) {
-                tracking::InspectionResult failure;
-                failure.resultCode = 2;
-                failure.ngReasonWord0 = (1u << 4);
-                failure.message = loadError.isEmpty()
-                    ? QStringLiteral("综合检测失败：无法加载必需分段点云。")
-                    : loadError;
-                m_inspectionResultPublisher(failure);
-            }
-            const quint16 plcRes = inspectionResForPlcHandshake(7);
-            completeActiveTask(plcRes, protocol::AckState::Completed, plcRes == kInspectionResOk);
-            clearActiveTask();
-            m_ipcState = protocol::IpcState::Ready;
-            m_currentStage = protocol::Stage::Idle;
-            m_progress = 0;
-            setState(AppState::Ready);
-            publishIpcStatus();
-            return;
-        }
-
-        trackingResult = m_tracking->inspectPointCloud(
-            mergedCloud, totalPointCount, m_activeTask.inspectionPathId);
-    }
-
-    InspectionSummary summary;
-    summary.resultCode = trackingResult.resultCode;
-    summary.ngReasonWord0 = trackingResult.ngReasonWord0;
-    summary.ngReasonWord1 = trackingResult.ngReasonWord1;
-    summary.measureItemCount = trackingResult.measureItemCount;
-
-    qInfo(LOG_FLOW).noquote()
-        << QStringLiteral("Trig_Inspection 完成")
-        << QStringLiteral(" 参与段数=") << segmentCount
-        << QStringLiteral(" 总点数=") << trackingResult.sourcePointCount
-        << QStringLiteral(" angleDeg=") << trackingResult.measurement.headAngleTol
-        << QStringLiteral(" lengthMm=") << trackingResult.measurement.bluntHeightTol
-        << QStringLiteral(" thicknessMm=") << trackingResult.measurement.thicknessMm
-        << QStringLiteral(" 说明=") << trackingResult.message;
-
-    // 将检测结果写入 PLC 寄存器（NG 字等仍写真实算法结果，供联调日志/后续恢复）
-    writeInspectionResult(summary);
-
-    // TODO(field-commissioning): Res_Inspection 仅超时(6)报 NG，其它一律 OK(1)
-    const quint16 actualResultCode = summary.resultCode;
-    const quint16 plcRes = inspectionResForPlcHandshake(actualResultCode);
-    if (plcRes != actualResultCode) {
-        qWarning(LOG_FLOW).noquote()
-            << QStringLiteral("TODO(field-commissioning): Res_Inspection 临时强制 OK")
-            << QStringLiteral(" actualResultCode=") << actualResultCode
-            << QStringLiteral(" plcRes=") << plcRes
-            << QStringLiteral(" message=") << trackingResult.message;
-    }
-    completeActiveTask(plcRes, protocol::AckState::Completed, plcRes == kInspectionResOk);
-    emit inspectionFinished(
-        summary.resultCode, summary.ngReasonWord0, summary.ngReasonWord1,
-        summary.measureItemCount, trackingResult.measurement, trackingResult.message);
-    // 每条路径检测后保留各路径点云，供后续路径继续扫描；整轮结束由 Trig_ResultReset 清空
-}
-
-/**
- * @brief 执行结果复位任务（Trig_ResultReset）
- * 
- * 清空所有累积的点云缓存和检测结果，将相关寄存器归零，
- * 为下一轮扫描周期做准备。
- */
-void StateMachine::executeResultResetTask()
-{
-    resetScanSegmentCache();  // 清空扫描缓存
-    // 将扫描分段完成索引寄存器清零
-    const bool segmentIndexCleared = m_modbus->writeRegisters(protocol::registers::kScanSegmentDoneIndex, {0, 0, 0});
-    if (!segmentIndexCleared) {
-        qWarning(LOG_FLOW).noquote() << QStringLiteral("清除扫描分段完成索引失败");
-    }
-    // 写入空的检测结果（全零）
-    writeInspectionResult({});
-    // 清除 IPC 安全动作字
-    const bool safetyActionCleared = m_modbus->writeRegisters(protocol::registers::kIpcSafetyActionWord, {0});
-    if (!safetyActionCleared) {
-        qWarning(LOG_FLOW).noquote() << QStringLiteral("清除 IPC 安全动作字失败");
-    }
-    // 完成任务，返回成功
-    completeActiveTask(1);
-    emit resultResetFinished(1);
 }
 
 /**

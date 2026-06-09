@@ -8,6 +8,8 @@
 #include <mutex>
 #include <vector>
 
+#include "scan_tracking/common/station_profile.h"
+
 namespace scan_tracking {
 namespace common {
 
@@ -292,6 +294,7 @@ public:
     const LbnPoseConfig& lbnPoseConfig() const;
     const PointCloudProcessingConfig& pointCloudProcessingConfig() const;
     const ScanPathsConfig& scanPathsConfig() const;  // 新增：获取扫描路径配置
+    const StationProfile& stationProfile() const;
 
 private:
     ConfigManager();
@@ -301,6 +304,7 @@ private:
     ConfigManager& operator=(const ConfigManager&) = delete;
 
     void load(const QString& filePath);
+    void loadStationProfile(QSettings& settings, const QString& configFilePath);
     void writeDefaults(QSettings& settings);
     
     // 新增：加载扫描路径配置（JSON 格式）
@@ -328,6 +332,7 @@ CameraConfig m_cameraConfig;
     LbPoseConfig m_lbPoseConfig;
     LbnPoseConfig m_lbnPoseConfig;
     PointCloudProcessingConfig m_pointCloudProcessingConfig;
+    StationProfile m_stationProfile;
     ScanPathsConfig m_scanPathsConfig;  // 新增：扫描路径配置
 };
 

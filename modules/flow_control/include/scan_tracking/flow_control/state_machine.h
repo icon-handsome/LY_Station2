@@ -16,6 +16,7 @@
 
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/flow_control/plc_protocol.h"
+#include "scan_tracking/flow_control/task_handler_context.h"
 #include "scan_tracking/mech_eye/mech_eye_types.h"
 #include "scan_tracking/modbus/modbus_service.h"
 #include "scan_tracking/tracking/tracking_service.h"
@@ -32,6 +33,17 @@ namespace tracking {
 struct PoseCheckResult;
 }
 namespace flow_control {
+
+class CodeReadHandler;
+class InspectionHandler;
+class LoadGraspHandler;
+class PoseCheckHandler;
+class ResultResetHandler;
+class ScanSegmentHandler;
+class SelfCheckHandler;
+class StationMaterialCheckHandler;
+class TaskHandlerRegistry;
+class UnloadCalcHandler;
 
 /// 分段点云后处理 worker 输出（由主线程 applySegmentProcessOutcome 消费）
 struct SegmentProcessOutcome {
@@ -208,18 +220,15 @@ private slots:
     void onProcessTimeout();
 
 private:
-    // 活动任务结构体，记录当前正在执行的任务信息
-    struct ActiveTask {
-        const protocol::TriggerDefinition* definition = nullptr;  // 触发定义指针
-        quint32 taskId = 0;                                        // 任务 ID
-        quint16 timeoutSeconds = 0;                                // 超时时间（秒）
-        bool completionAnnounced = false;                          // 是否已宣布完成
-        int scanSegmentIndex = 0;                                  // 扫描段索引
-        int scanSegmentTotal = 0;                                  // 扫描段总数
-        int inspectionPathId = 0;                                  // 本次 Trig_Inspection 对应的路径 ID
-        quint64 captureRequestId = 0;                              // 采集请求 ID
-    };
-
+    friend class CodeReadHandler;
+    friend class InspectionHandler;
+    friend class LoadGraspHandler;
+    friend class PoseCheckHandler;
+    friend class ResultResetHandler;
+    friend class ScanSegmentHandler;
+    friend class SelfCheckHandler;
+    friend class StationMaterialCheckHandler;
+    friend class UnloadCalcHandler;
 public:
     struct PoseSourceResult {
         bool available = false;
@@ -253,6 +262,9 @@ private:
     void processTrigger(
         const protocol::TriggerDefinition& trigger,
         const QVector<quint16>& commandBlock);
+
+    // 当前工位 profile 未启用此触发器时，执行统一拒绝握手（Res=8）
+    void rejectDisabledTrigger(const protocol::TriggerDefinition& trigger);
 
     // 执行当前活动任务
     void executeActiveTask();
@@ -536,10 +548,11 @@ private:
     QTimer* m_pollTimer = nullptr;                          // PLC 轮询定时器
     QTimer* m_heartbeatTimer = nullptr;                     // 心跳定时器
     QTimer* m_timeoutTimer = nullptr;                       // 超时定时器
+    std::unique_ptr<TaskHandlerRegistry> m_handlerRegistry; // PLC 触发任务 Handler 注册表
     AppState m_state = AppState::Init;                      // 当前应用状态
     protocol::IpcState m_ipcState = protocol::IpcState::Uninitialized;  // IPC 状态
     protocol::Stage m_currentStage = protocol::Stage::Idle;             // 当前阶段
-    ActiveTask m_activeTask;                                // 当前活动任务
+    ActiveTaskState m_activeTask;                           // 当前活动任务
     quint16 m_heartbeatCounter = 0;                         // 心跳计数器
     quint16 m_alarmLevel = 0;                               // 报警级别
     quint16 m_alarmCode = 0;                                // 报警代码
