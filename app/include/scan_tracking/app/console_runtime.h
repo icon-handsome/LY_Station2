@@ -15,14 +15,14 @@
 
 class QTimer;
 
+#include "scan_tracking/livox_mid360/livox_mid360_service.h"
+#include "scan_tracking/orbbec_gemini/orbbec_gemini_service.h"
+#include "scan_tracking/tfmini_plus/tfmini_plus_service.h"
 #include "scan_tracking/vision/vision_types.h"
 
 namespace scan_tracking {
 namespace modbus { class ModbusService; }
 namespace mech_eye { class MechEyeService; }
-namespace orbbec_gemini { class OrbbecGeminiService; }
-namespace livox_mid360 { class LivoxMid360Service; }
-namespace tfmini_plus { class TfminiPlusService; }
 namespace tracking { class TrackingService; }
 namespace flow_control { class StateMachine; }
 namespace vision {

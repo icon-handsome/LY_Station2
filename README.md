@@ -74,10 +74,8 @@ PLC 触发任务由 `modules/flow_control/include/scan_tracking/flow_control/han
 |------|------|
 | 未完成项 / 进度 | [`docs/项目未完成事项清单_v1.0.md`](docs/项目未完成事项清单_v1.0.md)（v1.6） |
 | 扫描流程与落盘 | [`docs/多点位扫描与位姿跟踪完整流程.md`](docs/多点位扫描与位姿跟踪完整流程.md) |
-| PLC 联调前检查 | [`docs/待完善细节清单_PLC联调前.md`](docs/待完善细节清单_PLC联调前.md) |
-| 蓝友 / 缓存 API | [`docs/算法使用API.md`](docs/算法使用API.md) |
+| 蓝友 / LBN / 缓存 API | [`docs/算法使用API.md`](docs/算法使用API.md) |
 | Modbus 协议 | [`docs/封头检测工位PLC-IPC Modbus通信协议_v0.1.md`](docs/封头检测工位PLC-IPC%20Modbus通信协议_v0.1.md) |
-| LBN 离线调通 | [`docs/LBN离线调通交接说明.md`](docs/LBN离线调通交接说明.md) |
 
 ## 构建
 

@@ -1,3 +1,6 @@
+#include "scan_tracking/orbbec_gemini/orbbec_gemini_service.h"
+#include "scan_tracking/livox_mid360/livox_mid360_service.h"
+#include "scan_tracking/tfmini_plus/tfmini_plus_service.h"
 #include "scan_tracking/app/console_runtime.h"
 
 #ifdef _WIN32
@@ -27,9 +30,6 @@
 #include "scan_tracking/flow_control/state_machine.h"
 #include "scan_tracking/mech_eye/mech_eye_service.h"
 #include "scan_tracking/mech_eye/mech_eye_types.h"
-#include "scan_tracking/orbbec_gemini/orbbec_gemini_service.h"
-#include "scan_tracking/livox_mid360/livox_mid360_service.h"
-#include "scan_tracking/tfmini_plus/tfmini_plus_service.h"
 #include "scan_tracking/modbus/modbus_service.h"
 #include "scan_tracking/tracking/tracking_service.h"
 #include "scan_tracking/vision/hik_cxp_camera_service.h"

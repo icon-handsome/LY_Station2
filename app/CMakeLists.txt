@@ -9,6 +9,16 @@ add_executable(scan_tracking ${scan_tracking_app_sources})
 target_include_directories(scan_tracking
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/common/include
+        ${CMAKE_SOURCE_DIR}/modules/mech_eye/include
+        ${CMAKE_SOURCE_DIR}/modules/orbbec_gemini/include
+        ${CMAKE_SOURCE_DIR}/modules/livox_mid360/include
+        ${CMAKE_SOURCE_DIR}/modules/tfmini_plus/include
+        ${CMAKE_SOURCE_DIR}/modules/vision/include
+        ${CMAKE_SOURCE_DIR}/modules/tracking/include
+        ${CMAKE_SOURCE_DIR}/modules/modbus/include
+        ${CMAKE_SOURCE_DIR}/modules/flow_control/include
+        ${CMAKE_SOURCE_DIR}/modules/hmi_server/include
 )
 
 target_link_libraries(scan_tracking

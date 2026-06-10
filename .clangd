@@ -2,7 +2,7 @@
 # 路径相对仓库根目录，换机器时只需保持同一 preset 的 build 目录即可。
 
 CompileFlags:
-  CompilationDatabase: build/win-msvc2019-qtcore-ninja-debug
+  CompilationDatabase: build/win-msvc2019-qtcore-ninja-release
   Add:
     - --driver-mode=cl
   Remove:
