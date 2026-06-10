@@ -116,6 +116,26 @@ function(scan_tracking_deploy_thickness_runtime target_name)
     )
 endfunction()
 
+function(scan_tracking_deploy_internal_surface_runtime target_name)
+    set(_internal_surface_source_root "${CMAKE_SOURCE_DIR}/third_party/InternalSurfaceMeasurement")
+    if(NOT EXISTS "${_internal_surface_source_root}/config/algorithm_config.json")
+        message(WARNING "Internal surface runtime source not found: ${_internal_surface_source_root}")
+        return()
+    endif()
+
+    add_custom_command(TARGET ${target_name} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target_name}>/internal_surface/config"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target_name}>/internal_surface/templates"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${_internal_surface_source_root}/config/algorithm_config.json"
+            "$<TARGET_FILE_DIR:${target_name}>/internal_surface/config/algorithm_config.json"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${_internal_surface_source_root}/templates"
+            "$<TARGET_FILE_DIR:${target_name}>/internal_surface/templates"
+        COMMENT "Deploying internal surface measurement runtime assets"
+    )
+endfunction()
+
 function(scan_tracking_deploy_bevel_runtime target_name)
     set(_bevel_source_root "${CMAKE_SOURCE_DIR}/third_party/Po_Kou_Ce_Liang")
     if(NOT EXISTS "${_bevel_source_root}/config.txt")

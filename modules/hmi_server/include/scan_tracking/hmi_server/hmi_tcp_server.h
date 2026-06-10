@@ -180,7 +180,7 @@ private:
     /// 设置坡口工艺配方（Qt 用户输入）
     void handleCmdSetBevelRecipe(const QJsonObject& message);
 
-    /// 显控上报监控区域有无人员（暂仅解析打印，不写 PLC）
+    /// 显控上报监控区域有无人员（经 StateMachine 写 IPC_SafetyAction_Word 停 PLC）
     void handleCmdReportPersonZoneAlarm(const QJsonObject& message);
     
     /// 处理单独通过 Mech-Eye 进行采图的指令（多用于独立标定或调试测试）

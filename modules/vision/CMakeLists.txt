@@ -226,6 +226,34 @@ if(SCAN_TRACKING_ENABLE_HOLE_MEASUREMENT)
     )
 endif()
 
+if(SCAN_TRACKING_ENABLE_INTERNAL_SURFACE_MEASUREMENT)
+    add_library(scan_tracking_internal_surface_adapter STATIC
+        src/internal_surface_measurement_adapter.cpp
+        include/scan_tracking/vision/internal_surface_measurement_adapter.h
+    )
+
+    target_include_directories(scan_tracking_internal_surface_adapter
+        PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+        PRIVATE
+            ${CMAKE_SOURCE_DIR}/third_party/InternalSurfaceMeasurement/include
+    )
+
+    target_link_libraries(scan_tracking_internal_surface_adapter
+        PUBLIC
+            Qt5::Core
+            scan_tracking_common
+            scan_tracking_mech_eye
+            InternalSurface::Measurement
+    )
+
+    target_compile_features(scan_tracking_internal_surface_adapter PUBLIC cxx_std_17)
+
+    set_target_properties(scan_tracking_internal_surface_adapter PROPERTIES
+        FOLDER "modules"
+    )
+endif()
+
 if(SCAN_TRACKING_ENABLE_LBN_POSE_DETECTION)
     add_executable(scan_tracking_lbn_offline_runner
         tests/lbn_offline_runner.cpp

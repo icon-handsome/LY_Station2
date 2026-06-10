@@ -48,6 +48,7 @@ void TfminiPlusService::start()
         const auto& config = configManager->tfminiPlusConfig();
         m_openConfig.portName = config.portName;
         m_openConfig.baudRate = config.baudRate;
+        m_openConfig.logFrames = config.logFrames;
     }
 
     m_workerThread = new QThread();
@@ -123,6 +124,7 @@ void TfminiPlusService::onWorkerStateChanged(
 
 void TfminiPlusService::onWorkerDistanceUpdated(int distanceCm, int strength)
 {
+    // TODO: Worker 恢复 emit distanceUpdated 后，在此转发或做业务过滤。
     emit distanceUpdated(distanceCm, strength);
 }
 

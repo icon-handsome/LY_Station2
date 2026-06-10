@@ -44,6 +44,8 @@ struct InspectionMeasurement {
     float holeOpeningMm = 0.0f;
     float jointFitUpAngleDeg = 0.0f;
     float thicknessMm = 0.0f;
+    float headDepthMm = 0.0f;
+    float headVolumeM3 = 0.0f;
 };
 
 /// 将测量项写入 JSON payload（协议 snake_case 字段名）

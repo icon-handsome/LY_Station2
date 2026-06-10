@@ -338,6 +338,11 @@ constexpr int kResResultReset = modbusIndexFromPlcAddress(40175);
 
 }  // namespace registers
 
+/// IPC_SafetyAction_Word (40173) 位域
+namespace safety_bits {
+constexpr quint16 kAiPersonIntrusion = 1u << 0;  ///< Bit0: AI 监控报警（人员越界）
+}  // namespace safety_bits
+
 /**
  * @brief 获取所有触发器定义的引用
  * 

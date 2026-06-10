@@ -22,6 +22,9 @@ void ResultResetHandler::execute(TaskHandlerContext& ctx) { ctx.machine.executeR
  */
 void StateMachine::executeResultResetTask()
 {
+    m_ipcSafetyActionWord = 0;
+    m_personZoneAlarmActive = false;
+
     resetScanSegmentCache();  // 清空扫描缓存
     // 将扫描分段完成索引寄存器清零
     const bool segmentIndexCleared = m_modbus->writeRegisters(protocol::registers::kScanSegmentDoneIndex, {0, 0, 0});

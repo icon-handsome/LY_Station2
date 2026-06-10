@@ -148,6 +148,14 @@ struct ThicknessConfig {
     double icpFitnessMax = 50.0;
 };
 
+/// 内表面测量算法配置（[InternalSurface]）：封头深度与容积
+struct InternalSurfaceConfig {
+    QString configPath = QStringLiteral("internal_surface/config/algorithm_config.json");
+    int templateType = 1;
+    double minDepthMm = 0.0;
+    double minVolumeM3 = 0.0;
+};
+
 /// 综合检测算法类型（按 scan_paths 路径配置）
 enum class InspectionType {
     Bevel,
@@ -181,6 +189,7 @@ struct TfminiPlusConfig {
     QString portName;
     int baudRate = 115200;
     int collisionThresholdMm = 0;
+    bool logFrames = false;
 };
 
 struct HmiConfig {
@@ -305,6 +314,7 @@ public:
     const BevelConfig& bevelConfig() const;
     const HoleConfig& holeConfig() const;
     const ThicknessConfig& thicknessConfig() const;
+    const InternalSurfaceConfig& internalSurfaceConfig() const;
     void setBevelRecipe(const BevelRecipe& recipe);
     BevelRecipe bevelRecipe() const;
     bool hasActiveBevelRecipe() const;
@@ -353,6 +363,7 @@ CameraConfig m_cameraConfig;
     BevelConfig m_bevelConfig;
     HoleConfig m_holeConfig;
     ThicknessConfig m_thicknessConfig;
+    InternalSurfaceConfig m_internalSurfaceConfig;
     mutable std::mutex m_bevelRecipeMutex;
     BevelRecipe m_runtimeBevelRecipe;
     bool m_runtimeRecipeSet = false;

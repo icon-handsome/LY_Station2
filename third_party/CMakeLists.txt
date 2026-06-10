@@ -150,3 +150,7 @@ endif()
 if(SCAN_TRACKING_ENABLE_THICKNESS_MEASUREMENT)
     add_subdirectory(Thicknessmeasurement)
 endif()
+
+if(SCAN_TRACKING_ENABLE_INTERNAL_SURFACE_MEASUREMENT)
+    add_subdirectory(InternalSurfaceMeasurement)
+endif()

@@ -10,6 +10,9 @@
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/tracking/lb_pose_check.h"
 #include "scan_tracking/vision/bevel_measurement_adapter.h"
+#ifdef SCAN_TRACKING_HAS_INTERNAL_SURFACE_MEASUREMENT
+#include "scan_tracking/vision/internal_surface_measurement_adapter.h"
+#endif
 #ifdef SCAN_TRACKING_HAS_HOLE_MEASUREMENT
 #include "scan_tracking/vision/hole_measurement_adapter.h"
 #endif
@@ -45,6 +48,12 @@ quint16 countMeasuredItems(const InspectionMeasurement& measurement)
         if (std::isfinite(measurement.thicknessMm) && measurement.thicknessMm > 0.0f) {
             ++count;
         }
+        if (std::isfinite(measurement.headDepthMm) && measurement.headDepthMm > 0.0f) {
+            ++count;
+        }
+        if (std::isfinite(measurement.headVolumeM3) && measurement.headVolumeM3 > 0.0f) {
+            ++count;
+        }
         return count;
     }
 
@@ -61,6 +70,12 @@ quint16 countMeasuredItems(const InspectionMeasurement& measurement)
         if (std::isfinite(measurement.holeOpeningMm)) {
             ++count;
         }
+        if (std::isfinite(measurement.headDepthMm) && measurement.headDepthMm > 0.0f) {
+            ++count;
+        }
+        if (std::isfinite(measurement.headVolumeM3) && measurement.headVolumeM3 > 0.0f) {
+            ++count;
+        }
         return count;
     }
 
@@ -68,6 +83,12 @@ quint16 countMeasuredItems(const InspectionMeasurement& measurement)
         ++count;
     }
     if (std::isfinite(measurement.bluntHeightTol)) {
+        ++count;
+    }
+    if (std::isfinite(measurement.headDepthMm) && measurement.headDepthMm > 0.0f) {
+        ++count;
+    }
+    if (std::isfinite(measurement.headVolumeM3) && measurement.headVolumeM3 > 0.0f) {
         ++count;
     }
     return count;
@@ -124,6 +145,36 @@ InspectionMeasurement measurementFromThicknessResult(
 }
 #endif
 
+#ifdef SCAN_TRACKING_HAS_INTERNAL_SURFACE_MEASUREMENT
+bool appendInternalSurfaceMeasurement(
+    const scan_tracking::mech_eye::PointCloudFrame& pointCloud,
+    InspectionResult* result)
+{
+    if (result == nullptr) {
+        return false;
+    }
+
+    const auto detection =
+        scan_tracking::vision::internal_surface::runInternalSurfaceMeasurement(pointCloud);
+    if (!detection.invoked || !detection.ok) {
+        const QString detail = detection.message.isEmpty()
+            ? QStringLiteral("内表面测量未产出有效深度/容积。")
+            : detection.message;
+        result->message = result->message.isEmpty()
+            ? detail
+            : result->message + QStringLiteral(" ") + detail;
+        return false;
+    }
+
+    result->measurement.headDepthMm = static_cast<float>(detection.headDepthMm);
+    result->measurement.headVolumeM3 = static_cast<float>(detection.headVolumeM3);
+    result->message = result->message.isEmpty()
+        ? detection.message
+        : result->message + QStringLiteral(" ") + detection.message;
+    return true;
+}
+#endif
+
 scan_tracking::common::InspectionType resolveInspectionType(
     const scan_tracking::common::ConfigManager* configManager,
     int inspectionPathId)
@@ -166,6 +217,8 @@ void appendInspectionMeasurementFields(QJsonObject& payload, const InspectionMea
     payload[QStringLiteral("joint_fit_up_angle_deg")] =
         measurementJsonValue(measurement.jointFitUpAngleDeg);
     payload[QStringLiteral("thickness_mm")] = measurementJsonValue(measurement.thicknessMm);
+    payload[QStringLiteral("head_depth_mm")] = measurementJsonValue(measurement.headDepthMm);
+    payload[QStringLiteral("head_volume_m3")] = measurementJsonValue(measurement.headVolumeM3);
 }
 
 void appendHeadDisplayMetricsFields(QJsonObject& payload, const InspectionMeasurement& measurement)
@@ -177,7 +230,7 @@ void appendHeadDisplayMetricsFields(QJsonObject& payload, const InspectionMeasur
         measurementJsonValue(measurement.roundnessToleranceMm);
     headMetrics[QStringLiteral("straight_slope_tol")] =
         measurementJsonValue(measurement.straightSideSlopeDeg);
-    headMetrics[QStringLiteral("head_depth_mm")] = 0.0;
+    headMetrics[QStringLiteral("head_depth_mm")] = measurementJsonValue(measurement.headDepthMm);
     headMetrics[QStringLiteral("straight_height_tol")] =
         measurementJsonValue(measurement.straightSideHeightMm);
     headMetrics[QStringLiteral("bevel_angle_deg")] = measurementJsonValue(measurement.headAngleTol);
@@ -188,7 +241,7 @@ void appendHeadDisplayMetricsFields(QJsonObject& payload, const InspectionMeasur
     headMetrics[QStringLiteral("joint_fit_up_angle_deg")] =
         measurementJsonValue(measurement.jointFitUpAngleDeg);
     headMetrics[QStringLiteral("thickness_mm")] = measurementJsonValue(measurement.thicknessMm);
-    headMetrics[QStringLiteral("head_volume_m3")] = 0.0;
+    headMetrics[QStringLiteral("head_volume_m3")] = measurementJsonValue(measurement.headVolumeM3);
     payload[QStringLiteral("headMetrics")] = headMetrics;
 }
 
@@ -277,8 +330,11 @@ InspectionResult TrackingService::inspectPointCloud(
         }
 
         result.resultCode = 1;
-        result.measureItemCount = countMeasuredItems(result.measurement);
         result.message = detection.message;
+#ifdef SCAN_TRACKING_HAS_INTERNAL_SURFACE_MEASUREMENT
+        appendInternalSurfaceMeasurement(pointCloud, &result);
+#endif
+        result.measureItemCount = countMeasuredItems(result.measurement);
         return deliverInspectionResult(result, notifyListener);
     }
 #else
@@ -333,13 +389,16 @@ InspectionResult TrackingService::inspectPointCloud(
     }
 
     result.resultCode = 1;
-    result.measureItemCount = countMeasuredItems(result.measurement);
     result.message = QStringLiteral(
         "坡口测量通过：angle=%1 deg, length=%2 mm, bevelType=%3, icpFitness=%4。")
                          .arg(detection.angleDeg, 0, 'f', 3)
                          .arg(detection.lengthMm, 0, 'f', 3)
                          .arg(detection.bevelType)
                          .arg(detection.icpFitness, 0, 'f', 6);
+#ifdef SCAN_TRACKING_HAS_INTERNAL_SURFACE_MEASUREMENT
+    appendInternalSurfaceMeasurement(pointCloud, &result);
+#endif
+    result.measureItemCount = countMeasuredItems(result.measurement);
     return deliverInspectionResult(result, notifyListener);
 }
 
@@ -388,8 +447,11 @@ InspectionResult TrackingService::inspectThicknessPointClouds(
     }
 
     result.resultCode = 1;
-    result.measureItemCount = countMeasuredItems(result.measurement);
     result.message = detection.message;
+#ifdef SCAN_TRACKING_HAS_INTERNAL_SURFACE_MEASUREMENT
+    appendInternalSurfaceMeasurement(innerCloud, &result);
+#endif
+    result.measureItemCount = countMeasuredItems(result.measurement);
     return deliverInspectionResult(result, notifyListener);
 #else
     result.resultCode = 2;

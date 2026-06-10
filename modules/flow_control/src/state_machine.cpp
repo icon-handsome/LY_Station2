@@ -2835,6 +2835,73 @@ void StateMachine::setAlarm(quint16 level, quint16 code, const QString& message)
     }
 }
 
+bool StateMachine::writeIpcSafetyActionWord()
+{
+    if (!m_modbus || !m_modbus->isConnected()) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("Modbus 未连接，无法写入 IPC_SafetyAction_Word=")
+            << m_ipcSafetyActionWord;
+        return false;
+    }
+
+    const bool written = m_modbus->writeRegisters(
+        protocol::registers::kIpcSafetyActionWord,
+        {m_ipcSafetyActionWord});
+    if (!written) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("写入 IPC_SafetyAction_Word 失败，值=") << m_ipcSafetyActionWord;
+    } else {
+        qInfo(LOG_FLOW).noquote()
+            << QStringLiteral("已写入 IPC_SafetyAction_Word=") << m_ipcSafetyActionWord;
+    }
+    return written;
+}
+
+bool StateMachine::reportPersonZoneAlarm(bool alarm)
+{
+    namespace safety = protocol::safety_bits;
+
+    if (alarm) {
+        if (m_personZoneAlarmActive &&
+            (m_ipcSafetyActionWord & safety::kAiPersonIntrusion) != 0) {
+            return writeIpcSafetyActionWord();
+        }
+
+        m_ipcSafetyActionWord |= safety::kAiPersonIntrusion;
+        const bool plcWritten = writeIpcSafetyActionWord();
+
+        const QString message = QStringLiteral("监控区域检测到人员");
+        enterFaultState(601, message, true, false);
+        m_personZoneAlarmActive = true;
+        publishIpcStatus();
+
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("人员区域报警：已置 IPC_SafetyAction_Word Bit0，中止当前任务");
+        return plcWritten;
+    }
+
+    if (!m_personZoneAlarmActive &&
+        (m_ipcSafetyActionWord & safety::kAiPersonIntrusion) == 0) {
+        return writeIpcSafetyActionWord();
+    }
+
+    m_ipcSafetyActionWord &= ~static_cast<quint16>(safety::kAiPersonIntrusion);
+    const bool plcWritten = writeIpcSafetyActionWord();
+
+    if (m_personZoneAlarmActive) {
+        setAlarm(0, 0, QString());
+        m_ipcState = protocol::IpcState::Ready;
+        m_currentStage = protocol::Stage::Idle;
+        m_personZoneAlarmActive = false;
+        setState(AppState::Ready);
+        qInfo(LOG_FLOW).noquote()
+            << QStringLiteral("人员区域报警解除：已清除 IPC_SafetyAction_Word Bit0，恢复 Ready");
+    }
+
+    publishIpcStatus();
+    return plcWritten;
+}
+
 /**
  * @brief 向 PLC 写入浮点数占位符（CDAB 字节序）
  * 

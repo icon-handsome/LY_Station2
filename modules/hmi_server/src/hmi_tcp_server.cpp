@@ -882,14 +882,39 @@ void HmiTcpServer::handleCmdReportPersonZoneAlarm(const QJsonObject& message)
     m_personZoneAlarm = alarm;
     m_personZoneAlarmCacheValid = true;
 
-    // 暂不写 PLC / 不改状态机，仅 ACK 便于显控确认链路
+    bool plcWritten = true;
+    if (stateChanged) {
+        if (m_stateMachine) {
+            plcWritten = m_stateMachine->reportPersonZoneAlarm(alarm);
+        } else {
+            qWarning(LOG_HMI_SERVER).noquote()
+                << QStringLiteral("[TCPIP] 人员区域上报：状态机不可用，无法写 PLC");
+            sendResponse(
+                requestType.isEmpty() ? QLatin1String(msg_type::kCmdReportPersonZoneAlarm) : requestType,
+                msgId,
+                false,
+                QStringLiteral("状态机不可用"));
+            return;
+        }
+    }
+
+    QString responseMessage;
+    if (stateChanged) {
+        responseMessage = alarm
+            ? QStringLiteral("人员区域报警已上报 PLC")
+            : QStringLiteral("人员区域报警已解除");
+        if (!plcWritten) {
+            responseMessage += QStringLiteral("（PLC 未连接或写入失败）");
+        }
+    } else {
+        responseMessage = QStringLiteral("人员区域状态已接收（与上次相同）");
+    }
+
     sendResponse(
         requestType.isEmpty() ? QLatin1String(msg_type::kCmdReportPersonZoneAlarm) : requestType,
         msgId,
         true,
-        stateChanged
-            ? QStringLiteral("人员区域状态已更新")
-            : QStringLiteral("人员区域状态已接收（与上次相同）"));
+        responseMessage);
 }
 
 void HmiTcpServer::handleCmdCaptureMechEye(const QJsonObject& message)

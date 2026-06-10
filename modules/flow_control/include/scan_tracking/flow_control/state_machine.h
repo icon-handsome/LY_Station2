@@ -130,6 +130,13 @@ public:
     // @param message 报警信息
     void setAlarm(quint16 level, quint16 code, const QString& message);
 
+    /**
+     * @brief 显控上报监控区域人员状态，写 IPC_SafetyAction_Word 联动 PLC 停线
+     * @param alarm true=有人，false=无人
+     * @return 是否成功写入 Modbus 安全动作字（未连接时仍更新本地状态，返回 false）
+     */
+    bool reportPersonZoneAlarm(bool alarm);
+
 signals:
     // 状态改变信号
     // @param newState 新的状态
@@ -471,6 +478,9 @@ private:
     // @param resultCode 结果码
     void abortActiveTaskForFault(quint16 resultCode);
 
+    // 写入 IPC_SafetyAction_Word (40173)
+    bool writeIpcSafetyActionWord();
+
     // 写入浮点数占位符
     // @param startOffset 起始偏移量
     // @param value 浮点值
@@ -558,6 +568,8 @@ private:
     quint16 m_alarmCode = 0;                                // 报警代码
     quint16 m_warnCode = 0;                                 // 警告代码
     quint16 m_progress = 0;                                 // 进度百分比
+    quint16 m_ipcSafetyActionWord = 0;                      // IPC_SafetyAction_Word 本地缓存
+    bool m_personZoneAlarmActive = false;                   // 是否因人员区域报警处于联锁
     bool m_dataValid = false;                               // 数据有效标志
     bool m_isPollingPlc = false;                            // 是否正在轮询 PLC
     quint64 m_pollRequestSequence = 0;                      // 轮询请求序号

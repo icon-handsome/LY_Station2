@@ -245,7 +245,7 @@ void ConsoleRuntime::initModules()
         if (!tfminiConfig.enabled) {
             qInfo(appLog) << QStringLiteral("[TfminiPlus] disabled (tfminiPlusEnabled=false)");
         } else {
-            // 第二工位吊装/内壁防碰辅助测距；本阶段仅并行读串口和打日志，不写 PLC 安全位。
+            // 第二工位吊装/内壁防碰辅助测距；Worker 按协议解析后丢弃，不写 PLC 安全位。
             tfminiPlusService_ = std::make_unique<scan_tracking::tfmini_plus::TfminiPlusService>();
             QObject::connect(
                 tfminiPlusService_.get(),
@@ -273,12 +273,7 @@ void ConsoleRuntime::initModules()
                             << errorMessage;
                     }
                 });
-            QObject::connect(
-                tfminiPlusService_.get(),
-                &scan_tracking::tfmini_plus::TfminiPlusService::distanceUpdated,
-                [](int, int) {
-                    // TODO: 后续接入危险距离、距离过远、变化阈值等过滤策略后，再按条件打印/告警。
-                });
+            // TODO: Worker 恢复 emit distanceUpdated 后，在此接入打印/告警/碰撞阈值过滤。
             tfminiPlusService_->start();
             qInfo(appLog) << QStringLiteral("[TfminiPlus] service started.");
         }

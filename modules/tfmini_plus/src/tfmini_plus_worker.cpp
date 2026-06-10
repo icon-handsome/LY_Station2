@@ -4,6 +4,7 @@
 #include <QtSerialPort/QSerialPort>
 
 Q_LOGGING_CATEGORY(LOG_TFMINI_PLUS, "tfmini.plus")
+Q_LOGGING_CATEGORY(LOG_TFMINI_PLUS_FRAME, "tfmini.plus.frame")
 
 namespace scan_tracking {
 namespace tfmini_plus {
@@ -29,6 +30,42 @@ bool hasValidChecksum(const QByteArray& frame)
     return checksum == byteAt(frame, 8);
 }
 
+constexpr int kFrameSize = 9;
+constexpr char kFrameHeader = '\x59';
+constexpr int kMaxRxBufferBytes = 512;
+constexpr int kStrengthUnreliableThreshold = 100;
+constexpr int kStrengthOverexposed = 65535;
+
+void trimRxBuffer(QByteArray& buffer)
+{
+    if (buffer.size() > kMaxRxBufferBytes) {
+        buffer.remove(0, buffer.size() - kMaxRxBufferBytes);
+    }
+}
+
+bool tryParseFrame(const QByteArray& frame, TfminiPlusFrame* out)
+{
+    if (out == nullptr || frame.size() < kFrameSize) {
+        return false;
+    }
+    if (byteAt(frame, 0) != kFrameHeader || byteAt(frame, 1) != kFrameHeader) {
+        return false;
+    }
+
+    out->distanceCm = byteAt(frame, 2) | (byteAt(frame, 3) << 8);
+    out->strength = byteAt(frame, 4) | (byteAt(frame, 5) << 8);
+    // Byte6/7 为芯片温度，按需求不解析。
+    out->checksumValid = hasValidChecksum(frame);
+    if (!out->checksumValid) {
+        return false;
+    }
+
+    out->isReliable =
+        out->strength >= kStrengthUnreliableThreshold
+        && out->strength != kStrengthOverexposed;
+    return true;
+}
+
 }  // namespace
 
 TfminiPlusWorker::TfminiPlusWorker(QObject* parent)
@@ -46,6 +83,7 @@ void TfminiPlusWorker::startWorker(const TfminiPlusOpenConfig& config)
     stopWorker();
 
     m_buffer.clear();
+    m_logFrames = config.logFrames;
 
     const QString portName = config.portName.trimmed();
     if (portName.isEmpty()) {
@@ -113,6 +151,7 @@ void TfminiPlusWorker::onReadyRead()
     }
 
     m_buffer.append(data);
+    trimRxBuffer(m_buffer);
     parseBuffer();
 }
 
@@ -134,13 +173,11 @@ void TfminiPlusWorker::onSerialError()
 
 void TfminiPlusWorker::parseBuffer()
 {
-    constexpr int kFrameSize = 9;
-    constexpr char kFrameHeader = '\x59';
-
     while (m_buffer.size() >= 2) {
         int headerIndex = -1;
         for (int i = 0; i + 1 < m_buffer.size(); ++i) {
-            if (m_buffer.at(i) == kFrameHeader && m_buffer.at(i + 1) == kFrameHeader) {
+            if (static_cast<unsigned char>(m_buffer.at(i)) == kFrameHeader
+                && static_cast<unsigned char>(m_buffer.at(i + 1)) == kFrameHeader) {
                 headerIndex = i;
                 break;
             }
@@ -157,15 +194,23 @@ void TfminiPlusWorker::parseBuffer()
             return;
         }
 
-        const QByteArray frame = m_buffer.left(kFrameSize);
-        if (!hasValidChecksum(frame)) {
+        const QByteArray rawFrame = m_buffer.left(kFrameSize);
+        TfminiPlusFrame frame;
+        if (!tryParseFrame(rawFrame, &frame)) {
             m_buffer.remove(0, 1);
             continue;
         }
 
-        const int distanceCm = byteAt(frame, 2) | (byteAt(frame, 3) << 8);
-        const int strength = byteAt(frame, 4) | (byteAt(frame, 5) << 8);
-        emit distanceUpdated(distanceCm, strength);
+        if (m_logFrames) {
+            qInfo(LOG_TFMINI_PLUS_FRAME).noquote()
+                << QStringLiteral("%1 dist=%2cm strength=%3 reliable=%4")
+                       .arg(logPrefix())
+                       .arg(frame.distanceCm)
+                       .arg(frame.strength)
+                       .arg(frame.isReliable ? QStringLiteral("yes")
+                                             : QStringLiteral("no"));
+        }
+        // TODO: emit distanceUpdated、碰撞阈值过滤、写 PLC 安全位等。
         m_buffer.remove(0, kFrameSize);
     }
 }

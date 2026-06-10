@@ -259,6 +259,11 @@ const HoleConfig& ConfigManager::holeConfig() const { return m_holeConfig; }
 
 const ThicknessConfig& ConfigManager::thicknessConfig() const { return m_thicknessConfig; }
 
+const InternalSurfaceConfig& ConfigManager::internalSurfaceConfig() const
+{
+    return m_internalSurfaceConfig;
+}
+
 InspectionType inspectionTypeFromString(const QString& value)
 {
     const QString normalized = value.trimmed().toLower();
@@ -529,6 +534,13 @@ void ConfigManager::writeDefaults(QSettings& settings)
     settings.setValue("cylinderRmsMaxMm", 3.0);
     settings.endGroup();
 
+    settings.beginGroup("InternalSurface");
+    settings.setValue("configPath", "internal_surface/config/algorithm_config.json");
+    settings.setValue("templateType", 1);
+    settings.setValue("minDepthMm", 0.0);
+    settings.setValue("minVolumeM3", 0.0);
+    settings.endGroup();
+
     settings.beginGroup("OrbbecGemini");
     settings.setValue("orbbecGeminiEnabled", false);
     settings.setValue("orbbecGeminiSdkRoot", QStringLiteral("C:/Program Files/OrbbecSDK 2.8.6"));
@@ -551,6 +563,7 @@ void ConfigManager::writeDefaults(QSettings& settings)
     settings.setValue("tfminiPlusPort", QString());
     settings.setValue("tfminiPlusBaudRate", 115200);
     settings.setValue("collisionThresholdMm", 0);
+    settings.setValue("tfminiPlusLogFrames", false);
     settings.endGroup();
 
     settings.beginGroup("Hmi");
@@ -811,6 +824,14 @@ void ConfigManager::load(const QString& filePath)
     m_thicknessConfig.icpFitnessMax = settings.value("icpFitnessMax", 50.0).toDouble();
     settings.endGroup();
 
+    settings.beginGroup("InternalSurface");
+    m_internalSurfaceConfig.configPath = settings.value(
+        "configPath", QStringLiteral("internal_surface/config/algorithm_config.json")).toString();
+    m_internalSurfaceConfig.templateType = settings.value("templateType", 1).toInt();
+    m_internalSurfaceConfig.minDepthMm = settings.value("minDepthMm", 0.0).toDouble();
+    m_internalSurfaceConfig.minVolumeM3 = settings.value("minVolumeM3", 0.0).toDouble();
+    settings.endGroup();
+
     settings.beginGroup("OrbbecGemini");
     m_orbbecGeminiConfig.enabled = settings.value("orbbecGeminiEnabled", false).toBool();
     m_orbbecGeminiConfig.sdkRoot = settings.value(
@@ -839,6 +860,8 @@ void ConfigManager::load(const QString& filePath)
     m_tfminiPlusConfig.baudRate = settings.value("tfminiPlusBaudRate", 115200).toInt();
     m_tfminiPlusConfig.collisionThresholdMm =
         settings.value("collisionThresholdMm", 0).toInt();
+    m_tfminiPlusConfig.logFrames =
+        settings.value("tfminiPlusLogFrames", false).toBool();
     settings.endGroup();
 
     settings.beginGroup("Hmi");
