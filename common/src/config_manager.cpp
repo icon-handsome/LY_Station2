@@ -715,7 +715,7 @@ void ConfigManager::load(const QString& filePath)
         readLbDoubleListOrDefault(settings, "rightExtrinsic4x4", kLbDefaultRightExtrinsic4x4, 16);
     settings.endGroup();
 
-    // [LbnPose] 默认值与 testdata/test 150200 离线调通一致；上线前请多扫描验证，见 docs/算法使用API.md
+    // [LbnPose] 默认值与 testdata/test 150200 离线调通一致；上线前请多扫描验证，见 docs/station1/算法使用API.md
     settings.beginGroup("LbnPose");
     m_lbnPoseConfig.enabled = settings.value("enabled", true).toBool();
     m_lbnPoseConfig.useIdentityRtWithoutMarkers =

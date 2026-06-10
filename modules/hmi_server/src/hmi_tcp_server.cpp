@@ -1282,7 +1282,7 @@ void HmiTcpServer::pushDeviceStatus()
 
 QJsonObject HmiTcpServer::buildDeviceStatusPayload() const
 {
-    // onlineWord0 / faultWord0 位定义与 docs/封头检测工位_TCP_IP显控通信协议_v1.0.md §2.4 一致
+    // onlineWord0 / faultWord0 位定义与 docs/protocols/封头检测工位_TCP_IP显控通信协议_v1.0.md §2.4 一致
     constexpr int kBitIpcCore = 0;
     constexpr int kBitHmiClient = 1;
     constexpr int kBitMechEye = 2;

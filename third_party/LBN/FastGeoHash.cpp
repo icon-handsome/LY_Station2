@@ -943,7 +943,7 @@ int FastGeoHash::addVote(const cv::Point3f& sA,
 //   3) 兜底：点数较多时沿用「maxV>4 && count>4 && maxV>minPercent*count」
 //
 // 生产注意：门槛低于「maxV>=6」版，点少/噪声时更易 success，但也更易误匹配；
-//   上线前请多工况验证 Rt；若误匹增多可收紧 voteThreshold 或倍率（见 docs/算法使用API.md）
+//   上线前请多工况验证 Rt；若误匹增多可收紧 voteThreshold 或倍率（见 docs/station1/算法使用API.md）
 // -----------------------------------------------------------------------------
 //// count - 总票数
 //// minPercent - 选中id的最小占比

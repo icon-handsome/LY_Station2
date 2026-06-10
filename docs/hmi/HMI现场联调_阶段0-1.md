@@ -53,7 +53,7 @@ Qt 显控应能解析并展示：
 
 ## 4. Qt 显控集成（独立仓库）
 
-1. 在麒麟 Qt 工程实现 TCP Client，按 [`封头检测工位_TCP_IP显控通信协议_v1.0.md`](./封头检测工位_TCP_IP显控通信协议_v1.0.md) 解帧。
+1. 在麒麟 Qt 工程实现 TCP Client，按 [`封头检测工位_TCP_IP显控通信协议_v1.0.md`](../protocols/封头检测工位_TCP_IP显控通信协议_v1.0.md) 解帧。
 2. 可按 `type` 分发：`status.*`、`event.*`、`cmd.*` 响应。
 3. 连接成功后建议先发 `hmi.hello`，再 `cmd.get_status`。
 4. **不要**在 UI 调用 `cmd.trigger_scan` / `cmd.trigger_inspection` 等（Core 会返回失败）。

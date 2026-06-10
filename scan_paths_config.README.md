@@ -214,5 +214,5 @@ IPC-192.168.110.173_track-main/
 
 ## 相关文档
 
-- [多点位扫描与位姿跟踪完整流程.md](./docs/多点位扫描与位姿跟踪完整流程.md)
-- [封头检测工位PLC-IPC Modbus通信协议_v0.1.md](./docs/封头检测工位PLC-IPC%20Modbus通信协议_v0.1.md)
+- [多点位扫描与位姿跟踪完整流程.md](./docs/station1/多点位扫描与位姿跟踪完整流程.md)
+- [封头检测工位PLC-IPC Modbus通信协议_v0.1.md](./docs/protocols/封头检测工位PLC-IPC%20Modbus通信协议_v0.1.md)
