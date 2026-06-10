@@ -190,14 +190,49 @@ void ConsoleRuntime::initModules()
                 });
             QObject::connect(
                 orbbecGeminiService_.get(),
+                &scan_tracking::orbbec_gemini::OrbbecGeminiService::captureFinished,
+                [](const scan_tracking::orbbec_gemini::OrbbecCaptureResult& result) {
+                    if (result.errorCode
+                        != scan_tracking::orbbec_gemini::OrbbecCaptureErrorCode::Success) {
+                        qWarning(appLog).noquote()
+                            << QStringLiteral("[OrbbecGemini] Capture failed:")
+                            << result.errorMessage;
+                        return;
+                    }
+                    qInfo(appLog).noquote()
+                        << QStringLiteral("[OrbbecGemini] Capture saved req=") << result.requestId
+                        << QStringLiteral(" depthRaw=") << result.depthRawPngPath
+                        << QStringLiteral(" depthPreview=") << result.depthPreviewPngPath
+                        << QStringLiteral(" pointCloud=") << result.pointCloudPlyPath;
+                });
+            QObject::connect(
+                orbbecGeminiService_.get(),
                 &scan_tracking::orbbec_gemini::OrbbecGeminiService::openFinished,
-                [](bool success,
+                [this, orbbecConfig](bool success,
                    scan_tracking::orbbec_gemini::OrbbecGeminiDeviceSummary,
                    const QString& errorMessage) {
                     if (!success && !errorMessage.isEmpty()) {
                         qWarning(appLog).noquote()
                             << QStringLiteral("[OrbbecGemini] Open failed:")
                             << errorMessage;
+                        return;
+                    }
+                    if (!success || !orbbecConfig.captureOnStart || !orbbecConfig.saveCaptureToDisk) {
+                        return;
+                    }
+                    if (orbbecGeminiService_ == nullptr) {
+                        return;
+                    }
+                    const quint64 requestId = orbbecGeminiService_->requestCapture(
+                        orbbecConfig.captureTimeoutMs,
+                        true);
+                    if (requestId == 0) {
+                        qWarning(appLog).noquote()
+                            << QStringLiteral("[OrbbecGemini] Startup capture request rejected");
+                    } else {
+                        qInfo(appLog).noquote()
+                            << QStringLiteral("[OrbbecGemini] Startup capture requested req=")
+                            << requestId;
                     }
                 });
             orbbecGeminiService_->start();

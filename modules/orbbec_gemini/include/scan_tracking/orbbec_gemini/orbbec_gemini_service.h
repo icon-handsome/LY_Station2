@@ -23,7 +23,12 @@ public:
     void start();
     void stop();
 
+    void setOpenConfig(const OrbbecGeminiOpenConfig& config);
+
     OrbbecGeminiRuntimeState state() const { return m_currentState; }
+    bool isBusy() const { return m_busy; }
+
+    quint64 requestCapture(int timeoutMs = 0, bool saveToDisk = true);
 
 signals:
     void enumerateFinished(QVector<scan_tracking::orbbec_gemini::OrbbecGeminiDeviceSummary> devices);
@@ -34,6 +39,7 @@ signals:
     void stateChanged(
         scan_tracking::orbbec_gemini::OrbbecGeminiRuntimeState newState,
         QString description);
+    void captureFinished(scan_tracking::orbbec_gemini::OrbbecCaptureResult result);
     void logMessage(QString message);
 
 private slots:
@@ -46,11 +52,13 @@ private slots:
     void onWorkerStateChanged(
         scan_tracking::orbbec_gemini::OrbbecGeminiRuntimeState newState,
         QString description);
+    void onWorkerCaptureFinished(scan_tracking::orbbec_gemini::OrbbecCaptureResult result);
     void onWorkerLogMessage(QString message);
 
 signals:
     void sig_startWorker(scan_tracking::orbbec_gemini::OrbbecGeminiOpenConfig config);
     void sig_stopWorker();
+    void sig_performCapture(scan_tracking::orbbec_gemini::OrbbecCaptureRequest request);
 
 private:
     static void registerMetaTypes();
@@ -58,9 +66,13 @@ private:
     QThread* m_workerThread = nullptr;
     OrbbecGeminiWorker* m_worker = nullptr;
     OrbbecGeminiOpenConfig m_openConfig;
+    int m_defaultCaptureTimeoutMs = 5000;
+    quint64 m_nextRequestId = 1;
     OrbbecGeminiRuntimeState m_currentState = OrbbecGeminiRuntimeState::Idle;
     bool m_started = false;
     bool m_stopping = false;
+    bool m_busy = false;
+    bool m_hasExplicitOpenConfig = false;
 };
 
 }  // namespace orbbec_gemini

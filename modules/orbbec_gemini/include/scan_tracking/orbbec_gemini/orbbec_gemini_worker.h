@@ -19,6 +19,7 @@ public:
 public slots:
     void startWorker(const scan_tracking::orbbec_gemini::OrbbecGeminiOpenConfig& config);
     void stopWorker();
+    void performCapture(const scan_tracking::orbbec_gemini::OrbbecCaptureRequest& request);
 
 signals:
     void enumerateFinished(QVector<scan_tracking::orbbec_gemini::OrbbecGeminiDeviceSummary> devices);
@@ -29,11 +30,15 @@ signals:
     void stateChanged(
         scan_tracking::orbbec_gemini::OrbbecGeminiRuntimeState newState,
         QString description);
+    void captureFinished(scan_tracking::orbbec_gemini::OrbbecCaptureResult result);
     void logMessage(QString message);
 
 private:
     class Impl;
     Impl* m_impl = nullptr;
+    OrbbecGeminiOpenConfig m_config;
+    OrbbecGeminiDeviceSummary m_openedDevice;
+    bool m_stopping = false;
 };
 
 }  // namespace orbbec_gemini

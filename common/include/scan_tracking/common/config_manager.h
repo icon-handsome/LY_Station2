@@ -172,6 +172,15 @@ struct OrbbecGeminiConfig {
     QString sdkRoot;
     QString serial;
     int deviceIndex = 0;
+    int depthWidth = 640;
+    int depthHeight = 480;
+    int fps = 15;
+    int captureTimeoutMs = 5000;
+    int warmupFrameCount = 5;
+    bool saveCaptureToDisk = true;
+    QString captureCacheDir;
+    bool enableColorStream = false;
+    bool captureOnStart = true;
 };
 
 struct LivoxMid360Config {

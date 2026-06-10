@@ -3,9 +3,11 @@ scan_tracking_require_orbbec_sdk()
 add_library(scan_tracking_orbbec_gemini STATIC
     src/orbbec_gemini_service.cpp
     src/orbbec_gemini_worker.cpp
+    src/orbbec_capture_io.cpp
     include/scan_tracking/orbbec_gemini/orbbec_gemini_types.h
     include/scan_tracking/orbbec_gemini/orbbec_gemini_service.h
     include/scan_tracking/orbbec_gemini/orbbec_gemini_worker.h
+    include/scan_tracking/orbbec_gemini/orbbec_capture_io.h
 )
 
 set_target_properties(scan_tracking_orbbec_gemini PROPERTIES
@@ -23,6 +25,7 @@ target_link_libraries(scan_tracking_orbbec_gemini
         Qt5::Core
         scan_tracking_common
     PRIVATE
+        Qt5::Gui
         OrbbecSdk::OrbbecSDK
 )
 

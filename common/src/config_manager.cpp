@@ -546,6 +546,15 @@ void ConfigManager::writeDefaults(QSettings& settings)
     settings.setValue("orbbecGeminiSdkRoot", QStringLiteral("C:/Program Files/OrbbecSDK 2.8.6"));
     settings.setValue("orbbecGeminiSerial", QString());
     settings.setValue("orbbecGeminiDeviceIndex", 0);
+    settings.setValue("orbbecGeminiDepthWidth", 640);
+    settings.setValue("orbbecGeminiDepthHeight", 480);
+    settings.setValue("orbbecGeminiFps", 15);
+    settings.setValue("orbbecGeminiCaptureTimeoutMs", 5000);
+    settings.setValue("orbbecGeminiWarmupFrameCount", 5);
+    settings.setValue("orbbecGeminiSaveCaptureToDisk", true);
+    settings.setValue("orbbecGeminiCaptureCacheDir", QString());
+    settings.setValue("orbbecGeminiEnableColorStream", false);
+    settings.setValue("orbbecGeminiCaptureOnStart", false);
     settings.endGroup();
 
     settings.beginGroup("LivoxMid360");
@@ -839,6 +848,21 @@ void ConfigManager::load(const QString& filePath)
         QStringLiteral("C:/Program Files/OrbbecSDK 2.8.6")).toString();
     m_orbbecGeminiConfig.serial = settings.value("orbbecGeminiSerial", QString()).toString();
     m_orbbecGeminiConfig.deviceIndex = settings.value("orbbecGeminiDeviceIndex", 0).toInt();
+    m_orbbecGeminiConfig.depthWidth = settings.value("orbbecGeminiDepthWidth", 640).toInt();
+    m_orbbecGeminiConfig.depthHeight = settings.value("orbbecGeminiDepthHeight", 480).toInt();
+    m_orbbecGeminiConfig.fps = settings.value("orbbecGeminiFps", 15).toInt();
+    m_orbbecGeminiConfig.captureTimeoutMs =
+        settings.value("orbbecGeminiCaptureTimeoutMs", 5000).toInt();
+    m_orbbecGeminiConfig.warmupFrameCount =
+        settings.value("orbbecGeminiWarmupFrameCount", 5).toInt();
+    m_orbbecGeminiConfig.saveCaptureToDisk =
+        settings.value("orbbecGeminiSaveCaptureToDisk", true).toBool();
+    m_orbbecGeminiConfig.captureCacheDir =
+        settings.value("orbbecGeminiCaptureCacheDir", QString()).toString().trimmed();
+    m_orbbecGeminiConfig.enableColorStream =
+        settings.value("orbbecGeminiEnableColorStream", false).toBool();
+    m_orbbecGeminiConfig.captureOnStart =
+        settings.value("orbbecGeminiCaptureOnStart", false).toBool();
     settings.endGroup();
 
     settings.beginGroup("LivoxMid360");

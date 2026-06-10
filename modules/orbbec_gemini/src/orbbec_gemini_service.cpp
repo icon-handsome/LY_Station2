@@ -24,6 +24,12 @@ void OrbbecGeminiService::registerMetaTypes()
         "scan_tracking::orbbec_gemini::OrbbecGeminiOpenConfig");
     qRegisterMetaType<scan_tracking::orbbec_gemini::OrbbecGeminiDeviceSummary>(
         "scan_tracking::orbbec_gemini::OrbbecGeminiDeviceSummary");
+    qRegisterMetaType<scan_tracking::orbbec_gemini::OrbbecCaptureErrorCode>(
+        "scan_tracking::orbbec_gemini::OrbbecCaptureErrorCode");
+    qRegisterMetaType<scan_tracking::orbbec_gemini::OrbbecCaptureRequest>(
+        "scan_tracking::orbbec_gemini::OrbbecCaptureRequest");
+    qRegisterMetaType<scan_tracking::orbbec_gemini::OrbbecCaptureResult>(
+        "scan_tracking::orbbec_gemini::OrbbecCaptureResult");
     qRegisterMetaType<QVector<scan_tracking::orbbec_gemini::OrbbecGeminiDeviceSummary>>(
         "QVector<scan_tracking::orbbec_gemini::OrbbecGeminiDeviceSummary>");
     registered = true;
@@ -39,6 +45,14 @@ OrbbecGeminiService::~OrbbecGeminiService()
     stop();
 }
 
+void OrbbecGeminiService::setOpenConfig(const OrbbecGeminiOpenConfig& config)
+{
+    m_openConfig = config;
+    m_hasExplicitOpenConfig = true;
+    m_defaultCaptureTimeoutMs =
+        config.captureTimeoutMs > 0 ? config.captureTimeoutMs : 5000;
+}
+
 void OrbbecGeminiService::start()
 {
     if (m_started) {
@@ -48,10 +62,20 @@ void OrbbecGeminiService::start()
     registerMetaTypes();
 
     const auto* configManager = common::ConfigManager::instance();
-    if (configManager != nullptr) {
+    if (!m_hasExplicitOpenConfig && configManager != nullptr) {
         const auto& config = configManager->orbbecGeminiConfig();
         m_openConfig.serial = config.serial;
         m_openConfig.deviceIndex = config.deviceIndex;
+        m_openConfig.depthWidth = config.depthWidth;
+        m_openConfig.depthHeight = config.depthHeight;
+        m_openConfig.fps = config.fps;
+        m_openConfig.captureTimeoutMs = config.captureTimeoutMs;
+        m_openConfig.warmupFrameCount = config.warmupFrameCount;
+        m_openConfig.saveCaptureToDisk = config.saveCaptureToDisk;
+        m_openConfig.captureCacheRoot = config.captureCacheDir;
+        m_openConfig.enableColorStream = config.enableColorStream;
+        m_defaultCaptureTimeoutMs =
+            config.captureTimeoutMs > 0 ? config.captureTimeoutMs : 5000;
     }
 
     m_workerThread = new QThread();
@@ -62,6 +86,8 @@ void OrbbecGeminiService::start()
             m_worker, &OrbbecGeminiWorker::startWorker, Qt::QueuedConnection);
     connect(this, &OrbbecGeminiService::sig_stopWorker,
             m_worker, &OrbbecGeminiWorker::stopWorker, Qt::QueuedConnection);
+    connect(this, &OrbbecGeminiService::sig_performCapture,
+            m_worker, &OrbbecGeminiWorker::performCapture, Qt::QueuedConnection);
 
     connect(m_worker, &OrbbecGeminiWorker::enumerateFinished,
             this, &OrbbecGeminiService::onWorkerEnumerateFinished, Qt::QueuedConnection);
@@ -69,6 +95,8 @@ void OrbbecGeminiService::start()
             this, &OrbbecGeminiService::onWorkerOpenFinished, Qt::QueuedConnection);
     connect(m_worker, &OrbbecGeminiWorker::stateChanged,
             this, &OrbbecGeminiService::onWorkerStateChanged, Qt::QueuedConnection);
+    connect(m_worker, &OrbbecGeminiWorker::captureFinished,
+            this, &OrbbecGeminiService::onWorkerCaptureFinished, Qt::QueuedConnection);
     connect(m_worker, &OrbbecGeminiWorker::logMessage,
             this, &OrbbecGeminiService::onWorkerLogMessage, Qt::QueuedConnection);
 
@@ -77,6 +105,7 @@ void OrbbecGeminiService::start()
 
     m_started = true;
     m_stopping = false;
+    m_busy = false;
     m_currentState = OrbbecGeminiRuntimeState::Idle;
 
     emit sig_startWorker(m_openConfig);
@@ -89,10 +118,19 @@ void OrbbecGeminiService::stop()
     }
 
     m_stopping = true;
+    m_busy = false;
 
-    if (m_worker != nullptr) {
-        emit sig_stopWorker();
+    if (m_worker != nullptr && m_workerThread != nullptr && m_workerThread->isRunning()) {
+        QMetaObject::invokeMethod(
+            m_worker,
+            "stopWorker",
+            Qt::BlockingQueuedConnection);
+        m_worker->deleteLater();
+    } else {
+        delete m_worker;
     }
+    m_worker = nullptr;
+
     if (m_workerThread != nullptr) {
         m_workerThread->quit();
         if (!m_workerThread->wait(10000)) {
@@ -100,14 +138,33 @@ void OrbbecGeminiService::stop()
         }
     }
 
-    delete m_worker;
-    m_worker = nullptr;
     delete m_workerThread;
     m_workerThread = nullptr;
 
     m_started = false;
     m_stopping = false;
+    m_busy = false;
     m_currentState = OrbbecGeminiRuntimeState::Stopped;
+}
+
+quint64 OrbbecGeminiService::requestCapture(int timeoutMs, bool saveToDisk)
+{
+    if (!m_started || m_stopping || m_worker == nullptr) {
+        return 0;
+    }
+
+    if (m_busy || m_currentState != OrbbecGeminiRuntimeState::Ready) {
+        return 0;
+    }
+
+    OrbbecCaptureRequest request;
+    request.requestId = m_nextRequestId++;
+    request.timeoutMs = timeoutMs > 0 ? timeoutMs : m_defaultCaptureTimeoutMs;
+    request.saveToDisk = saveToDisk;
+
+    m_busy = true;
+    emit sig_performCapture(request);
+    return request.requestId;
 }
 
 void OrbbecGeminiService::onWorkerEnumerateFinished(
@@ -121,6 +178,9 @@ void OrbbecGeminiService::onWorkerOpenFinished(
     OrbbecGeminiDeviceSummary deviceInfo,
     QString errorMessage)
 {
+    if (success) {
+        m_currentState = OrbbecGeminiRuntimeState::Ready;
+    }
     emit openFinished(success, deviceInfo, errorMessage);
 }
 
@@ -129,7 +189,16 @@ void OrbbecGeminiService::onWorkerStateChanged(
     QString description)
 {
     m_currentState = newState;
-    emit stateChanged(newState, description);
+    if (newState != OrbbecGeminiRuntimeState::Capturing) {
+        m_busy = false;
+    }
+    emit stateChanged(newState, std::move(description));
+}
+
+void OrbbecGeminiService::onWorkerCaptureFinished(OrbbecCaptureResult result)
+{
+    m_busy = false;
+    emit captureFinished(std::move(result));
 }
 
 void OrbbecGeminiService::onWorkerLogMessage(QString message)
