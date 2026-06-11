@@ -174,7 +174,7 @@ Qt 发送 request（附带不重复的 `msgId`），Core 执行后返回对应 `
 | `cmd.trigger_scan` | `{ "segmentIndex": 1, "taskId": 123 }` | - | 触发单段扫描 |
 | `cmd.trigger_inspection` | `{ "taskId": 123 }` | - | 触发综合检测（**Core 拒绝**，须 PLC） |
 | `cmd.debug_trigger_inspection` | `{}` | `resultCode`, `cachedSegmentIndices`, `cachedSegmentCount`, `inspectionMessage`, `multiPathNote` | **调试**：用内存缓存点云跑蓝友并推 `event.inspection.finished`；须 `allowDebugTriggerInspection=true`；不写 PLC |
-| `cmd.trigger_self_check` | `{}` | - | 触发自检 (当前为占位) |
+| `cmd.trigger_self_check` | `{}` | - | 显控触发自检；**Core 已接收并应答 success**，实际自检流程与 `event.self_check.finished` 推送待实现 |
 | `cmd.trigger_pose_check` | `{}` | - | 触发位姿校验 (当前为占位) |
 | `cmd.trigger_code_read` | `{}` | - | 触发条码读取 (当前为占位) |
 | `cmd.trigger_result_reset`| `{}` | - | 触发结果缓存清空 |
@@ -185,7 +185,7 @@ Qt 发送 request（附带不重复的 `msgId`），Core 执行后返回对应 `
 | `cmd.modbus_disconnect` | `{}` | - | 断开 PLC Modbus |
 
 > **备注**：不需要支持 `cmd.set_config` （热修改配置），不涉及直接控制 PLC 寄存器的命令（Qt 不直接控制 PLC）。第二、第三工位参数暂不加入协议。  
-> **`cmd.trigger_*` 与 `cmd.debug_trigger_inspection` 区别**：前者一律拒绝（防撞机）；后者为配置门控的演示/联调入口，默认关闭。
+> **`cmd.trigger_*` 与 `cmd.debug_trigger_inspection` 区别**：除 `cmd.trigger_self_check`（仅接收应答，执行待实现）外，其余 `cmd.trigger_*` 一律拒绝（防撞机）；`cmd.debug_trigger_inspection` 为配置门控的演示/联调入口，默认关闭。
 
 ---
 

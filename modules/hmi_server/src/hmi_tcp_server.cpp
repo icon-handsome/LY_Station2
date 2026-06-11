@@ -655,7 +655,14 @@ void HmiTcpServer::handleCmdTriggerInspection(const QJsonObject& message)
 void HmiTcpServer::handleCmdTriggerSelfCheck(const QJsonObject& message)
 {
     const QString msgId = message.value(QLatin1String("msgId")).toString();
-    sendResponse(QLatin1String(msg_type::kCmdTriggerSelfCheck), msgId, false, QStringLiteral("直接触发未实现，请使用 PLC"));
+    // TODO(hmi): 显控自检命令已接入接收，后续对接 StateMachine::executeSelfCheckTask 或独立流程，并推送 event.self_check.finished
+    qInfo(LOG_HMI_SERVER).noquote()
+        << QStringLiteral("[TCPIP] 显控触发自检") << msgId;
+    sendResponse(
+        QLatin1String(msg_type::kCmdTriggerSelfCheck),
+        msgId,
+        true,
+        QStringLiteral("自检命令已接收，后续执行逻辑待实现"));
 }
 
 void HmiTcpServer::handleCmdTriggerPoseCheck(const QJsonObject& message)
