@@ -881,6 +881,7 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
             << "ScanSegmentIndex=" << protocol::registers::resolveScanSegmentIndexFromBlock(values)
             << "RequestTimeout_s=" << formatPlcRegisterValueForLog(regs::kRequestTimeoutSeconds,
                                                                    values.value(regs::kRequestTimeoutSeconds))
+            << "Robot_Status_Word=" << values.value(regs::kRobotStatusWord)
             << "Trig_LoadGrasp=" << values.value(regs::modbusIndexFromPlcAddress(40020))
             << "Trig_StationMaterialCheck=" << values.value(regs::modbusIndexFromPlcAddress(40021))
             << "Trig_PoseCheck=" << values.value(regs::modbusIndexFromPlcAddress(40022))
@@ -939,7 +940,7 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
             "ScanSegmentIndex",        // 15  40015
             "ScanSegmentIndex_Robot",  // 16  40016 机械臂/PLC 实际段号
             "RequestTimeout_s",        // 17  40017
-            "Reserved_18",             // 18
+            "Robot_Status_Word",       // 18  40018 埃斯顿 Robot 40004，PLC 转发
             "Reserved_19",             // 19
             "Trig_LoadGrasp",          // 20  40020
             "Trig_StationMaterialCheck", // 21

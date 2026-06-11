@@ -110,6 +110,12 @@ public:
     /// PLC 下发的机械臂末端中心点位姿（40029~40040，CDAB FLOAT32）
     protocol::registers::Pose6f robotTcpPose() const { return m_robotTcpPose; }
 
+    /// PLC 转发的埃斯顿机械臂状态字（40018，位定义见 protocol::registers::robot_status_bits）
+    quint16 robotStatusWord() const
+    {
+        return m_lastCommandBlock.value(protocol::registers::kRobotStatusWord, 0);
+    }
+
     /// 注册综合检测结果推送回调（tracking 不可用等路径由状态机补发）
     void setInspectionResultPublisher(std::function<void(const tracking::InspectionResult&)> publisher);
 

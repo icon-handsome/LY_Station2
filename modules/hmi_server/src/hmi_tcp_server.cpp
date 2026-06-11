@@ -1132,6 +1132,9 @@ QJsonObject HmiTcpServer::buildPlcStatusPayload() const
             // scanSegmentTotal 从配置获取，不再从 PLC 读取
             const auto* cfgMgr = scan_tracking::common::ConfigManager::instance();
             payload[QLatin1String("scanSegmentTotal")] = cfgMgr ? cfgMgr->trackingConfig().scanSegmentTotal : 0;
+            if (cb.size() > regs::kRobotStatusWord) {
+                payload[QLatin1String("robotStatusWord")] = cb.value(regs::kRobotStatusWord);
+            }
         }
     }
     return payload;

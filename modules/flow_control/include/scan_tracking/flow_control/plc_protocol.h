@@ -201,6 +201,23 @@ constexpr int kRecipeId = modbusIndexFromPlcAddress(40014);
 constexpr int kScanSegmentIndex = modbusIndexFromPlcAddress(40015);       ///< 地址表 40015
 constexpr int kScanSegmentIndexRobot = modbusIndexFromPlcAddress(40016);  ///< 机械臂/PLC 实际下发段号
 constexpr int kRequestTimeoutSeconds = modbusIndexFromPlcAddress(40017);
+constexpr int kRobotStatusWord = modbusIndexFromPlcAddress(40018);        ///< 机械臂状态字（PLC 转发埃斯顿 Robot 40004）
+
+/// 埃斯顿 ER 系列 Robot Modbus 40004 状态字位定义（RCS2 V2.0，PLC 原样转发至 IPC 40018）
+namespace robot_status_bits {
+constexpr quint16 kManualMode = 1u << 0;       ///< 手动操作模式
+constexpr quint16 kAutoMode = 1u << 1;         ///< 自动操作模式
+constexpr quint16 kRemoteMode = 1u << 2;       ///< 远程操作模式
+constexpr quint16 kEnabled = 1u << 3;          ///< 使能（上励磁）
+constexpr quint16 kSystemRunning = 1u << 4;    ///< 系统运行
+constexpr quint16 kSystemError = 1u << 5;      ///< 系统错误
+constexpr quint16 kProgramRunning = 1u << 6;   ///< 程序运行
+constexpr quint16 kRobotMoving = 1u << 7;      ///< 机器人运动
+constexpr quint16 kSystemAlarm = 1u << 10;     ///< 系统报警
+constexpr quint16 kServoAlarm = 1u << 11;     ///< 伺服报警
+constexpr quint16 kEmergencyStop = 1u << 12;   ///< 急停
+constexpr quint16 kSafetyDoor = 1u << 13;      ///< 安全门
+}  // namespace robot_status_bits
 
 // --- 机械臂末端中心点位姿（PLC → IPC，CDAB FLOAT32，单位 mm / deg）---
 constexpr int kRobotTcpX = modbusIndexFromPlcAddress(40029);
