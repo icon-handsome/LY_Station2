@@ -7,7 +7,7 @@
 - 算法源码：`third_party/Po_Kou_Ce_Liang`
 - CMake 目标：`po_kou_ce_liang`（别名 `Bevel::Measurement`）
 - 开关：`SCAN_TRACKING_ENABLE_BEVEL_MEASUREMENT=ON`
-- 依赖：PCL 1.12、OpenCV 3.4.3（复用 `third_party/LB/opencv-3.4.3-vc14_vc15`）
+- 依赖：PCL 1.12、OpenCV 3.4.3（`third_party/opencv-3.4.3-vc14_vc15`，LB/LBN/Po_Kou 共用）
 
 ## 主流程
 
@@ -113,6 +113,44 @@ bevel::BevelMeasurementResult solveBevelFromRawCloud(
 1. **配置文件找不到**：确认 exe 旁存在 `bevel/config.txt`，或设置 `SCAN_TRACKING_BEVEL_CONFIG_DIR`。
 2. **模板加载失败**：确认 `bevel/data/templates/type_0_*` 已部署。
 3. **PCL/OpenCV DLL**：使用与 LB 相同的运行时部署（`scan_tracking_deploy_pcl_runtime` / `scan_tracking_deploy_opencv_runtime`）。
+
+---
+
+# LB 双目位姿算法（third_party/LB）集成说明
+
+封头段（非转动点位）由 CXP 双目驱动 LB 算法，输出位姿矩阵 `T_N`（`Rt_global`），与 LBN 维护的 `T0'` 相乘做点云拼接。
+
+## 目录与构建
+
+- 算法源码：`third_party/LB`（`TR_Mark_*` + `AppConfig`）
+- CMake 目标：`lb_pose_detection`（别名 `LbPoseDetection::lb_pose_detection`）
+- 开关：`SCAN_TRACKING_ENABLE_LB_POSE_DETECTION`（默认 ON）
+- 适配层：`modules/vision/src/lb_pose_detection_adapter.cpp` → `runLbPoseDetection()`
+
+## 配置（算法参数以 track_config.ini 为准）
+
+| 文件 | 职责 |
+|------|------|
+| `third_party/LB/track_config.ini` | **权威**：`[Recon]` 双目标定与重建约束、`[GeoHash]` 含 `scan_to_marker_RT`、`[Detector]`/`[Limits]` |
+| `config.ini` `[LbPose]` | IPC 部署：`trackConfigFile` 指向上述 ini；`templateFile` 可覆盖模板路径 |
+
+```ini
+[LbPose]
+trackConfigFile=third_party/LB/track_config.ini
+templateFile=third_party/LB/data/template-3D-ALL-Shift-Cut-Cut.txt
+```
+
+算法侧更新标定或约束时，**只需替换 `track_config.ini`**（保持 UTF-8 BOM），无需再改 `config.ini` 中的矩阵字段。
+
+## 主流程
+
+- 转盘段（`needMechEye2D=true`）：仅 LBN，跳过 LB
+- 封头段：CXP 双目 → `runLbPoseDetection()` → `bundle.lbPoseResult.poseMatrix`
+- 状态机：`applySegmentPoseStitching()` 使用 `T0' × T_N`
+
+## HMI
+
+`cmd.get_config` 的 `lbPose` 字段：`trackConfigFile`、`templateFile`、`dataRoot`（离线调试用）。
 
 ---
 

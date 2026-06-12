@@ -14,7 +14,7 @@
 - Eigen 3.4.0: `third_party\eigen-3.4.0`
 - Mech-Eye SDK: `third_party\Mech-Eye SDK-2.5.4`
 - 海康 MVS SDK（含 CXP GenTL）: `third_party\MVS`
-- OpenCV: `third_party\LB\opencv-3.4.3-vc14_vc15`
+- OpenCV: `third_party\opencv-3.4.3-vc14_vc15`（LB/LBN/Po_Kou 共用）
 - CXP 双目（CH250，PCIe 采集卡）: 主流程 A/B 输入，替代原 GigE 海康 A/B
 
 ## 打开方式
@@ -50,7 +50,8 @@
 | `[Station]` | `scanPathsConfigPath` | 当前工位扫描路径 JSON；为空时回退根目录 `scan_paths_config.json` |
 | `[Station]` | `defaultWorkMode` | 工位默认模式：`MODE_END_CAP` / `MODE_CYLINDER_SEMI` / `MODE_SEMI_FINISHED` |
 | `[Station]` | `profileIni` | 可选工位 profile；存在时覆盖 `[Station]` 同名字段 |
-| `[LbPose]` | `leftIntrinsic3x3` 等 | LB 双目标定矩阵与 2D 重建参数 |
+| `[LbPose]` | `trackConfigFile` | LB 算法配置入口，指向 `third_party/LB/track_config.ini`（标定/GeoHash/Recon 以该文件为准） |
+| `[LbPose]` | `templateFile` | 可选：覆盖 `track_config.ini` 的模板点云路径 |
 | `[LbnPose]` | `useIdentityRtWithoutMarkers` | 转盘无标记联调时 `true`，Rt 用单位阵 |
 | `[Tracking]` | `scanSegmentTotal` | PLC 扫描总段数（上限 16，现场可设 10） |
 | `[Bevel]` | `configPath` / `templateDir` | Po_Kou 坡口测量配置与模板目录 |
@@ -73,7 +74,7 @@ PLC 触发任务由 `modules/flow_control/include/scan_tracking/flow_control/han
 | 主题 | 文档 |
 |------|------|
 | 文档总索引 | [`docs/README.md`](docs/README.md) |
-| 未完成项 / 进度 | [`docs/station1/项目未完成事项清单_v1.0.md`](docs/station1/项目未完成事项清单_v1.0.md)（v1.6） |
+| 未完成项 / 进度 | [`docs/station1/项目未完成事项清单_v1.0.md`](docs/station1/项目未完成事项清单_v1.0.md)（v1.7） |
 | 扫描流程与落盘 | [`docs/station1/多点位扫描与位姿跟踪完整流程.md`](docs/station1/多点位扫描与位姿跟踪完整流程.md) |
 | 蓝友 / LBN / 缓存 API | [`docs/station1/算法使用API.md`](docs/station1/算法使用API.md) |
 | Modbus 协议 | [`docs/protocols/封头检测工位PLC-IPC Modbus通信协议_v0.1.md`](docs/protocols/封头检测工位PLC-IPC%20Modbus通信协议_v0.1.md) |
