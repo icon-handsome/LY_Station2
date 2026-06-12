@@ -1,3 +1,10 @@
+/**
+ * @file gemini335_smoke_runner.cpp
+ * @brief Orbbec Gemini 独立冒烟测试程序
+ *
+ * 命令行直接驱动 OrbbecGeminiWorker（不经 Service 层），用于联调设备连接与采集落盘。
+ */
+
 #include <QtCore/QCoreApplication>
 #include <QtCore/QEventLoop>
 #include <QtCore/QLoggingCategory>
@@ -89,6 +96,7 @@ int main(int argc, char* argv[])
         return 0;
     }
 
+    // 冒烟程序在同一线程直接调用 Worker，无需 QThread 封装
     scan_tracking::orbbec_gemini::OrbbecGeminiWorker worker;
     QObject::connect(
         &worker,
@@ -104,6 +112,7 @@ int main(int argc, char* argv[])
     int remainingCaptures = options.doCapture ? options.captureCount : 0;
     QEventLoop loop;
 
+    // 打开成功后按需触发首次采集；无 --capture 时仅验证枚举与打开
     QObject::connect(
         &worker,
         &scan_tracking::orbbec_gemini::OrbbecGeminiWorker::openFinished,
@@ -154,6 +163,7 @@ int main(int argc, char* argv[])
                 return;
             }
 
+            // 连续多次采集时短暂间隔，避免 pipeline 尚未就绪
             QTimer::singleShot(200, &worker, [&worker, &options, &remainingCaptures]() {
                 scan_tracking::orbbec_gemini::OrbbecCaptureRequest request;
                 request.requestId = static_cast<quint64>(options.captureCount - remainingCaptures + 1);

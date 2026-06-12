@@ -1,5 +1,6 @@
 #include "scan_tracking/orbbec_gemini/orbbec_gemini_worker.h"
 
+#include "scan_tracking/orbbec_gemini/orbbec_gemini_types.h"
 #include "scan_tracking/orbbec_gemini/orbbec_capture_io.h"
 
 #include "scan_tracking/common/capture_cache_paths.h"
@@ -76,6 +77,7 @@ int positiveOrDefault(int value, int fallback)
     return value > 0 ? value : fallback;
 }
 
+// 轮询等待包含深度帧的 FrameSet，避免单次 waitForFrameset 阻塞过久
 std::shared_ptr<ob::FrameSet> waitForDepthFrameSet(
     ob::Pipeline& pipeline,
     int timeoutMs,
@@ -97,6 +99,7 @@ std::shared_ptr<ob::FrameSet> waitForDepthFrameSet(
     return nullptr;
 }
 
+// 丢弃启动后前几帧，等待自动曝光/深度稳定
 void discardWarmupFrames(ob::Pipeline& pipeline, int frameCount)
 {
     for (int index = 0; index < frameCount; ++index) {
@@ -104,6 +107,7 @@ void discardWarmupFrames(ob::Pipeline& pipeline, int frameCount)
     }
 }
 
+// 使用 SDK PointCloudFilter 将深度帧转换为 OBPoint 数组
 bool extractPointCloud(
     ob::Pipeline& pipeline,
     const std::shared_ptr<ob::FrameSet>& frameSet,
@@ -149,6 +153,7 @@ bool extractPointCloud(
 
 }  // namespace
 
+// PIMPL：隔离 libobsensor 头文件，避免污染 worker 头文件的编译依赖
 class OrbbecGeminiWorker::Impl {
 public:
     std::unique_ptr<ob::Context> context;
@@ -172,6 +177,7 @@ OrbbecGeminiWorker::~OrbbecGeminiWorker()
 
 void OrbbecGeminiWorker::startWorker(const OrbbecGeminiOpenConfig& config)
 {
+    // 重入时先释放旧 pipeline，保证 SDK 对象生命周期清晰
     stopWorker();
 
     m_config = config;
@@ -191,7 +197,7 @@ void OrbbecGeminiWorker::startWorker(const OrbbecGeminiOpenConfig& config)
         if (count == 0) {
             emit logMessage(QStringLiteral("%1 No device found").arg(logPrefix()));
             emit enumerateFinished(summaries);
-            emit openFinished(false, {}, QStringLiteral("No Orbbec device connected"));
+            emit openFinished(false, OrbbecGeminiDeviceSummary{}, QStringLiteral("No Orbbec device connected"));
             emit stateChanged(OrbbecGeminiRuntimeState::Failed, QStringLiteral("No device found"));
             return;
         }
@@ -219,6 +225,7 @@ void OrbbecGeminiWorker::startWorker(const OrbbecGeminiOpenConfig& config)
         emit enumerateFinished(summaries);
         emit stateChanged(OrbbecGeminiRuntimeState::Opening, QStringLiteral("Opening device"));
 
+        // 优先按序列号打开，便于多相机场景下精确定位设备
         const QString trimmedSerial = config.serial.trimmed();
         int openedIndex = config.deviceIndex;
         if (!trimmedSerial.isEmpty()) {
@@ -256,6 +263,7 @@ void OrbbecGeminiWorker::startWorker(const OrbbecGeminiOpenConfig& config)
         const int depthWidth = positiveOrDefault(config.depthWidth, 640);
         const int depthHeight = positiveOrDefault(config.depthHeight, 480);
         const int fps = positiveOrDefault(config.fps, 15);
+        // 深度流使用 Y16 格式；彩色流可选，当前采集流程不依赖彩色帧
         streamConfig->enableVideoStream(
             OB_STREAM_DEPTH,
             depthWidth,
@@ -293,7 +301,7 @@ void OrbbecGeminiWorker::startWorker(const OrbbecGeminiOpenConfig& config)
     } catch (const ob::Error& error) {
         const QString message = QString::fromStdString(error.what());
         emit logMessage(QStringLiteral("%1 Open failed: %2").arg(logPrefix(), message));
-        emit openFinished(false, {}, message);
+        emit openFinished(false, OrbbecGeminiDeviceSummary{}, message);
         emit stateChanged(OrbbecGeminiRuntimeState::Failed, message);
         if (m_impl->pipeline != nullptr && m_impl->streamsStarted) {
             try {
@@ -307,7 +315,7 @@ void OrbbecGeminiWorker::startWorker(const OrbbecGeminiOpenConfig& config)
     } catch (const std::exception& error) {
         const QString message = QString::fromUtf8(error.what());
         emit logMessage(QStringLiteral("%1 Open failed: %2").arg(logPrefix(), message));
-        emit openFinished(false, {}, message);
+        emit openFinished(false, OrbbecGeminiDeviceSummary{}, message);
         emit stateChanged(OrbbecGeminiRuntimeState::Failed, message);
         if (m_impl->pipeline != nullptr && m_impl->streamsStarted) {
             try {
@@ -373,6 +381,7 @@ void OrbbecGeminiWorker::performCapture(const OrbbecCaptureRequest& request)
     timer.start();
 
     const int timeoutMs = positiveOrDefault(request.timeoutMs, m_config.captureTimeoutMs);
+    // 请求级与配置级均需允许落盘才会写文件
     const bool saveToDisk = request.saveToDisk && m_config.saveCaptureToDisk;
 
     try {
@@ -411,6 +420,7 @@ void OrbbecGeminiWorker::performCapture(const OrbbecCaptureRequest& request)
         }
 
         if (saveToDisk) {
+            // 生成带 requestId 与时间戳的唯一文件名，写入 Orbbec 缓存子目录
             const QString timestamp = scan_tracking::common::buildCaptureTimestamp();
             buildOrbbecCapturePaths(
                 m_config.captureCacheRoot,
@@ -439,6 +449,7 @@ void OrbbecGeminiWorker::performCapture(const OrbbecCaptureRequest& request)
                 result.errorMessage = QStringLiteral("Failed to save point cloud PLY");
             }
         } else {
+            // 不落盘时仅统计有效深度像素数
             int validCount = 0;
             const int pixelCount = result.depthWidth * result.depthHeight;
             for (int index = 0; index < pixelCount; ++index) {

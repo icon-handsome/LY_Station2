@@ -11,6 +11,7 @@ Q_LOGGING_CATEGORY(LOG_ORBBEC_GEMINI_SVC, "orbbec.gemini.service")
 namespace scan_tracking {
 namespace orbbec_gemini {
 
+// 跨线程信号槽传递自定义类型前必须注册
 void OrbbecGeminiService::registerMetaTypes()
 {
     static bool registered = false;
@@ -61,6 +62,7 @@ void OrbbecGeminiService::start()
 
     registerMetaTypes();
 
+    // 未显式 setOpenConfig 时，从全局配置管理器加载 Orbbec 参数
     const auto* configManager = common::ConfigManager::instance();
     if (!m_hasExplicitOpenConfig && configManager != nullptr) {
         const auto& config = configManager->orbbecGeminiConfig();
@@ -78,10 +80,12 @@ void OrbbecGeminiService::start()
             config.captureTimeoutMs > 0 ? config.captureTimeoutMs : 5000;
     }
 
+    // Worker 运行在独立线程，所有 SDK 调用与采集均在子线程完成
     m_workerThread = new QThread();
     m_worker = new OrbbecGeminiWorker();
     m_worker->moveToThread(m_workerThread);
 
+    // 主线程 → Worker：QueuedConnection 异步投递
     connect(this, &OrbbecGeminiService::sig_startWorker,
             m_worker, &OrbbecGeminiWorker::startWorker, Qt::QueuedConnection);
     connect(this, &OrbbecGeminiService::sig_stopWorker,
@@ -89,6 +93,7 @@ void OrbbecGeminiService::start()
     connect(this, &OrbbecGeminiService::sig_performCapture,
             m_worker, &OrbbecGeminiWorker::performCapture, Qt::QueuedConnection);
 
+    // Worker → 主线程：结果信号同样走队列连接
     connect(m_worker, &OrbbecGeminiWorker::enumerateFinished,
             this, &OrbbecGeminiService::onWorkerEnumerateFinished, Qt::QueuedConnection);
     connect(m_worker, &OrbbecGeminiWorker::openFinished,
@@ -120,6 +125,7 @@ void OrbbecGeminiService::stop()
     m_stopping = true;
     m_busy = false;
 
+    // 阻塞等待 Worker 在子线程中释放 SDK 资源，再销毁线程
     if (m_worker != nullptr && m_workerThread != nullptr && m_workerThread->isRunning()) {
         QMetaObject::invokeMethod(
             m_worker,
@@ -153,6 +159,7 @@ quint64 OrbbecGeminiService::requestCapture(int timeoutMs, bool saveToDisk)
         return 0;
     }
 
+    // 仅 Ready 且非 busy 时接受新采集，避免并发采集导致 SDK 状态异常
     if (m_busy || m_currentState != OrbbecGeminiRuntimeState::Ready) {
         return 0;
     }
@@ -189,6 +196,7 @@ void OrbbecGeminiService::onWorkerStateChanged(
     QString description)
 {
     m_currentState = newState;
+    // Capturing 期间保持 busy；其他状态（含 Ready/Failed）均视为可接受新请求
     if (newState != OrbbecGeminiRuntimeState::Capturing) {
         m_busy = false;
     }

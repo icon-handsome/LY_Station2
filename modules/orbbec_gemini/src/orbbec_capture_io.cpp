@@ -19,6 +19,7 @@ namespace orbbec_gemini {
 
 namespace {
 
+// 过滤 SDK 输出的无效点：非有限值或原点视为无效
 bool isValidPoint(float x, float y, float z)
 {
     return std::isfinite(x) && std::isfinite(y) && std::isfinite(z)
@@ -73,13 +74,13 @@ bool saveDepthFramePngs(
         return false;
     }
 
-    const int pixelCount = frame.width * frame.height;
     QImage rawImage(frame.width, frame.height, QImage::Format_Grayscale16);
     if (rawImage.isNull()) {
         qWarning(LOG_ORBBEC_IO) << "saveDepthFramePngs: failed to allocate raw image";
         return false;
     }
 
+    // 单次遍历：拷贝原始深度并统计有效像素的 min/max（用于预览归一化）
     uint16_t minValue = std::numeric_limits<uint16_t>::max();
     uint16_t maxValue = 0;
     int validCount = 0;
@@ -118,6 +119,7 @@ bool saveDepthFramePngs(
             return false;
         }
 
+        // 预览图：将有效深度线性映射到 0-255，便于人工查看
         const float scale = frame.valueScale > 0.0f ? frame.valueScale : 1.0f;
         const float minMm = static_cast<float>(minValue) * scale;
         const float maxMm = static_cast<float>(maxValue) * scale;
@@ -162,6 +164,7 @@ bool savePointCloudPly(
         return false;
     }
 
+    // 仅保存有效点，避免 PLY 中出现大量零点噪声
     std::vector<OrbbecPointView> validPoints;
     validPoints.reserve(points.size());
     for (const OrbbecPointView& point : points) {
