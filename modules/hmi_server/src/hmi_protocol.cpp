@@ -75,6 +75,12 @@ QString summarizeHmiTracePayload(const QString& type, const QJsonObject& payload
             summary += QStringLiteral(" robot=0x%1")
                             .arg(payload.value(QLatin1String("robotStatusWord")).toInt(0), 4, 16, QLatin1Char('0'));
         }
+        if (payload.contains(QLatin1String("telescopicRodStatus"))) {
+            summary += QStringLiteral(" rod=%1 mag=%2 estop=%3")
+                            .arg(payload.value(QLatin1String("telescopicRodStatus")).toInt())
+                            .arg(payload.value(QLatin1String("electromagnetStatus")).toInt())
+                            .arg(payload.value(QLatin1String("estopButtonStatus")).toInt());
+        }
         return summary;
     }
     if (type == QLatin1String(kStatusCamera)) {

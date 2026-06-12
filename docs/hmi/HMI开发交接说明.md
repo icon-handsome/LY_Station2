@@ -72,6 +72,7 @@ Trig_Inspection / cmd.debug_trigger_inspection
 ### 3.2 监视面（阶段 1）
 
 - [x] `status.system` / `status.plc` / `status.camera` / `status.device`
+- [x] `status.plc` 辅机字段：`telescopicRodStatus` / `rollerSetFreqHz` / `rollerRunFreqHz` / `electromagnetStatus` / `estopButtonStatus`（两工位均推送；status=2 时 `event.alarm` code 920/921）
 - [x] 状态变化即时推送
 - [x] `event.scan.*`、`event.bundle.captured`、`event.image.captured`
 - [x] `event.alarm`、业务事件（绑定 StateMachine）

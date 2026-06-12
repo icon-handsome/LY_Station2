@@ -963,6 +963,11 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
             "RobotTcp_Ry_H",           // 38
             "RobotTcp_Rz_L",           // 39  40039
             "RobotTcp_Rz_H",           // 40  40040
+            "TelescopicRod_Status",    // 41  40041
+            "Roller_SetFreq_Hz",       // 42  40042
+            "Roller_RunFreq_Hz",       // 43  40043
+            "Electromagnet_Status",    // 44  40044
+            "EstopButton_Status",      // 45  40045
         };
         constexpr int kNameCount = sizeof(kRegisterNames) / sizeof(kRegisterNames[0]);
         const int compareCount = qMin(previousCommandBlock.size(),

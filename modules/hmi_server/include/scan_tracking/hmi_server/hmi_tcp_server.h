@@ -17,6 +17,7 @@
 #include <QtCore/QHash>
 #include <QtCore/QTimer>
 #include <QtCore/QString>
+#include <QtCore/QVector>
 #include <QtCore/QJsonObject>
 
 #include "scan_tracking/tracking/tracking_service.h"
@@ -220,6 +221,14 @@ private:
     void checkCameraConnectivityEdges();
 
     void emitCameraConnectivityAlarm(const QString& deviceLabel, bool connected, int code);
+
+    /// 检测辅机状态字变为 2（故障/报警）时向显控推送 event.alarm
+    void checkPlcAuxDeviceAlarms(const QVector<quint16>& commandBlock);
+
+    void emitPlcAuxDeviceAlarm(const QString& message, int code, int level);
+
+    /// 同步辅机 alarm 边沿缓存（新客户端接入后调用，不发送 alarm）
+    void syncPlcAuxDeviceAlarmCache(const QVector<quint16>& commandBlock);
     
     /// 向 Qt 端周期性推送设备在线状态字和故障状态字（对应协议 status.device）
     void pushDeviceStatus();
@@ -311,6 +320,14 @@ private:
         bool valid = false;
     };
     CameraConnectivityCache m_cameraConnectivityCache;
+
+    /// 辅机状态 alarm 边沿缓存（TelescopicRod / Electromagnet status=2）
+    struct PlcAuxDeviceAlarmCache {
+        int telescopicRodStatus = -1;
+        int electromagnetStatus = -1;
+        bool valid = false;
+    };
+    PlcAuxDeviceAlarmCache m_plcAuxDeviceAlarmCache;
 
     bool m_personZoneAlarm = false;          ///< 上次显控上报的人员区域 alarm 值
     bool m_personZoneAlarmCacheValid = false; ///< 是否已收到过至少一次人员区域上报

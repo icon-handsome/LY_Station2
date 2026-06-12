@@ -183,7 +183,7 @@ inline quint16 plcAnalogToUInt16(quint16 word0, quint16 word1 = 0)
 // ==================== 寄存器区块定义 ====================
 
 constexpr int kCommandBlockStart = 0;    ///< 命令区起始地址：PLC→IPC的控制指令区域（0 基偏移）
-constexpr int kCommandBlockSize = 41;    ///< 命令区大小：40001~40040（modbusIndex 1~40，含 index 0 预留）
+constexpr int kCommandBlockSize = 46;    ///< 命令区大小：40001~40045（modbusIndex 1~45，含 index 0 预留）
 constexpr int kResultBlockStart = 101;   ///< 结果区起始：40101（modbusIndex=101）
 constexpr int kResultBlockSize = 84;     ///< 结果区大小：共84个寄存器
 
@@ -226,6 +226,13 @@ constexpr int kRobotTcpZ = modbusIndexFromPlcAddress(40033);
 constexpr int kRobotTcpRx = modbusIndexFromPlcAddress(40035);
 constexpr int kRobotTcpRy = modbusIndexFromPlcAddress(40037);
 constexpr int kRobotTcpRz = modbusIndexFromPlcAddress(40039);
+
+// --- 辅机状态（PLC → IPC，显控监视）---
+constexpr int kTelescopicRodStatus = modbusIndexFromPlcAddress(40041);
+constexpr int kRollerSetFreqHz = modbusIndexFromPlcAddress(40042);
+constexpr int kRollerRunFreqHz = modbusIndexFromPlcAddress(40043);
+constexpr int kElectromagnetStatus = modbusIndexFromPlcAddress(40044);
+constexpr int kEstopButtonStatus = modbusIndexFromPlcAddress(40045);
 
 /// 六轴位姿（x/y/z + rx/ry/rz）
 struct Pose6f {

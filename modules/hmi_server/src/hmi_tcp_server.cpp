@@ -83,6 +83,8 @@ constexpr int kAlarmCodeMechEyeConnect = 910;
 constexpr int kAlarmCodeMechEyeDisconnect = 911;
 constexpr int kAlarmCodeHikConnect = 912;
 constexpr int kAlarmCodeHikDisconnect = 913;
+constexpr int kAlarmCodeTelescopicRodFault = 920;
+constexpr int kAlarmCodeElectromagnetFault = 921;
 
 bool shouldForwardLogToHmi(QtMsgType type, const QString& category, const QString& msg)
 {
@@ -256,6 +258,9 @@ void HmiTcpServer::onNewConnection()
         pushAllStatusToClient();
         publishInitialInspectionDisplay();
         syncCameraConnectivityCache();
+        if (m_stateMachine) {
+            syncPlcAuxDeviceAlarmCache(m_stateMachine->lastCommandBlock());
+        }
     }
 }
 
@@ -1001,6 +1006,7 @@ void HmiTcpServer::invalidateStatusPushCache()
     m_cameraStatusCache = {};
     m_deviceStatusCache = {};
     m_cameraConnectivityCache = {};
+    m_plcAuxDeviceAlarmCache = {};
 }
 
 bool HmiTcpServer::pushStatusIfChanged(const QString& type, const QJsonObject& payload,
@@ -1049,6 +1055,9 @@ void HmiTcpServer::syncStatusPushCacheFromCurrent()
     m_deviceStatusCache.payload = buildDeviceStatusPayload();
     m_deviceStatusCache.isValid = true;
     syncCameraConnectivityCache();
+    if (m_stateMachine) {
+        syncPlcAuxDeviceAlarmCache(m_stateMachine->lastCommandBlock());
+    }
 }
 
 void HmiTcpServer::pushSystemStatus()
@@ -1142,9 +1151,72 @@ QJsonObject HmiTcpServer::buildPlcStatusPayload() const
             if (cb.size() > regs::kRobotStatusWord) {
                 payload[QLatin1String("robotStatusWord")] = cb.value(regs::kRobotStatusWord);
             }
+            if (cb.size() > regs::kEstopButtonStatus) {
+                payload[QLatin1String("telescopicRodStatus")] = cb.value(regs::kTelescopicRodStatus);
+                payload[QLatin1String("rollerSetFreqHz")] = cb.value(regs::kRollerSetFreqHz);
+                payload[QLatin1String("rollerRunFreqHz")] = cb.value(regs::kRollerRunFreqHz);
+                payload[QLatin1String("electromagnetStatus")] = cb.value(regs::kElectromagnetStatus);
+                payload[QLatin1String("estopButtonStatus")] = cb.value(regs::kEstopButtonStatus);
+            }
         }
     }
     return payload;
+}
+
+void HmiTcpServer::syncPlcAuxDeviceAlarmCache(const QVector<quint16>& commandBlock)
+{
+    namespace regs = flow_control::protocol::registers;
+    if (commandBlock.size() <= regs::kEstopButtonStatus) {
+        m_plcAuxDeviceAlarmCache = {};
+        return;
+    }
+    m_plcAuxDeviceAlarmCache.telescopicRodStatus = commandBlock.value(regs::kTelescopicRodStatus);
+    m_plcAuxDeviceAlarmCache.electromagnetStatus = commandBlock.value(regs::kElectromagnetStatus);
+    m_plcAuxDeviceAlarmCache.valid = true;
+}
+
+void HmiTcpServer::emitPlcAuxDeviceAlarm(const QString& message, int code, int level)
+{
+    if (!hasClient()) {
+        return;
+    }
+    QJsonObject payload;
+    payload[QLatin1String("message")] = message;
+    payload[QLatin1String("level")] = level;
+    payload[QLatin1String("code")] = code;
+    payload[QLatin1String("timestamp")] = QDateTime::currentMSecsSinceEpoch();
+    sendToClient(buildEnvelope(QLatin1String(msg_type::kEventAlarm), nextEventId(), payload));
+}
+
+void HmiTcpServer::checkPlcAuxDeviceAlarms(const QVector<quint16>& commandBlock)
+{
+    namespace regs = flow_control::protocol::registers;
+    if (commandBlock.size() <= regs::kEstopButtonStatus) {
+        return;
+    }
+
+    const int rodStatus = commandBlock.value(regs::kTelescopicRodStatus);
+    const int magnetStatus = commandBlock.value(regs::kElectromagnetStatus);
+
+    const auto emitIfFault = [this](int current, int previous, bool cacheValid, int code, const QString& label) {
+        if (current != 2) {
+            return;
+        }
+        if (!cacheValid || previous != 2) {
+            emitPlcAuxDeviceAlarm(QStringLiteral("PLC辅机报警：%1").arg(label), code, 2);
+        }
+    };
+
+    emitIfFault(rodStatus, m_plcAuxDeviceAlarmCache.telescopicRodStatus,
+                m_plcAuxDeviceAlarmCache.valid, kAlarmCodeTelescopicRodFault,
+                QStringLiteral("伸缩杆故障"));
+    emitIfFault(magnetStatus, m_plcAuxDeviceAlarmCache.electromagnetStatus,
+                m_plcAuxDeviceAlarmCache.valid, kAlarmCodeElectromagnetFault,
+                QStringLiteral("电磁吸盘报警"));
+
+    m_plcAuxDeviceAlarmCache.telescopicRodStatus = rodStatus;
+    m_plcAuxDeviceAlarmCache.electromagnetStatus = magnetStatus;
+    m_plcAuxDeviceAlarmCache.valid = true;
 }
 
 void HmiTcpServer::pushCameraStatus()
@@ -1599,6 +1671,10 @@ void HmiTcpServer::connectStatusRefreshSignals()
                 pushPlcStatus();
                 pushDeviceStatus();
             }
+        }, Qt::UniqueConnection);
+        connect(m_modbusService, &modbus::ModbusService::registersRead, this,
+                [this](int, const QVector<quint16>& values) {
+            checkPlcAuxDeviceAlarms(values);
         }, Qt::UniqueConnection);
     }
 
