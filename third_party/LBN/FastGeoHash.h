@@ -8,6 +8,8 @@
 #define VOTE_PNT_SIZE_MAX                 (9)       // 投票点最大数量
 #define VOTE_FILTER_PNT_SIZE_MIN          (4)       // 位姿求解的投票对应点最少数量（滤波后）
 
+namespace lbn_pose {
+
 // 单个标记点的跟踪信息
 struct TrackedPoint 
 {
@@ -252,3 +254,5 @@ private:
 	// minPercent - 选中id的最小占比
 	int getResult(int count, float minPercent);
 };
+
+}  // namespace lbn_pose

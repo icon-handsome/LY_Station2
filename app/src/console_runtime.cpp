@@ -687,7 +687,6 @@ void ConsoleRuntime::onAutoLatencyBundleFinished(
     const QString cacheRoot = scan_tracking::common::resolveCaptureCacheRoot(configuredRoot);
     const QString timestamp = scan_tracking::common::buildCaptureTimestamp();
     constexpr int kTestSegmentIndex = 1;
-
     QString mechPngPath;
     QString hikAPath;
     QString hikBPath;

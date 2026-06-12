@@ -7,12 +7,9 @@ set(
     "Path to the local PCL runtime DLL directory"
 )
 
-set(
-    SCAN_TRACKING_OPENCV_RUNTIME_DIR
-    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/LB/opencv-3.4.3-vc14_vc15/opencv/build/x64/vc15/bin"
-    CACHE PATH
-    "Path to the local OpenCV runtime DLL directory"
-)
+if(NOT DEFINED SCAN_TRACKING_OPENCV_RUNTIME_DIR OR "${SCAN_TRACKING_OPENCV_RUNTIME_DIR}" STREQUAL "")
+    include(OpenCvBundle)
+endif()
 
 set(
     SCAN_TRACKING_VTK_RUNTIME_DIR

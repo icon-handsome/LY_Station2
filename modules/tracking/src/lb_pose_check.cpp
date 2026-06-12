@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
 #include <QLoggingCategory>
@@ -23,6 +24,7 @@
 
 #include "TR_Mark_3D_Recon.h"
 #include "TR_Mark_Track.h"
+#include "AppConfig.h"
 
 /// LB位姿检测日志类别
 Q_LOGGING_CATEGORY(LOG_LB_POSE, "tracking.lb_pose")
@@ -54,41 +56,6 @@ QString normalizeOrDefault(const QString& value, const QString& fallback)
 std::string toCvPath(const QString& path)
 {
     return QDir::toNativeSeparators(path).toStdString();
-}
-
-/// 配置默认的相机标定参数
-//
-// 设置左右相机的内参矩阵、畸变系数和外参矩阵，用于三维重建计算。
-//
-// @param recon 三维重建对象引用
-void configureDefaultCalibration(TR_INSPECT_3D_Recon_Marker& recon)
-{
-    // 左相机内参矩阵 (I1) 和畸变系数 (D1)
-    recon.config.I1 = (cv::Mat_<double>(3, 3) << 5.078851406536548e+03, 0.830568826844289, 2.746479519311858e+03,
-                                                  0.0, 5.079564338697494e+03, 1.827274288235361e+03,
-                                                  0.0, 0.0, 1.0);
-    recon.config.D1 = (cv::Mat_<double>(1, 5) << -0.061121083586165,
-                                                  0.174884596596884,
-                                                  -1.053862530437392e-04,
-                                                  -2.625558299490124e-04,
-                                                  -0.174942436164493);
-    // 左相机外参矩阵（单位矩阵）
-    recon.config.E1 = cv::Mat::eye(4, 4, CV_64F);
-
-    // 右相机内参矩阵 (I2) 和畸变系数 (D2)
-    recon.config.I2 = (cv::Mat_<double>(3, 3) << 5.088957721152494e+03, 1.694422728104837, 2.748597487208202e+03,
-                                                  0.0, 5.087725659008389e+03, 1.818343109063463e+03,
-                                                  0.0, 0.0, 1.0);
-    recon.config.D2 = (cv::Mat_<double>(1, 5) << -0.061336067087922,
-                                                  0.140736778029161,
-                                                  -2.839150977966796e-04,
-                                                  0.001241546114496,
-                                                  -0.079946406594583);
-    // 右相机外参矩阵（相对于左相机的位姿）
-    recon.config.E2 = (cv::Mat_<double>(4, 4) << 0.932342748446725, -0.009472020725314, 0.361451629187345, -5.793657636690184e+02,
-                                                  -0.014055020969881, 0.997951882006392, 0.062405909859861, -13.667600451372955,
-                                                  -0.361302443673362, -0.063263907745887, 0.930300071037500, 1.265698817906372e+02,
-                                                  0.0, 0.0, 0.0, 1.0);
 }
 
 /// 检查RT矩阵是否有效
@@ -143,6 +110,29 @@ QString summarizePath(const QString& path)
     return QDir::toNativeSeparators(path.trimmed());
 }
 
+QString resolveTrackConfigPath(const scan_tracking::common::LbPoseConfig& config)
+{
+    const QString configured = config.trackConfigFile.trimmed();
+    if (!configured.isEmpty()) {
+        return QDir::toNativeSeparators(QFileInfo(configured).absoluteFilePath());
+    }
+
+    const QStringList candidates = {
+        QDir(QCoreApplication::applicationDirPath())
+            .absoluteFilePath(QStringLiteral("third_party/LB/track_config.ini")),
+        QDir(QCoreApplication::applicationDirPath())
+            .absoluteFilePath(QStringLiteral("../third_party/LB/track_config.ini")),
+    };
+
+    for (const QString& candidate : candidates) {
+        if (QFileInfo::exists(candidate)) {
+            return QDir::toNativeSeparators(QFileInfo(candidate).absoluteFilePath());
+        }
+    }
+
+    return candidates.front();
+}
+
 }  // namespace
 
 /// 执行传统的LB位姿检测算法
@@ -160,7 +150,24 @@ PoseCheckResult runLegacyLbPoseCheck(const scan_tracking::common::LbPoseConfig& 
 {
     PoseCheckResult result;
 
-    // 加载并规范化配置参数
+    const QString trackConfigPath = resolveTrackConfigPath(config);
+    if (!QFileInfo::exists(trackConfigPath)) {
+        result.resultCode = 9;
+        result.message = QStringLiteral("track_config.ini 不存在：%1").arg(summarizePath(trackConfigPath));
+        qWarning(LOG_LB_POSE).noquote() << result.message;
+        return result;
+    }
+
+    const std::wstring nativeTrackConfigPath =
+        QDir::toNativeSeparators(trackConfigPath).toStdWString();
+    if (!AppConfig::Instance().Load(nativeTrackConfigPath.c_str())) {
+        result.resultCode = 9;
+        result.message = QStringLiteral("track_config.ini 解析失败：%1").arg(summarizePath(trackConfigPath));
+        qWarning(LOG_LB_POSE).noquote() << result.message;
+        return result;
+    }
+    const AppConfig& trackCfg = AppConfig::Instance();
+
     const QString dataRootText = normalizeOrDefault(config.dataRoot, defaultDataRoot());
     const QString leftPatternText = normalizeOrDefault(
         config.leftPattern,
@@ -168,21 +175,21 @@ PoseCheckResult runLegacyLbPoseCheck(const scan_tracking::common::LbPoseConfig& 
     const QString rightPatternText = normalizeOrDefault(
         config.rightPattern,
         QDir(dataRootText).filePath(QStringLiteral("R/*.bmp")));
-    const QString templateText = normalizeOrDefault(
-        config.templateFile,
-        QDir(dataRootText).filePath(QStringLiteral("template-3D-ALL-Shift-Cut-Cut.txt")));
+    QString templateText = config.templateFile.trimmed();
+    if (templateText.isEmpty()) {
+        templateText = QString::fromLocal8Bit(trackCfg.paths.template_points.c_str()).trimmed();
+    }
+    if (templateText.isEmpty()) {
+        templateText = QDir(dataRootText).filePath(QStringLiteral("template-3D-ALL-Shift-Cut-Cut.txt"));
+    }
 
-    // 打印配置信息
     qInfo(LOG_LB_POSE).noquote()
         << QStringLiteral("LB 位姿配置：")
+        << QStringLiteral(" trackConfig=") << summarizePath(trackConfigPath)
         << QStringLiteral(" dataRoot=") << summarizePath(dataRootText)
         << QStringLiteral(" leftPattern=") << summarizePath(leftPatternText)
         << QStringLiteral(" rightPattern=") << summarizePath(rightPatternText)
-        << QStringLiteral(" templateFile=") << summarizePath(templateText)
-        << QStringLiteral(" minDistance=") << config.minDistance
-        << QStringLiteral(" maxDistance=") << config.maxDistance
-        << QStringLiteral(" cosTolerance=") << config.cosTolerance
-        << QStringLiteral(" minPercent=") << config.minPercent;
+        << QStringLiteral(" templateFile=") << summarizePath(templateText);
 
     // 检查数据根目录是否存在
     const QFileInfo dataRootInfo(dataRootText);
@@ -235,11 +242,31 @@ PoseCheckResult runLegacyLbPoseCheck(const scan_tracking::common::LbPoseConfig& 
     result.invoked = true;
 
     try {
-        // 创建三维重建对象并配置标定参数
         TR_INSPECT_3D_Recon_Marker recon;
-        configureDefaultCalibration(recon);
+        if (recon.Set_Calib_Config(
+                trackCfg.recon.I1,
+                trackCfg.recon.D1,
+                trackCfg.recon.E1,
+                trackCfg.recon.I2,
+                trackCfg.recon.D2,
+                trackCfg.recon.E2) != 0) {
+            result.resultCode = 7;
+            result.message = QStringLiteral("LB 位姿设置标定失败（track_config.ini [Recon]）。");
+            qWarning(LOG_LB_POSE).noquote() << result.message;
+            return result;
+        }
+        if (recon.Set_2D_Config(
+                trackCfg.recon.epipolar_threshold,
+                trackCfg.recon.min_z_range,
+                trackCfg.recon.max_z_range,
+                trackCfg.recon.max_reproj_err,
+                trackCfg.recon.max_ratio) != 0) {
+            result.resultCode = 7;
+            result.message = QStringLiteral("LB 位姿设置重建参数失败（track_config.ini [Recon]）。");
+            qWarning(LOG_LB_POSE).noquote() << result.message;
+            return result;
+        }
 
-        // 执行三维重建
         const int reconResult = recon.Get_3D_Recon_Marker(leftImage, rightImage);
         if (reconResult != 0 || recon.frame_3d_points.empty()) {
             result.resultCode = 7;
@@ -253,9 +280,9 @@ PoseCheckResult runLegacyLbPoseCheck(const scan_tracking::common::LbPoseConfig& 
         result.inputPointCount = static_cast<int>(recon.frame_3d_points.size());
 
         // 创建哈希索引对象并配置查询参数
-        FastGeoHash geoHash(config.maxDistance, config.minDistance);
-        if (geoHash.set_template_config(config.minDistance, config.maxDistance) != 0 ||
-            geoHash.set_query_config(config.cosTolerance, config.minPercent) != 0) {
+        FastGeoHash geoHash(trackCfg.geo_hash.max_distance, trackCfg.geo_hash.min_distance);
+        if (geoHash.set_template_config(trackCfg.geo_hash.min_distance, trackCfg.geo_hash.max_distance) != 0 ||
+            geoHash.set_query_config(trackCfg.geo_hash.cos_tolerance, trackCfg.geo_hash.min_percent) != 0) {
             result.resultCode = 7;
             result.message = QStringLiteral("LB 位姿设置哈希配置失败。");
             qWarning(LOG_LB_POSE).noquote() << result.message;
@@ -280,14 +307,21 @@ PoseCheckResult runLegacyLbPoseCheck(const scan_tracking::common::LbPoseConfig& 
             return result;
         }
 
-        // 执行位姿估计
+        cv::Mat scanToMarkerRt = trackCfg.geo_hash.scan_to_marker_RT.clone();
+        if (geoHash.set_scan_to_marker_RT(scanToMarkerRt) != 0) {
+            result.resultCode = 7;
+            result.message = QStringLiteral("LB 位姿设置 scan_to_marker_RT 失败（track_config.ini [GeoHash]）。");
+            qWarning(LOG_LB_POSE).noquote() << result.message;
+            return result;
+        }
+
         const int trackResult = geoHash.Get_Track_Pose(
             recon.frame_3d_points,
-            config.cosTolerance,
-            config.minPercent);
+            trackCfg.geo_hash.cos_tolerance,
+            trackCfg.geo_hash.min_percent);
 
         // 检查位姿估计结果
-        if (trackResult != 0 || !isValidRt(geoHash.Rt)) {
+        if (trackResult != 0 || !isValidRt(geoHash.Rt_global)) {
             result.resultCode = 7;
             result.message = QStringLiteral("LB 位姿 Get_Track_Pose 失败，代码=%1").arg(trackResult);
             qWarning(LOG_LB_POSE).noquote() << result.message;
@@ -297,8 +331,8 @@ PoseCheckResult runLegacyLbPoseCheck(const scan_tracking::common::LbPoseConfig& 
         // 位姿检测成功，填充结果
         result.success = true;
         result.resultCode = 1;
-        result.poseDeviationMm = translationNormMm(geoHash.Rt);
-        result.rt = toRtArray(geoHash.Rt);
+        result.poseDeviationMm = translationNormMm(geoHash.Rt_global);
+        result.rt = toRtArray(geoHash.Rt_global);
         result.message = QStringLiteral("LB 位姿检测成功。");
         qInfo(LOG_LB_POSE).noquote()
             << QStringLiteral("LB 位姿检测成功")

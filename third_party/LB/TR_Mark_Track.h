@@ -1,12 +1,7 @@
 #pragma once
+#include "AppConfig.h"
 #include <opencv2/opencv.hpp>
 #include <vector>
-#include "Filter.h"
-
-#define MARK_POINT_SIZE_MAX               (150)    // 扫描头标记点数量最大值
-#define DEBSCAN_FILTER_DIST_MAX           (300.0)  // Debscan聚类最远像素距离
-#define VOTE_PNT_SIZE_MAX                 (9)      // 投票点最大数量
-#define VOTE_FILTER_PNT_SIZE_MIN          (4)      // 位姿求解的投票对应点最少数量（滤波后）
 
 // 单个标记点的跟踪信息
 struct TrackedPoint 
@@ -29,14 +24,23 @@ public:
 		int   max_area;                          // 识别标记点的最小面积
 		int   ROI_w;                             // 局部搜索ROI
 		int   ROI_h;
+		double perimeter_radius_px;
+		double min_circularity;
+		int   intensity_threshold;
+		int   debscan_min_pts;
 
-		Config()                                 // 显式写出构造函数进行初始化  
+		Config()                                 // init from AppConfig
 		{
-			pyramid_levels    = 3;
-			min_area          = 300;             // 识别标记点的最小面积 400 1000
-			max_area          = 7000;            // 识别标记点的最大面积 7000 5000
-			ROI_w             = 800;
-			ROI_h             = 800;
+			const AppConfig::Detector& detector = AppConfig::Instance().detector;
+			pyramid_levels      = detector.pyramid_levels;
+			min_area            = detector.min_area;
+			max_area            = detector.max_area;
+			ROI_w               = detector.ROI_w;
+			ROI_h               = detector.ROI_h;
+			perimeter_radius_px = detector.perimeter_radius_px;
+			min_circularity     = detector.min_circularity;
+			intensity_threshold = detector.intensity_threshold;
+			debscan_min_pts     = detector.debscan_min_pts;
 		}
 	} config;
 
@@ -46,7 +50,7 @@ public:
 
 	MarkPointDetector() 
 	{
-		tracked_points.reserve(MARK_POINT_SIZE_MAX);
+		tracked_points.reserve(AppConfig::Instance().limits.mark_point_size_max);
 	}
  
 	/**************************************************************************************
@@ -132,23 +136,31 @@ public:
 	float               maxDistance;   // 模板点最大距离阈值(大于该值的不参与计算特征和查询)
 	float               minDistanceSq; // 预计算平方值
 	
-	float cosTolerance = 0.015f;       // 刚性距离角度约束
-	float minPercent   = 0.5f;
+	float cosTolerance;                 // 刚性距离角度约束
+	float minPercent;
+	cv::Mat scan_to_marker_RT;        // 扫描仪到扫描头标记点变换
 
 	// 根据L1和L2方向来建立二维栅格，再结合cosA确定第三维度方向上点的位置
 	// maxDist-扫描头上标记点的最大间距
 	// minDist-低于这个距离的点不进行特征计算和查询
 	FastGeoHash(float maxDist, float minDist = 60.0f) : maxDistance(maxDist), minDistance(minDist)
 	{
+		cosTolerance = AppConfig::Instance().geo_hash.cos_tolerance;
+		minPercent   = AppConfig::Instance().geo_hash.min_percent;
 		minDistanceSq = minDist * minDist;           // 预计算
 		step          = maxDist / L_BINS;            // maxDist为400mm时候step==0.1mm，4000x4000 = 16,000,000 个int，约 64MB
 		counts        = new int[L_BINS * L_BINS]();
 		offsets       = new int[L_BINS * L_BINS]();
 
-		Rt = (cv::Mat_<double>(4, 4) << 1.0, 0.0, 0.0, 0.0,
-			                            0.0, 1.0, 0.0, 0.0,
-			                            0.0, 0.0, 1.0, 0.0,
-			                            0.0, 0.0, 0.0, 1.0);
+		Rt_global = (cv::Mat_<double>(4, 4) << 1.0, 0.0, 0.0, 0.0,
+			                                   0.0, 1.0, 0.0, 0.0,
+			                                   0.0, 0.0, 1.0, 0.0,
+			                                   0.0, 0.0, 0.0, 1.0);
+
+		scan_to_marker_RT = (cv::Mat_<double>(4, 4) << 1.0, 0.0, 0.0, 0.0,
+			                                           0.0, 1.0, 0.0, 0.0,
+			                                           0.0, 0.0, 1.0, 0.0,
+			                                           0.0, 0.0, 0.0, 1.0);
 	}
 
 	~FastGeoHash()
@@ -160,7 +172,7 @@ public:
 	std::vector<cv::Point3f> template_pnts;             // 模板点
 	std::vector<cv::Point3f> filtered_frame_3d_points;  // 滤波后的3D标记点
 	std::vector<int>         corres_template_points_ID; // 滤波后对应的模板3D点ID
-	cv::Mat                  Rt;                        // 点云位姿
+	cv::Mat                  Rt_global;                 // 全局坐标系下点云位姿
 
 	// 设置参数
 	int set_template_config(float   minDistance_t,
@@ -170,8 +182,11 @@ public:
 	int set_query_config(float   cosTolerance_t,
                          float   minPercent_t);
 
+	// 设置扫描仪到扫描头标记点的标定结果
+	int set_scan_to_marker_RT(cv::Mat &scan_to_marker_RT_t);
+
 	// 拿到模板点
-	int read_template_pnts(char *file_name);
+	int read_template_pnts(const char *file_name);
 
 	// 离线建表
 	// 传入130个模型点，构建哈希表
@@ -185,8 +200,8 @@ public:
 	// 返回查找到的id
 	int query(const cv::Point3f& sA,
 		      const std::vector<cv::Point3f>& otherCandidates,
-		      float cosTolerance = 0.015f,
-			  float minPercent   = 0.6);
+		      float cosTolerance,
+			  float minPercent);
 
 	// 计算点云的变换矩阵Rt
 	int computeRigidTransformSVD(const std::vector<cv::Point3f>& src, 
@@ -210,7 +225,7 @@ private:
 	std::vector<Entry>  entries;
 
 	// 私有投票箱
-	int votes[130];
+	std::vector<int> votes;
 
 	// 辅助函数：将长度映射到索引
 	inline int getIdx(float len) const;

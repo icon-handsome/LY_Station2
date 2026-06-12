@@ -262,7 +262,7 @@ if(SCAN_TRACKING_ENABLE_LBN_POSE_DETECTION)
     target_include_directories(scan_tracking_lbn_offline_runner
         PRIVATE
             ${CMAKE_SOURCE_DIR}/third_party/LBN
-            ${CMAKE_SOURCE_DIR}/third_party/LB/opencv-3.4.3-vc14_vc15/opencv/build/include
+            ${SCAN_TRACKING_OPENCV_INCLUDE_DIR}
     )
 
     target_link_libraries(scan_tracking_lbn_offline_runner

@@ -1,4 +1,7 @@
 #include "TR_Mark_Track.h"
+#include <algorithm>
+#include <cstring>
+#include <iomanip>
 #include <numeric>
 #include <random>
 
@@ -28,6 +31,7 @@ bool MarkPointDetector::ProcessFrame(const cv::Mat& img_in,
 bool MarkPointDetector::GlobalSearch(const cv::Mat&            img_in, 
 	                                 std::vector<cv::Point2f>  &results)
 {
+	results.clear();
 	std::vector<cv::Point2f> circle_centers;
 	circle_centers.reserve(300);
 	std::vector<float> mark_area;
@@ -37,30 +41,83 @@ bool MarkPointDetector::GlobalSearch(const cv::Mat&            img_in,
 	cv::Mat blurred;
 	cv::GaussianBlur(img_in, blurred, cv::Size(5, 5), 1.5);
 
-	// 1. 下采样 (例如缩小到 1/64)
-	cv::Mat small_img;
-	int level_cnt = 2;
-	cv::pyrDown(blurred, small_img);   // Level 1
-	cv::pyrDown(small_img, small_img); // Level 2
-	//cv::pyrDown(small_img, small_img); // Level 3
+	// 1. Downsample according to detector configuration.
+	cv::Mat small_img = blurred.clone();
+	int level_cnt = config.pyramid_levels;
+	if (level_cnt < 0)
+	{
+		level_cnt = 0;
+	}
+	for (int lv = 0; lv < level_cnt; ++lv)
+	{
+		cv::pyrDown(small_img, small_img);
+	}
 	//cv::imwrite("0 small-IMG.jpg", small_img, { cv::IMWRITE_JPEG_QUALITY, 90 });
 
 	// 2. 粗提取 (简单的阈值 + 轮廓查找)
 	cv::Mat binary;
+
+	int channels = small_img.channels();
+
+	if (channels == 1) 
+	{
+		std::cout << "图像已经是灰度图（单通道）。" << std::endl;
+	}
+	else if (channels == 3)
+	{
+		std::cout << "图像为3通道彩色图，正在转换为灰度图..." << std::endl;
+		cv::cvtColor(small_img, small_img, cv::COLOR_BGR2GRAY);
+	}
+	else if (channels == 4)
+	{
+		std::cout << "图像为4通道彩色图（带Alpha通道），正在转换为灰度图..." << std::endl;
+		cv::cvtColor(small_img, small_img, cv::COLOR_BGRA2GRAY);
+	}
+	else
+	{
+		std::cout << "未知的通道数: " << channels << "，尝试进行标准转换..." << std::endl;
+		return 1010;
+	}
+
 	//cv::threshold(small_img, binary, 30, 200, cv::THRESH_BINARY);
-	cv::adaptiveThreshold(small_img, binary, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C, cv::THRESH_BINARY, 31, 10);
+	cv::adaptiveThreshold(small_img, binary, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C, cv::THRESH_BINARY, 21, 10); // 21
 	//cv::threshold(small_img, binary, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
 	////cv::bitwise_not(binary, binary);
-	//cv::imwrite("contours_binary.jpg", binary, { cv::IMWRITE_JPEG_QUALITY, 90 });
+	cv::imwrite("contours_binary.jpg", binary, { cv::IMWRITE_JPEG_QUALITY, 90 });
 
+	std::vector<cv::Vec4i> hierarchy;
+	std::vector<std::vector<cv::Point>> contours_t;
 	std::vector<std::vector<cv::Point>> contours;
+
 	////cv::findContours(binary, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 	// cv::CHAIN_APPROX_NONE  cv::CHAIN_APPROX_SIMPLE
-	cv::findContours(binary, contours, cv::RETR_LIST, cv::CHAIN_APPROX_NONE);    // RETR_LIST 会提取所有轮廓，不再忽略内部孔洞  cv::CHAIN_APPROX_SIMPLE 轮廓压缩成折线 
-	
+	//cv::findContours(binary, contours, cv::RETR_LIST, cv::CHAIN_APPROX_NONE);    // RETR_LIST 会提取所有轮廓，不再忽略内部孔洞  cv::CHAIN_APPROX_SIMPLE 轮廓压缩成折线 
+	cv::findContours(binary, contours_t, hierarchy, cv::RETR_TREE, cv::CHAIN_APPROX_SIMPLE);
+
+	// TODO: 检查是否存在同心圆的问题
+	// hierarchy[i] 的结构为: [同层后一个, 同层前一个, 第一个子轮廓, 父轮廓]
+	// hierarchy[i][3] 表示父轮廓的索引。
+	// 如果 hierarchy[i][3] >= 0，说明当前轮廓是一个内层轮廓（孔洞）
+	contours.reserve(contours_t.size());
+	for (size_t i = 0; i < contours_t.size(); ++i)
+	{
+		// hierarchy[i][2] -> First_Child (第一个子轮廓索引)
+		// hierarchy[i][3] -> Parent (父轮廓索引)
+
+		// 情况 1：是多层轮廓的最内层（没有子轮廓）
+		// 只要当前轮廓没有子轮廓（即 hierarchy[i][2] == -1），它就必然是“最内层”轮廓（或者是无嵌套的单层轮廓）
+		bool is_innermost_or_single = (hierarchy[i][2] == -1);
+
+		if (is_innermost_or_single)
+		{
+			contours.push_back(contours_t[i]);
+		}
+	}
+
+
 	// 画出轮廓并标上序号
 	cv::Mat color_result;
-	if (0)
+	if (1)
 	{
 		std::vector<std::vector<cv::Point>> scaled_contours = contours; // 不要修改原始的contours
 		for (size_t i = 0; i < scaled_contours.size(); i++)
@@ -89,7 +146,7 @@ bool MarkPointDetector::GlobalSearch(const cv::Mat&            img_in,
 		{
 			std::string text = std::to_string(i);
 			cv::putText(color_result, text, scaled_contours[i][0], cv::FONT_HERSHEY_SIMPLEX,
-				1.0, cv::Scalar(0, 0, 255), 1);
+				0.4, cv::Scalar(0, 0, 255), 1);
 		}
 		// 5. 保存结果
 		// 25MP 图像建议保存为 JPG 以节省空间
@@ -98,14 +155,14 @@ bool MarkPointDetector::GlobalSearch(const cv::Mat&            img_in,
 	
 	tracked_points.clear();
 	int ii = 0;
-	double perim_t = 5.0 / pow(2, level_cnt) * 6.28;     // 半径5个像素
+	double perim_t = config.perimeter_radius_px / pow(2, level_cnt) * 6.28;     // 半径5个像素
 	for (auto& cnt : contours)
 	{
-		//if (ii >= 339)
-		//{
-		//	int aaa = 0;
-		//}
-		//ii++;
+		if (ii == 1597)
+		{
+			int aaa = 0;
+		}
+		ii++;
 
 		double area = cv::contourArea(cnt);
 		if (area > (config.min_area / pow(4, level_cnt)) && area < (config.max_area / pow(4, level_cnt)))
@@ -118,7 +175,7 @@ bool MarkPointDetector::GlobalSearch(const cv::Mat&            img_in,
 				continue;
 			}
 			double circularity = (4 * CV_PI * area) / (perimeter * perimeter);
-			if (circularity > 0.5) // 越接近1越圆，工业标记点通常 > 0.8
+			if (circularity > config.min_circularity) // 越接近1越圆，工业标记点通常 > 0.8
 			{
 				// 缩小的面积阈值
 				cv::Moments mu = cv::moments(cnt);
@@ -129,7 +186,7 @@ bool MarkPointDetector::GlobalSearch(const cv::Mat&            img_in,
 				// float radius = sqrtf(area / 3.14159265); // 1/3.14159265 * 0.5
 				float radius = perimeter * 0.159155 * pow(2, level_cnt); // 1/3.14159265 * 0.5
 
-				if (1)                  // 亮度滤波
+				if (0)                  // 亮度滤波
 				{
 					int x_f = 0;
 					int y_f = 0;
@@ -146,7 +203,7 @@ bool MarkPointDetector::GlobalSearch(const cv::Mat&            img_in,
 					y_f = floorf(high_res_pos.y);
 					y_c = ceilf(high_res_pos.y);
 
-					int intensity_c = 50;
+					int intensity_c = config.intensity_threshold;
 					if ((int)img_in.at<uchar>(y_f, x_f) < intensity_c ||
 						(int)img_in.at<uchar>(y_c, x_f) < intensity_c ||
 						(int)img_in.at<uchar>(y_f, x_c) < intensity_c ||
@@ -211,15 +268,22 @@ bool MarkPointDetector::GlobalSearch(const cv::Mat&            img_in,
 		}
 	}
 
-	//// 4. 画出算出的亚像素质心 circle_centers
-	//for (const auto& pt : circle_centers)
-	//{
-	//	cv::circle(color_result, pt, 1, cv::Scalar(0, 0, 255), -1); // 画红色实心原点
-	//}
-	//// 5. 保存结果
-	//// 25MP 图像建议保存为 JPG 以节省空间
-	//cv::imwrite("0centers_result.jpg", color_result, { cv::IMWRITE_JPEG_QUALITY, 90 });
-
+	// 4. 画出算出的亚像素质心 circle_centers
+	if (1)
+	{
+		if (img_in.channels() == 1)
+			cv::cvtColor(img_in, color_result, cv::COLOR_GRAY2BGR);
+		else
+			color_result = img_in.clone();
+		for (const auto& pt : circle_centers)
+		{
+			cv::circle(color_result, pt, 1, cv::Scalar(0, 0, 255), -1); // 画红色实心原点
+		}
+		// 5. 保存结果
+		// 25MP 图像建议保存为 JPG 以节省空间
+		cv::imwrite("0centers_result.jpg", color_result, { cv::IMWRITE_JPEG_QUALITY, 90 });
+	}
+	
 	is_initialized = !circle_centers.empty();
 
 	// 注意要做离群点统计滤波
@@ -232,8 +296,8 @@ bool MarkPointDetector::GlobalSearch(const cv::Mat&            img_in,
 	// TODO: 优化耗时,优化判断依据
 	 filterOutlies_Debscan(circle_centers,
 		                  results,
-						  DEBSCAN_FILTER_DIST_MAX,               // 聚类半径 100, 400
-		                  5);
+						  AppConfig::Instance().limits.debscan_filter_dist_max, // cluster radius
+		                  config.debscan_min_pts);
 
 	if (results.size() < 4)
 	{
@@ -358,120 +422,324 @@ float MarkPointDetector::GetSubpixelGray(const cv::Mat& img, float x, float y)
 		        dx * dy * img.at<uchar>(y2, x2);
 	return val;
 }
-
-	/**
-	* @brief 工业级精修：梯度重心法 + 鲁棒性过滤
-	*/
-/**************************************************************************************
-*功  能：亚像素插值
-*参  数：
-*       img                         I         输入的高分辨率图像
-*       x                           I         x坐标
-*       y                           I         y坐标
-*返回值：灰度值
-*备  注：
-**************************************************************************************/
+ 
+// 该方法针对近红外，增大曝光量看非反光标记点导致中心定位不准确的问题，改进的用来提升精度
+// 空间（xy）高斯加权 + 局部动态范围阈值(灰度值)的迭代式灰度中心法
 cv::Point2f MarkPointDetector::RefineCenter(const cv::Mat& img, cv::Point2f approx_pos, float radius,
 		                                    cv::Mat K, cv::Mat distCoeffs)
 {
-		const int num_rays = 72;           // 增加采样密度 (每5度一条)
-		const float search_range = 6.0f;   // 稍大的搜索范围确保覆盖边缘
-		const float step = 0.5f;
+	cv::Point2f center = approx_pos;
+	const int max_iters = 10; // 迭代次数
 
-		std::vector<cv::Point2f> edge_points;
-		std::vector<float> edge_weights;   // 存储梯度强度作为拟合权重
+	// 1. 在稍微宽裕的区域内，计算自适应阈值
+	// 区域半径设为 1.5 * radius，确保能稳定采集到真正的背景灰度
+	int roi_r = cvRound(radius * 1.5f);
+	int x_min = std::max(0, cvRound(approx_pos.x - roi_r));
+	int x_max = std::min(img.cols - 1, cvRound(approx_pos.x + roi_r));
+	int y_min = std::max(0, cvRound(approx_pos.y - roi_r));
+	int y_max = std::min(img.rows - 1, cvRound(approx_pos.y + roi_r));
 
-		for (int i = 0; i < num_rays; ++i)
+	float max_val = 0.0f;
+	float min_val = 255.0f;
+	for (int y = y_min; y <= y_max; ++y)
+	{
+		for (int x = x_min; x <= x_max; ++x)
 		{
-			float angle = i * (2.0f * (float)CV_PI / num_rays);
-			float dx = cos(angle);
-			float dy = sin(angle);
+			float val = img.at<uchar>(y, x);
+			if (val > max_val) 
+				max_val = val;
+			if (val < min_val) 
+				min_val = val;
+		}
+	}
 
-			std::vector<float> profile;
-			// 1. 采样剖面
-			for (float r = radius - search_range; r <= radius + search_range; r += step)
-			{
-				profile.push_back(GetSubpixelGray(img, approx_pos.x + r * dx, approx_pos.y + r * dy));
-			}
+	// 动态阈值：排除背景，保留有效光斑（取 35% 的动态范围）
+	float thresh = min_val + 0.35f * (max_val - min_val);
 
-			// 2. 计算一阶差分梯度 (使用稍大的算子抗噪)
-			std::vector<float> grads;
-			float max_g = -1;
-			int max_idx = -1;
-			for (int j = 2; j < (int)profile.size() - 2; ++j)
-			{
-				// 使用 [j-2, j-1, j+1, j+2] 计算梯度，比简单差分更稳
-				float g = abs(profile[j - 2] + profile[j - 1] - profile[j + 1] - profile[j + 2]);
-				grads.push_back(g);
-				if (g > max_g) {
-					max_g = g;
-					max_idx = j - 2; // 对应grads的索引
-				}
-			}
+	// 如果对比度太低，说明区域异常，返回初始值
+	if (max_val - min_val < 15.0f)
+	{
+		return approx_pos;
+	}
 
-			// 3. 核心改进：梯度重心法定位 (比抛物线插值更准)
-			// 取梯度峰值及其左右各2个点，计算重心
-			if (max_idx >= 2 && max_idx < (int)grads.size() - 2 && max_g > 10.0f)
+	// 2. 迭代计算重心
+	// 高斯空间窗口的标准差 sigma 设为 radius / 1.5，保证边缘平滑衰减
+	double sigma = radius / 1.5;
+	double double_sigma_sq = 2.0 * sigma * sigma;
+
+	for (int iter = 0; iter < max_iters; ++iter)
+	{
+		double sum_wx = 0.0;
+		double sum_wy = 0.0;
+		double sum_w = 0.0;
+
+		// 搜索半径限制为 1.5 * radius
+		int search_r = cvRound(radius * 1.5f);
+		int cur_x_min = std::max(0, cvRound(center.x - search_r));
+		int cur_x_max = std::min(img.cols - 1, cvRound(center.x + search_r));
+		int cur_y_min = std::max(0, cvRound(center.y - search_r));
+		int cur_y_max = std::min(img.rows - 1, cvRound(center.y + search_r));
+
+		for (int y = cur_y_min; y <= cur_y_max; ++y)
+		{
+			for (int x = cur_x_min; x <= cur_x_max; ++x)
 			{
-				double sum_gr = 0, sum_g = 0;
-				for (int k = max_idx - 2; k <= max_idx + 2; ++k)
+				double dx = x - center.x;
+				double dy = y - center.y;
+				double dist_sq = dx * dx + dy * dy;
+
+				if (dist_sq <= (double)(search_r * search_r))
 				{
-					float weight = grads[k];
-					float r_val = (radius - search_range) + (k + 2) * step; // 回算当前的半径距离
-					sum_gr += (double)weight * r_val;
-					sum_g += (double)weight;
-				}
+					double gray = img.at<uchar>(y, x);
+					if (gray > thresh)
+					{
+						// 灰度强度权重
+						double w_int = gray - thresh;
+						// 空间高斯权重：越靠近当前中心权重越大，向外平滑衰减
+						double w_spa = exp(-dist_sq / double_sigma_sq);
 
-				if (sum_g > 0)
-				{
-					float best_r = (float)(sum_gr / sum_g);
-					edge_points.push_back(cv::Point2f(approx_pos.x + best_r * dx,
-						approx_pos.y + best_r * dy));
-					edge_weights.push_back(max_g);
+						// 复合权重
+						double w = w_int * w_spa;
+
+						sum_wx += x * w;
+						sum_wy += y * w;
+						sum_w += w;
+					}
 				}
 			}
 		}
 
-		if (edge_points.size() < 10)
-		{
-			return approx_pos;
-		}
-		// 4. 异常值过滤：初步拟合后剔除误差过大的点 (防止脏污点干扰)
-		std::vector<cv::Point2f> undistorted_points;
-		if (!K.empty() && !distCoeffs.empty())
-		{
-			cv::undistortPoints(edge_points, undistorted_points, K, distCoeffs, cv::noArray(), K);
-		}
-		else
-		{
-			undistorted_points = edge_points;
-		}
+		if (sum_w <= 1e-5) break;
 
-		// 第一次拟合
-		cv::RotatedRect ell = cv::fitEllipseDirect(undistorted_points);
+		cv::Point2f new_center((float)(sum_wx / sum_w), (float)(sum_wy / sum_w));
 
-		// 鲁棒性剔除：计算每个点到椭圆边缘的距离，剔除偏离过大的点
-		std::vector<cv::Point2f> final_points;
-		for (const auto& p : undistorted_points)
+		// 收敛条件判定（差值小于 0.005 像素时认为收敛）
+		if (cv::norm(new_center - center) < 0.005f)
 		{
-			// 简化的距离检查：到中心的距离与平均半径对比
-			float dist = cv::norm(p - ell.center);
-			float expected_r = (ell.size.width + ell.size.height) / 4.0f;
-			if (abs(dist - expected_r) < 2.0f)       // 只保留距离偏差小于2像素的点
-			{ 
-				final_points.push_back(p);
-			}
+			center = new_center;
+			break;
 		}
+		center = new_center;
+	}
 
-		if (final_points.size() < 10)
-		{
-			return ell.center;
-		}
-
-		// 5. 最终拟合
-		cv::RotatedRect final_ell = cv::fitEllipseDirect(final_points);
-		return final_ell.center;
+	return center;
 }
+  
+//// 普通迭代灰度重心法,提升近红外三维重建精度
+//cv::Point2f MarkPointDetector::RefineCenter(const cv::Mat& img, cv::Point2f approx_pos, float radius,
+//	                                        cv::Mat K, cv::Mat distCoeffs)
+//{
+//	cv::Point2f center = approx_pos;
+//	const int max_iters = 8;
+//	const float r2 = radius * radius;
+//
+//	for (int iter = 0; iter < max_iters; ++iter)
+//	{
+//		double sum_wx = 0.0;
+//		double sum_wy = 0.0;
+//		double sum_w = 0.0;
+//
+//		int x_min = cvCeil(center.x - radius);
+//		int x_max = cvFloor(center.x + radius);
+//		int y_min = cvCeil(center.y - radius);
+//		int y_max = cvFloor(center.y + radius);
+//
+//		// 边界保护
+//		x_min = std::max(0, x_min);
+//		x_max = std::min(img.cols - 1, x_max);
+//		y_min = std::max(0, y_min);
+//		y_max = std::min(img.rows - 1, y_max);
+//
+//		// 1. 局部区域内寻找背景基准（取边缘部分的灰度中位数或均值作为背景）
+//		// 这里简化为：将区域内的最低灰度值作为背景阈值，以消除暗背景的影响
+//		float min_val = 255.0f;
+//		for (int y = y_min; y <= y_max; ++y)
+//		{
+//			for (int x = x_min; x <= x_max; ++x)
+//			{
+//				float dx = x - center.x;
+//				float dy = y - center.y;
+//				if (dx*dx + dy*dy <= r2)
+//				{
+//					min_val = std::min(min_val, (float)img.at<uchar>(y, x));
+//				}
+//			}
+//		}
+//
+//		float bg_threshold = min_val + 5.0f; // 略高于背景噪声
+//
+//		// 2. 计算加权重心
+//		for (int y = y_min; y <= y_max; ++y)
+//		{
+//			for (int x = x_min; x <= x_max; ++x)
+//			{
+//				float dx = x - center.x;
+//				float dy = y - center.y;
+//				if (dx*dx + dy*dy <= r2)
+//				{
+//					float gray = img.at<uchar>(y, x);
+//					if (gray > bg_threshold)
+//					{
+//						// 权重可以使用 (gray - bg_threshold)
+//						double w = gray - bg_threshold;
+//						sum_wx += x * w;
+//						sum_wy += y * w;
+//						sum_w += w;
+//					}
+//				}
+//			}
+//		}
+//
+//		if (sum_w <= 0.0) break;
+//
+//		cv::Point2f new_center((float)(sum_wx / sum_w), (float)(sum_wy / sum_w));
+//
+//		// 如果中心几乎不再发生移动，则认为收敛
+//		if (cv::norm(new_center - center) < 0.01f)
+//		{
+//			center = new_center;
+//			break;
+//		}
+//		center = new_center;
+//	}
+//
+//	return center;
+//}
+
+
+///**************************************************************************************
+//*功  能：亚像素插值
+//*参  数：
+//*       img                         I         输入的高分辨率图像
+//*       x                           I         x坐标
+//*       y                           I         y坐标
+//*返回值：灰度值
+//*备  注：工业级精修：梯度重心法 + 鲁棒性过滤，对可见光以及低曝光量的近红外有效
+//**************************************************************************************/
+//cv::Point2f MarkPointDetector::RefineCenter(const cv::Mat& img, cv::Point2f approx_pos, float radius,
+//	                                        cv::Mat K, cv::Mat distCoeffs)
+//{
+//	const int num_rays = 72;           // 增加采样密度 (每5度一条)
+//	const float search_range = 6.0f;   // 稍大的搜索范围确保覆盖边缘
+//	const float step = 0.5f;
+//
+//	std::vector<cv::Point2f> edge_points;
+//	std::vector<float> edge_weights;   // 存储梯度强度作为拟合权重
+//
+//	for (int i = 0; i < num_rays; ++i)
+//	{
+//		float angle = i * (2.0f * (float)CV_PI / num_rays);
+//		float dx = cos(angle);
+//		float dy = sin(angle);
+//
+//		std::vector<float> profile;
+//		// 1. 采样剖面
+//		for (float r = radius - search_range; r <= radius + search_range; r += step)
+//		{
+//			profile.push_back(GetSubpixelGray(img, approx_pos.x + r * dx, approx_pos.y + r * dy));
+//		}
+//
+//		// 2. 计算一阶差分梯度 (使用稍大的算子抗噪)
+//		std::vector<float> grads;
+//		float max_g = -1;
+//		int max_idx = -1;
+//		for (int j = 2; j < (int)profile.size() - 2; ++j)
+//		{
+//			// 使用 [j-2, j-1, j+1, j+2] 计算梯度，比简单差分更稳
+//			float g = abs(profile[j - 2] + profile[j - 1] - profile[j + 1] - profile[j + 2]);
+//			grads.push_back(g);
+//			if (g > max_g) {
+//				max_g = g;
+//				max_idx = j - 2; // 对应grads的索引
+//			}
+//		}
+//
+//		// 3. 核心改进：梯度重心法定位 (比抛物线插值更准)
+//		// 取梯度峰值及其左右各2个点，计算重心
+//		if (max_idx >= 2 && max_idx < (int)grads.size() - 2 && max_g > 10.0f)
+//		{
+//			double sum_gr = 0, sum_g = 0;
+//			for (int k = max_idx - 2; k <= max_idx + 2; ++k)
+//			{
+//				float weight = grads[k];
+//				float r_val = (radius - search_range) + (k + 2) * step; // 回算当前的半径距离
+//				sum_gr += (double)weight * r_val;
+//				sum_g += (double)weight;
+//			}
+//
+//			if (sum_g > 0)
+//			{
+//				float best_r = (float)(sum_gr / sum_g);
+//				edge_points.push_back(cv::Point2f(approx_pos.x + best_r * dx,
+//					approx_pos.y + best_r * dy));
+//				edge_weights.push_back(max_g);
+//			}
+//		}
+//	}
+//
+//	if (edge_points.size() < 10)
+//	{
+//		return approx_pos;
+//	}
+//
+//	if (0)
+//	{
+//		cv::Mat debugImg;
+//		if (img.channels() == 1)
+//		{
+//			cv::cvtColor(img, debugImg, cv::COLOR_GRAY2BGR);
+//		}
+//		else
+//		{
+//			debugImg = img.clone();
+//		}
+//
+//		const float alpha = 1.0f; // 先用不透明红色，确认点确实画上了
+//
+//		for (const auto& p : edge_points)
+//		{
+//			cv::circle(debugImg, p, 1, cv::Scalar(0, 0, 255), -1); // 画红色实心原点
+//		}
+//
+//		bool ok = cv::imwrite("0lineEllipse.png", debugImg);
+//	}
+//
+//	// 4. 异常值过滤：初步拟合后剔除误差过大的点 (防止脏污点干扰)
+//	std::vector<cv::Point2f> undistorted_points;
+//	if (!K.empty() && !distCoeffs.empty())
+//	{
+//		cv::undistortPoints(edge_points, undistorted_points, K, distCoeffs, cv::noArray(), K);
+//	}
+//	else
+//	{
+//		undistorted_points = edge_points;
+//	}
+//
+//	// 第一次拟合
+//	cv::RotatedRect ell = cv::fitEllipseDirect(undistorted_points);
+//
+//	// 鲁棒性剔除：计算每个点到椭圆边缘的距离，剔除偏离过大的点
+//	std::vector<cv::Point2f> final_points;
+//	for (const auto& p : undistorted_points)
+//	{
+//		// 简化的距离检查：到中心的距离与平均半径对比
+//		float dist = cv::norm(p - ell.center);
+//		float expected_r = (ell.size.width + ell.size.height) / 4.0f;
+//		if (abs(dist - expected_r) < 2.0f)       // 只保留距离偏差小于2像素的点
+//		{
+//			final_points.push_back(p);
+//		}
+//	}
+//
+//	if (final_points.size() < 10)
+//	{
+//		return ell.center;
+//	}
+//
+//	// 5. 最终拟合
+//	cv::RotatedRect final_ell = cv::fitEllipseDirect(final_points);
+//	return final_ell.center;
+//}
 
 
 // 计算两个二维点之间的欧氏距离
@@ -872,6 +1140,10 @@ int FastGeoHash::addVote(const cv::Point3f &sA,
 				if (std::abs(entries[k].cosA - targetCosA) < cosTolerance)
 				{
 					int id_t = entries[k].pointIdA;
+					if (id_t < 0 || id_t >= (int)votes.size())
+					{
+						continue;
+					}
 					votes[id_t]++;
 					// 本次投票有效，不管这轮投出了几张票
 					// 可能存在候选点的一套参数（L1,L2,cosA）在模板上能对应多个三角形，但是每轮count_t只加一
@@ -899,7 +1171,7 @@ int FastGeoHash::addVote(const cv::Point3f &sA,
 //	int maxV   = 0;
 //	int id     = -1;
 //
-//	for (int i = 0; i < 130; ++i)
+//	for (int i = 0; i < (int)votes.size(); ++i)
 //	{
 //		if (votes[i] > maxV)
 //		{
@@ -934,7 +1206,7 @@ int FastGeoHash::getResult(int count, float minPercent)
     int maxV = 0;
     int secondV = 0;
 
-    for (int i = 0; i < 130; ++i) 
+    for (int i = 0; i < (int)votes.size(); ++i) 
 	{
         if (votes[i] > maxV) 
 		{
@@ -973,6 +1245,10 @@ int FastGeoHash::query(const cv::Point3f& sA,
 			           float minPercent)
 {
 	// 1. 初始化
+	if (votes.size() != template_pnts.size())
+	{
+		votes.assign(template_pnts.size(), 0);
+	}
 	clearVotes();
 	// 预计算平方距离阈值，避免在循环中反复计算 sqrt
 	float maxDistSq = maxDistance * maxDistance;
@@ -1007,7 +1283,7 @@ int FastGeoHash::query(const cv::Point3f& sA,
 
 	// 3. 执行多重投票
 	// 为了性能，如果 validNeighbors 太多（比如超过 6 个），建议只取前 6 个
-	size_t cut_size = VOTE_PNT_SIZE_MAX;
+	size_t cut_size = AppConfig::Instance().limits.vote_pnt_size_max;
 	int    count    = 0;
 	if (cut_size > validNeighbors.size())
 	{
@@ -1030,7 +1306,7 @@ int FastGeoHash::query(const cv::Point3f& sA,
 
 void FastGeoHash::clearVotes()
 {
-	std::memset(votes, 0, sizeof(votes));
+	std::fill(votes.begin(), votes.end(), 0);
 }
 
 // 计算点云的变换矩阵Rt
@@ -1106,8 +1382,23 @@ int FastGeoHash::set_query_config(float   cosTolerance_t,
 	return 0;
 }
 
+// 设置扫描仪到扫描头标记点的标定结果
+int FastGeoHash::set_scan_to_marker_RT(cv::Mat &scan_to_marker_RT_t)
+{
+	// 检查矩阵是否为空
+	if (scan_to_marker_RT_t.empty())
+	{
+		std::cerr << "[错误] 标定参数矩阵不能为空！" << std::endl;
+		return 400; // 返回100表示参数错误
+	}
+
+	// 深拷贝，使用 cv::Mat::clone() 深拷贝，避免外部矩阵释放导致野指针
+	scan_to_marker_RT = scan_to_marker_RT_t.clone();
+	return 0;
+}
+
 // 拿到模板点
-int FastGeoHash::read_template_pnts(char *file_name)
+int FastGeoHash::read_template_pnts(const char *file_name)
 {
 	FILE          *infile     = NULL;
 	char           buff[2048] = { 0 };
@@ -1115,7 +1406,13 @@ int FastGeoHash::read_template_pnts(char *file_name)
 	float          y          = 0.0f;
 	float          z          = 0.0f;
 
-	template_pnts.reserve(10000);
+	template_pnts.clear();
+	int reserve_count = AppConfig::Instance().limits.mark_point_size_max;
+	if (reserve_count < 1)
+	{
+		reserve_count = 1;
+	}
+	template_pnts.reserve(reserve_count);
 	infile = fopen(file_name, "r");
 	if (NULL == infile)
 	{
@@ -1131,7 +1428,12 @@ int FastGeoHash::read_template_pnts(char *file_name)
 		template_pnts.push_back(cv::Point3f(x, y, z));
 	}
 	fclose(infile);
-
+	if (template_pnts.size() > (size_t)AppConfig::Instance().limits.mark_point_size_max)
+	{
+		std::cerr << "[Config] template point count exceeds mark_point_size_max." << std::endl;
+		return 402;
+	}
+	votes.assign(template_pnts.size(), 0);
 	return 0;
 }
 
@@ -1150,7 +1452,7 @@ int FastGeoHash::Get_Track_Pose(std::vector<cv::Point3f>& frame_3d_points,
 	filtered_frame_3d_points.reserve(pnt_size);
 	corres_template_points_ID.reserve(pnt_size);
 	int id_A = -1;
-	int count_set = 6;             // 选出参与投票的点数
+	int count_set = AppConfig::Instance().limits.vote_pnt_size_max;             // configured vote point count
 	if (frame_3d_points.size() < count_set)
 	{
 		count_set = frame_3d_points.size() - 1;
@@ -1272,6 +1574,18 @@ int FastGeoHash::Get_Track_Pose(std::vector<cv::Point3f>& frame_3d_points,
 		int id_temp = corres_template_points_ID[ii];
 		corres_template_pnts.push_back(template_pnts[id_temp]);
 	}
+
+	int min_pose_points = AppConfig::Instance().limits.vote_filter_pnt_size_min;
+	if (min_pose_points < 3)
+	{
+		min_pose_points = 3;
+	}
+	if (filtered_frame_3d_points.size() < (size_t)min_pose_points)
+	{
+		std::cout << "模板匹配点数不够， 不能解算位姿: " << filtered_frame_3d_points.size() << std::endl;
+		return 500;
+	}
+
 	int res_err = computeRigidTransformSVD(filtered_frame_3d_points,
 		                                   corres_template_pnts,
 		                                   Rt);
@@ -1279,17 +1593,119 @@ int FastGeoHash::Get_Track_Pose(std::vector<cv::Point3f>& frame_3d_points,
 	{
 		return res_err;
 	}
-	std::cout << "对应点数量： " << corres_template_points_ID.size() << std::endl;
-	std::cout << " Realtime Rt is: " << std::endl;
-	//std::cout << std::fixed << std::setprecision(8);  // 强制保留 8 位小数
-	//for (int i = 0; i < 4; i++)
-	//{
-	//	for (int j = 0; j < 4; j++)
-	//	{
-	//		std::cout << std::setw(8) << Rt.at<double>(i, j) << " ";
-	//	}
-	//	std::cout << std::endl;
-	//}
+
+	std::cout << " Inital Rt is: " << std::endl;
+	std::cout << std::fixed << std::setprecision(8);  // 强制保留 8 位小数
+	for (int i = 0; i < 4; i++)
+	{
+		for (int j = 0; j < 4; j++)
+		{
+			std::cout << std::setw(8) << Rt.at<double>(i, j) << " ";
+		}
+		std::cout << std::endl;
+	}
+
+	// TODO: 基于Rt进行ICP多轮（20%、30%、40%、50%、60%、70%）
+	// 考虑到执行效率，对filtered_frame_3d_points和corres_template_pnts去除外点后计算Rt
+	std::vector<cv::Point3f> new_filtered_frame_3d_points;  // 滤波后的3D标记点
+	std::vector<cv::Point3f> new_corres_template_points;    // 滤波后对应的模板3D点
+	double dist_thresh = 5.0;                               // 对应点间距小于5.0mm的对应点考虑新一轮ICP
+	if (1)
+	{
+		for (int iter_icp = 0; iter_icp < 2; iter_icp++)
+		{
+			new_filtered_frame_3d_points.clear();
+			new_corres_template_points.clear();
+			new_filtered_frame_3d_points.reserve(filtered_frame_3d_points.size());
+			new_corres_template_points.reserve(filtered_frame_3d_points.size());
+
+			if (iter_icp > 0)
+			{
+				dist_thresh *= (0.5f / iter_icp);
+			}
+
+		    for (int i = 0; i < filtered_frame_3d_points.size(); i++)
+	        {
+	        	cv::Mat pt_homo = (cv::Mat_<double>(4, 1) << filtered_frame_3d_points[i].x,
+	        		                                         filtered_frame_3d_points[i].y,
+	        												 filtered_frame_3d_points[i].z,
+	        												 1.0); // 构造齐次向量
+	        	cv::Mat trans_p = Rt * pt_homo;
+	        
+	        	double dist = (trans_p.at<double>(0, 0) - corres_template_pnts[i].x) * (trans_p.at<double>(0, 0) - corres_template_pnts[i].x) + 
+	        		          (trans_p.at<double>(1, 0) - corres_template_pnts[i].y) * (trans_p.at<double>(1, 0) - corres_template_pnts[i].y) + 
+	        		          (trans_p.at<double>(2, 0) - corres_template_pnts[i].z) * (trans_p.at<double>(2, 0) - corres_template_pnts[i].z);
+	        	dist = sqrt(dist);
+	        
+	        	if (dist < dist_thresh)
+	        	{
+	        		new_filtered_frame_3d_points.push_back(filtered_frame_3d_points[i]);
+	        		new_corres_template_points.push_back(corres_template_pnts[i]);
+	        	}
+	        }
+	        
+			if (new_filtered_frame_3d_points.size() == filtered_frame_3d_points.size())
+			{
+				std::cout << "对应点一致，无需再次优化" << std::endl;
+				break;
+			}
+	        if (new_filtered_frame_3d_points.size() > 4)
+	        {
+	        	res_err = computeRigidTransformSVD(new_filtered_frame_3d_points,
+	        	                                   new_corres_template_points,
+	        	                                   Rt);
+	            if (res_err != 0 || Rt.empty())
+	            {
+	            	return res_err;
+	            }
+	        }
+
+		}
+	}
+
+
+	Rt_global = Rt * scan_to_marker_RT;
+
+	std::cout << "对应点数量： " << filtered_frame_3d_points.size() << std::endl;
+	std::cout << "标记点： " << std::endl;
+	for (int i = 0; i < filtered_frame_3d_points.size(); i++)
+	{
+		std::cout << filtered_frame_3d_points[i].x << " "<<
+			         filtered_frame_3d_points[i].y << " "<<
+					 filtered_frame_3d_points[i].z << std::endl;
+	}
+	std::cout << std::endl;
+
+	std::cout << "模板点： " << std::endl;
+	for (int i = 0; i < filtered_frame_3d_points.size(); i++)
+	{
+		std::cout << corres_template_pnts[i].x << " " <<
+			         corres_template_pnts[i].y << " "<<
+					 corres_template_pnts[i].z << std::endl;
+	}
+	std::cout << std::endl;
+
+	std::cout << " Opt Rt is: " << std::endl;
+	std::cout << std::fixed << std::setprecision(8);  // 强制保留 8 位小数
+	for (int i = 0; i < 4; i++)
+	{
+		for (int j = 0; j < 4; j++)
+		{
+			std::cout << std::setw(8) << Rt.at<double>(i, j) << " ";
+		}
+		std::cout << std::endl;
+	}
+
+	std::cout << " Realtime Rt_global is: " << std::endl;
+	std::cout << std::fixed << std::setprecision(8);  // 强制保留 8 位小数
+	for (int i = 0; i < 4; i++)
+	{
+		for (int j = 0; j < 4; j++)
+		{
+			std::cout << std::setw(8) << Rt_global.at<double>(i, j) << " ";
+		}
+		std::cout << std::endl;
+	}
 
 	//// 9. 输出结果
 	//std::cout << "最后成功重建三维标记点数量: " << frame_3d_points.size() << std::endl;

@@ -585,14 +585,11 @@ void HmiTcpServer::handleCmdGetConfig(const QJsonObject& message)
     
     // 8. LbPose 配置
     QJsonObject lbPoseObj;
-    lbPoseObj[QLatin1String("dataRoot")] = cfgMgr->lbPoseConfig().dataRoot; // 数据根目录
-    lbPoseObj[QLatin1String("leftPattern")] = cfgMgr->lbPoseConfig().leftPattern; // 左模板文件
-    lbPoseObj[QLatin1String("rightPattern")] = cfgMgr->lbPoseConfig().rightPattern; // 右模板文件
-    lbPoseObj[QLatin1String("templateFile")] = cfgMgr->lbPoseConfig().templateFile; // 模板文件
-    lbPoseObj[QLatin1String("minDistance")] = static_cast<double>(cfgMgr->lbPoseConfig().minDistance); // 最小距离
-    lbPoseObj[QLatin1String("maxDistance")] = static_cast<double>(cfgMgr->lbPoseConfig().maxDistance); // 最大距离
-    lbPoseObj[QLatin1String("cosTolerance")] = static_cast<double>(cfgMgr->lbPoseConfig().cosTolerance); // 余弦误差
-    lbPoseObj[QLatin1String("minPercent")] = static_cast<double>(cfgMgr->lbPoseConfig().minPercent); // 最小百分比
+    lbPoseObj[QLatin1String("trackConfigFile")] = cfgMgr->lbPoseConfig().trackConfigFile;
+    lbPoseObj[QLatin1String("dataRoot")] = cfgMgr->lbPoseConfig().dataRoot;
+    lbPoseObj[QLatin1String("leftPattern")] = cfgMgr->lbPoseConfig().leftPattern;
+    lbPoseObj[QLatin1String("rightPattern")] = cfgMgr->lbPoseConfig().rightPattern;
+    lbPoseObj[QLatin1String("templateFile")] = cfgMgr->lbPoseConfig().templateFile;
     configPayload[QLatin1String("lbPose")] = lbPoseObj;
     
     // 构建响应

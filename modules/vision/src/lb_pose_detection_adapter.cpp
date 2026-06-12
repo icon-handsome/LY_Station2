@@ -1,12 +1,14 @@
 #include "scan_tracking/vision/lb_pose_detection_adapter.h"
 
 #include <QtCore/QByteArray>
+#include <QtCore/QCoreApplication>
 #include <QtCore/QDateTime>
 #include <QtCore/QDir>
-#include <QtCore/QVector>
+#include <QtCore/QFileInfo>
 
 #include <opencv2/opencv.hpp>
 
+#include "AppConfig.h"
 #include "TR_Mark_3D_Recon.h"
 #include "TR_Mark_Track.h"
 
@@ -14,73 +16,6 @@ namespace scan_tracking {
 namespace vision {
 
 namespace {
-
-// 双目立体标定参数集合，对应 config.ini [LbPose] 中的内参/畸变/外参
-struct StereoCalibSet {
-    cv::Mat I1; // 左目 3×3 内参
-    cv::Mat D1; // 左目 1×5 畸变
-    cv::Mat E1; // 左目 4×4 外参
-    cv::Mat I2; // 右目 3×3 内参
-    cv::Mat D2; // 右目 1×5 畸变
-    cv::Mat E2; // 右目 4×4 外参
-};
-
-bool vectorHasSize(const QVector<double>& values, int expectedCount)
-{
-    return values.size() == expectedCount;
-}
-
-// 将行优先 QVector<double> 转为 OpenCV 矩阵（标定参数均为行优先存储）
-cv::Mat matrixFromRowMajor(const QVector<double>& values, int rows, int cols)
-{
-    cv::Mat matrix(rows, cols, CV_64F);
-    for (int row = 0; row < rows; ++row) {
-        for (int col = 0; col < cols; ++col) {
-            matrix.at<double>(row, col) =
-                values[static_cast<int>(row * cols + col)];
-        }
-    }
-    return matrix;
-}
-
-// 从 LbPoseConfig 解析立体标定；任一数组长度不符则返回空 I1 作为失败标记
-StereoCalibSet makeStereoCalibSetFromConfig(const scan_tracking::common::LbPoseConfig& config)
-{
-    StereoCalibSet calib;
-    if (!vectorHasSize(config.leftIntrinsic3x3, 9) ||
-        !vectorHasSize(config.leftDistortion5, 5) ||
-        !vectorHasSize(config.leftExtrinsic4x4, 16) ||
-        !vectorHasSize(config.rightIntrinsic3x3, 9) ||
-        !vectorHasSize(config.rightDistortion5, 5) ||
-        !vectorHasSize(config.rightExtrinsic4x4, 16)) {
-        return {};
-    }
-
-    calib.I1 = matrixFromRowMajor(config.leftIntrinsic3x3, 3, 3);
-    calib.D1 = matrixFromRowMajor(config.leftDistortion5, 1, 5);
-    calib.E1 = matrixFromRowMajor(config.leftExtrinsic4x4, 4, 4);
-    calib.I2 = matrixFromRowMajor(config.rightIntrinsic3x3, 3, 3);
-    calib.D2 = matrixFromRowMajor(config.rightDistortion5, 1, 5);
-    calib.E2 = matrixFromRowMajor(config.rightExtrinsic4x4, 4, 4);
-    return calib;
-}
-
-HikPoseCaptureResult makeFailure(
-    quint64 requestId,
-    const QString& cameraKey,
-    const QString& logicalName,
-    VisionErrorCode code,
-    const QString& message)
-{
-    HikPoseCaptureResult result;
-    result.requestId = requestId;
-    result.cameraKey = cameraKey;
-    result.logicalName = logicalName;
-    result.errorCode = code;
-    result.errorMessage = message;
-    result.elapsedMs = 0;
-    return result;
-}
 
 LbPoseResult makeFailure(const QString& message)
 {
@@ -91,12 +26,50 @@ LbPoseResult makeFailure(const QString& message)
     return result;
 }
 
-LbPoseResult makeCalibFailure()
+QString resolveTrackConfigPath(const scan_tracking::common::LbPoseConfig& config)
 {
-    return makeFailure(QStringLiteral("LB 立体标定参数无效，请检查 config.ini [LbPose]。"));
+    const QString configured = config.trackConfigFile.trimmed();
+    if (!configured.isEmpty()) {
+        return QDir::toNativeSeparators(QFileInfo(configured).absoluteFilePath());
+    }
+
+    const QStringList candidates = {
+        QDir(QCoreApplication::applicationDirPath())
+            .absoluteFilePath(QStringLiteral("third_party/LB/track_config.ini")),
+        QDir(QCoreApplication::applicationDirPath())
+            .absoluteFilePath(QStringLiteral("../third_party/LB/track_config.ini")),
+    };
+
+    for (const QString& candidate : candidates) {
+        if (QFileInfo::exists(candidate)) {
+            return QDir::toNativeSeparators(QFileInfo(candidate).absoluteFilePath());
+        }
+    }
+
+    return candidates.front();
 }
 
-// 海康 Mono8 帧 → cv::Mat 灰度图（clone 避免引用外部 buffer 生命周期）
+bool loadTrackConfig(const scan_tracking::common::LbPoseConfig& config, QString* errorMessage)
+{
+    const QString trackConfigPath = resolveTrackConfigPath(config);
+    if (!QFileInfo::exists(trackConfigPath)) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("track_config.ini 不存在：%1").arg(trackConfigPath);
+        }
+        return false;
+    }
+
+    const std::wstring nativePath = QDir::toNativeSeparators(trackConfigPath).toStdWString();
+    if (!AppConfig::Instance().Load(nativePath.c_str())) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("track_config.ini 解析失败：%1").arg(trackConfigPath);
+        }
+        return false;
+    }
+
+    return true;
+}
+
 cv::Mat frameToGrayMat(const HikMonoFrame& frame)
 {
     if (!frame.isValid() || frame.pixels == nullptr || frame.width <= 0 || frame.height <= 0) {
@@ -110,7 +83,6 @@ cv::Mat frameToGrayMat(const HikMonoFrame& frame)
     return view.clone();
 }
 
-// TR_Mark 输出的 4×4 double Rt → PoseMatrix4x4（行优先 float）
 PoseMatrix4x4 toPoseMatrix(const cv::Mat& rt, const QString& sourceCameraKey, quint64 frameId)
 {
     PoseMatrix4x4 pose;
@@ -129,14 +101,22 @@ PoseMatrix4x4 toPoseMatrix(const cv::Mat& rt, const QString& sourceCameraKey, qu
     return pose;
 }
 
-// 模板点云路径：优先 templateFile，否则 dataRoot/template-3D-ALL-Shift-Cut-Cut.txt
-QString buildTemplatePath(const scan_tracking::common::LbPoseConfig& config)
+QString buildTemplatePath(
+    const scan_tracking::common::LbPoseConfig& config,
+    const AppConfig& trackConfig)
 {
     if (!config.templateFile.trimmed().isEmpty()) {
         return config.templateFile.trimmed();
     }
+
+    const QString fromTrack =
+        QString::fromLocal8Bit(trackConfig.paths.template_points.c_str()).trimmed();
+    if (!fromTrack.isEmpty()) {
+        return fromTrack;
+    }
+
     const QString dataRoot = config.dataRoot.trimmed().isEmpty()
-        ? QStringLiteral("D:/work/scan-tracking/third_party/lb_pose_detection/data")
+        ? QStringLiteral("third_party/LB/data")
         : config.dataRoot.trimmed();
     return QDir(dataRoot).filePath(QStringLiteral("template-3D-ALL-Shift-Cut-Cut.txt"));
 }
@@ -155,10 +135,15 @@ LbPoseResult runLbPoseDetection(
     result.rightImageWidth = rightFrame.width;
     result.rightImageHeight = rightFrame.height;
 
-    // ---- 1. 输入校验与图像转换 ----
     if (!leftFrame.isValid() || !rightFrame.isValid()) {
         return makeFailure(QStringLiteral("LB 位姿检测需要两个有效的灰度图像帧。"));
     }
+
+    QString trackConfigError;
+    if (!loadTrackConfig(config, &trackConfigError)) {
+        return makeFailure(trackConfigError);
+    }
+    const AppConfig& trackCfg = AppConfig::Instance();
 
     const cv::Mat leftImage = frameToGrayMat(leftFrame);
     const cv::Mat rightImage = frameToGrayMat(rightFrame);
@@ -167,50 +152,55 @@ LbPoseResult runLbPoseDetection(
     }
 
     try {
-        // ---- 2. 立体 3D 重建：标定 + 极线匹配 → frame_3d_points ----
         TR_INSPECT_3D_Recon_Marker recon;
-        const auto calib = makeStereoCalibSetFromConfig(config);
-        if (calib.I1.empty()) {
-            return makeCalibFailure();
-        }
-        if (recon.Set_Calib_Config(calib.I1, calib.D1, calib.E1, calib.I2, calib.D2, calib.E2) != 0) {
-            return makeFailure(QStringLiteral("配置 LB 立体标定失败。"));
+        if (recon.Set_Calib_Config(
+                trackCfg.recon.I1,
+                trackCfg.recon.D1,
+                trackCfg.recon.E1,
+                trackCfg.recon.I2,
+                trackCfg.recon.D2,
+                trackCfg.recon.E2) != 0) {
+            return makeFailure(QStringLiteral("配置 LB 立体标定失败（track_config.ini [Recon]）。"));
         }
         if (recon.Set_2D_Config(
-                config.epipolarThreshold,
-                config.minZRange,
-                config.maxZRange,
-                config.maxReprojErr,
-                config.maxRatio) != 0) {
-            return makeFailure(QStringLiteral("配置 LB 二维重建参数失败。"));
+                trackCfg.recon.epipolar_threshold,
+                trackCfg.recon.min_z_range,
+                trackCfg.recon.max_z_range,
+                trackCfg.recon.max_reproj_err,
+                trackCfg.recon.max_ratio) != 0) {
+            return makeFailure(QStringLiteral("配置 LB 二维重建参数失败（track_config.ini [Recon]）。"));
         }
 
         if (recon.Get_3D_Recon_Marker(const_cast<cv::Mat&>(leftImage), const_cast<cv::Mat&>(rightImage)) != 0) {
             return makeFailure(QStringLiteral("TR_INSPECT_3D_Recon_Marker 重建立体点云失败。"));
         }
 
-        // ---- 3. 几何哈希模板匹配：加载模板 → build → Get_Track_Pose → Rt ----
-        FastGeoHash geoHash(config.maxDistance, config.minDistance);
-        if (geoHash.set_template_config(config.minDistance, config.maxDistance) != 0) {
-            return makeFailure(QStringLiteral("设置 LB 模板配置失败。"));
+        FastGeoHash geoHash(trackCfg.geo_hash.max_distance, trackCfg.geo_hash.min_distance);
+        if (geoHash.set_template_config(trackCfg.geo_hash.min_distance, trackCfg.geo_hash.max_distance) != 0) {
+            return makeFailure(QStringLiteral("设置 LB 模板配置失败（track_config.ini [GeoHash]）。"));
         }
-        if (geoHash.set_query_config(config.cosTolerance, config.minPercent) != 0) {
-            return makeFailure(QStringLiteral("设置 LB 查询配置失败。"));
+        if (geoHash.set_query_config(trackCfg.geo_hash.cos_tolerance, trackCfg.geo_hash.min_percent) != 0) {
+            return makeFailure(QStringLiteral("设置 LB 查询配置失败（track_config.ini [GeoHash]）。"));
         }
-        
-        const QString templatePath = buildTemplatePath(config);
-        QByteArray templateBytes = templatePath.toLocal8Bit();
-        if (geoHash.read_template_pnts(templateBytes.data()) != 0) {
+
+        const QString templatePath = buildTemplatePath(config, trackCfg);
+        QByteArray templateBytes = QDir::toNativeSeparators(templatePath).toLocal8Bit();
+        if (geoHash.read_template_pnts(templateBytes.constData()) != 0) {
             return makeFailure(QStringLiteral("从 %1 加载 LB 模板点云失败。").arg(templatePath));
         }
         if (geoHash.build() != 0) {
-			return makeFailure(QStringLiteral("构建 LB 几何哈希表失败。"));
+            return makeFailure(QStringLiteral("构建 LB 几何哈希表失败。"));
+        }
+
+        cv::Mat scanToMarkerRt = trackCfg.geo_hash.scan_to_marker_RT.clone();
+        if (geoHash.set_scan_to_marker_RT(scanToMarkerRt) != 0) {
+            return makeFailure(QStringLiteral("配置 LB scan_to_marker_RT 失败（track_config.ini [GeoHash]）。"));
         }
 
         const int trackResult = geoHash.Get_Track_Pose(
             recon.frame_3d_points,
-            config.cosTolerance,
-            config.minPercent);
+            trackCfg.geo_hash.cos_tolerance,
+            trackCfg.geo_hash.min_percent);
         if (trackResult != 0) {
             return makeFailure(QStringLiteral("LB 跟踪返回错误代码 %1。").arg(trackResult));
         }
@@ -218,13 +208,12 @@ LbPoseResult runLbPoseDetection(
         result.success = true;
         result.message = QStringLiteral("LB 位姿检测成功完成。");
         result.framePointCount = static_cast<int>(recon.frame_3d_points.size());
-        result.poseMatrix = toPoseMatrix(geoHash.Rt, QStringLiteral("lb_pose_detection"), 0);
+        result.poseMatrix = toPoseMatrix(geoHash.Rt_global, QStringLiteral("lb_pose_detection"), 0);
         if (!result.poseMatrix.isValid()) {
-            return makeFailure(QStringLiteral("LB 位姿检测产生了无效的 Rt 矩阵。"));
+            return makeFailure(QStringLiteral("LB 位姿检测产生了无效的 Rt_global 矩阵。"));
         }
         return result;
     } catch (const std::exception& ex) {
-        // TR_Mark / OpenCV 可能抛出 std::exception，统一转为 LbPoseResult 失败
         return makeFailure(QStringLiteral("LB 位姿检测抛出异常：%1").arg(QString::fromLocal8Bit(ex.what())));
     } catch (...) {
         return makeFailure(QStringLiteral("LB 位姿检测抛出未知异常。"));

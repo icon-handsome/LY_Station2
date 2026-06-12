@@ -3,6 +3,8 @@
 #include <numeric>
 #include <random>
 
+namespace lbn_pose {
+
 /**************************************************************************************
 *功  能：标记点图像预处理函数入口
 *参  数：
@@ -1420,3 +1422,5 @@ int FastGeoHash::Get_Track_Pose(std::vector<cv::Point3f>& frame_3d_points,
 	//int aa = 0;
 	return 0;
 }
+
+}  // namespace lbn_pose

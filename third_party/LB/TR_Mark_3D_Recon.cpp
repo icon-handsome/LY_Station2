@@ -1,4 +1,5 @@
 #include "TR_Mark_3D_Recon.h"
+#include "AppConfig.h"
 #include "TR_Mark_Track.h"
 
 // 计算两个二维点之间的欧氏距离
@@ -425,7 +426,7 @@ void TR_INSPECT_3D_Recon_Marker::drawEpipolarLines(const cv::Mat& img1,
 		// 如果 d1 / d2 > 0.7（即第一匹配和第二匹配很接近），说明此处存在歧义，工业场景下建议舍弃该点，以保证“不出错”比“点数多”更重要。
 		if (sed_dist > 0.00001)
 		{
-			if ((min_dist / sed_dist) > 0.7) // 唯一性比率测试
+			if ((min_dist / sed_dist) > AppConfig::Instance().recon.max_ratio) // uniqueness ratio
 			{
 				best_idx = -1;
 			}
@@ -501,8 +502,10 @@ void TR_INSPECT_3D_Recon_Marker::drawEpipolarLines(const cv::Mat& img1,
 
 			// 3. 极线粗筛
 			double dist = std::abs(a * ptR.x + b * ptR.y + c) / line_norm;
-			if (dist > epipolar_threshold) continue;
-
+			if (dist > epipolar_threshold)
+			{
+				continue;
+			}
 			// 4. 右点去畸变
 			std::vector<cv::Point2f> ptsR_u;
 			cv::undistortPoints(std::vector<cv::Point2f>{ptR}, ptsR_u, I2, D2, cv::noArray(), I2);
@@ -614,6 +617,7 @@ void TR_INSPECT_3D_Recon_Marker::drawEpipolarLines(const cv::Mat& img1,
 		const float SPATIAL_MERGE_DIST = 5.0f; // 空间点合并阈值 (mm)，根据你的测量精度调整
 		// 1. 匹配与重建循环
 		// TODO: 极线匹配中添加相邻点辅助同名点搜索
+		frame_3d_points.clear();
 		for (int j = 0; j < (int)results1.size(); ++j)
 		{
 			cv::Point3f p3d_L2R;

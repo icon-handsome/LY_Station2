@@ -56,6 +56,7 @@ endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(ProjectOptions)
+include(OpenCvBundle)
 include(MechEyeSdk)
 include(OrbbecSdk)
 include(LivoxSdk2)
@@ -66,7 +67,7 @@ option(SCAN_TRACKING_ENABLE_BEVEL_MEASUREMENT "Build Po_Kou bevel measurement al
 option(SCAN_TRACKING_ENABLE_HOLE_MEASUREMENT "Build Hole head cylinder/opening measurement algorithms" ON)
 option(SCAN_TRACKING_ENABLE_THICKNESS_MEASUREMENT "Build thickness measurement algorithms" ON)
 option(SCAN_TRACKING_ENABLE_INTERNAL_SURFACE_MEASUREMENT "Build internal surface depth/volume measurement algorithms" ON)
-option(SCAN_TRACKING_ENABLE_LB_POSE_DETECTION "Build the legacy LB pose detection module" ON)
+option(SCAN_TRACKING_ENABLE_LB_POSE_DETECTION "Build the LB stereo pose detection library" ON)
 option(SCAN_TRACKING_ENABLE_LBN_POSE_DETECTION "Build the LBN Mech-Eye pose detection library" ON)
 
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core Gui Network SerialPort)

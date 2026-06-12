@@ -107,7 +107,7 @@ QString buildTemplatePath(const scan_tracking::common::LbnPoseConfig& config)
     const QStringList candidateRoots = {
         config.dataRoot.trimmed(),
         QStringLiteral("D:/work/LY/IPC-192.168.110.173_track-main/third_party/LBN/data"),
-        QStringLiteral("D:/work/LY/IPC-192.168.110.173_track-main/third_party/LB/Data"),
+        QStringLiteral("D:/work/LY/IPC-192.168.110.173_track-main/third_party/LB/data"),
     };
 
     for (const QString& root : candidateRoots) {

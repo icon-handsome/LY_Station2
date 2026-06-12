@@ -6,6 +6,7 @@
 #include <time.h>
 #include <random>
 #include "TR_Mark_Track.h"
+#include "AppConfig.h"
 #include "TR_Mark_3D_Recon.h"
 using namespace std;
 
@@ -42,18 +43,23 @@ static int Read_TXT_File(char                         *file_name,
 int main()
 {
 	std::cout << "OpenCV version: " << CV_VERSION << std::endl;
+	AppConfig& app_config = AppConfig::Instance();
+	if (!app_config.Load())
+	{
+		return -1;
+	}
 
 	// 1. 设置文件夹路径（替换为实际的文件夹路径）
 	// 注意：路径末尾要加上 /*.bmp 来匹配所有的 BMP 文件
-	std::string folderPath1 = "D:/3 Data/4 Track_Match/0 EH-Calib/L/*.bmp";
-	std::string folderPath2 = "D:/3 Data/4 Track_Match/0 EH-Calib/R/*.bmp";
+	std::string folderPath1 = app_config.paths.left_images;
+	std::string folderPath2 = app_config.paths.right_images;
  
 	// 刚性距离角度约束：扫描仪上标记点相对距离和角度不变（类似几何哈希的二维数组查找表）
 	// 建表、查询、投票、识别
-	float cosTolerance = 0.015f;
-	float minPercent = 0.5f;
-	FastGeoHash Geo_Hash(650.0f, 30.0f);                  // 扫描头上标记点的最大间距 和  低于最小距离的点不进行特征计算和查询
-	int status  = Geo_Hash.read_template_pnts("D:/3 Data/4 Track_Match/template-3D-ALL-Shift-Cut-Cut.txt");
+	float cosTolerance = app_config.geo_hash.cos_tolerance;                          // TODO: 给偏差度数，不要给余弦偏差，因为余弦函数不是线性的
+	float minPercent = app_config.geo_hash.min_percent;                              // 最低票数占比，占所有查询数量的百分比
+	FastGeoHash Geo_Hash(app_config.geo_hash.max_distance, app_config.geo_hash.min_distance);                  // 扫描头上标记点的最大间距 和  低于最小距离的点不进行特征计算和查询
+	int status  = Geo_Hash.read_template_pnts(app_config.paths.template_points.c_str());
 	if (status != 0)
 	{
 		return status;
@@ -215,49 +221,41 @@ int main()
 
 	// 3. 标记点三维重建
 	TR_INSPECT_3D_Recon_Marker  Mark_Recon_3D;
-	Mark_Recon_3D.config.I1 = (cv::Mat_<double>(3, 3) << 5.078851406536548e+03, 0.830568826844289, 2.746479519311858e+03,
-		                                          0.0, 5.079564338697494e+03, 1.827274288235361e+03,
-		                                          0.0, 0.0, 1.0);
-	Mark_Recon_3D.config.D1 = (cv::Mat_<double>(1, 5) << -0.061121083586165,            // k1
-		                                                  0.174884596596884,             // k2
-		                                                  -1.053862530437392e-04,         // p1
-		                                                  -2.625558299490124e-04,        // p2
-		                                                  -0.174942436164493);            // k3
-	Mark_Recon_3D.config.E1 = (cv::Mat_<double>(4, 4) << 1.0, 0.0, 0.0, 0.0,
-		                                                 0.0, 1.0, 0.0, 0.0,
-		                                                 0.0, 0.0, 1.0, 0.0,
-		                                                 0.0, 0.0, 0.0, 1.0);
-
-	Mark_Recon_3D.config.I2 = (cv::Mat_<double>(3, 3) << 5.088957721152494e+03, 1.694422728104837, 2.748597487208202e+03,
-		                                                 0.0, 5.087725659008389e+03, 1.818343109063463e+03,
-		                                                 0.0, 0.0, 1.0);
-	Mark_Recon_3D.config.D2 = (cv::Mat_<double>(1, 5) << -0.061336067087922,        // k1
-		                                                 0.140736778029161,         // k2
-		                                                 -2.839150977966796e-04,    // p1
-		                                                 0.001241546114496,         // p2
-		                                                 -0.079946406594583);       // k3
-	Mark_Recon_3D.config.E2 = (cv::Mat_<double>(4, 4) << 0.932342748446725, -0.009472020725314, 0.361451629187345, -5.793657636690184e+02,
-		                                                 -0.014055020969881, 0.997951882006392, 0.062405909859861, -13.667600451372955,
-		                                                 -0.361302443673362, -0.063263907745887, 0.930300071037500, 1.265698817906372e+02,
-		                                                 0.0, 0.0, 0.0, 1.0);
-	double epipolar_threshold = 15.5;        // 极线匹配精度约束：极线距离阈值通常在 0.5 - 2.0 像素之间 2.0
-	float min_z_range         = 1200.0f;
-	float max_z_range         = 5000.0f;
-	double max_reproj_err     = 5.5;        // 最大重投影误差约束, 0.2 1.0
-	double max_ratio          = 0.7;        // 唯一性比率测试，有助于提升稳定性
-
-	Mark_Recon_3D.Set_2D_Config(epipolar_threshold,
-	                            min_z_range,
-	                            max_z_range,
-	                            max_reproj_err,
-	                            max_ratio);
-	
-	int res = Mark_Recon_3D.Get_3D_Recon_Marker(imgs1[0],
-		                                        imgs2[0]);
-	if (res != 0)
+	int calib_res = Mark_Recon_3D.Set_Calib_Config(app_config.recon.I1,
+	                                             app_config.recon.D1,
+	                                             app_config.recon.E1,
+	                                             app_config.recon.I2,
+	                                             app_config.recon.D2,
+	                                             app_config.recon.E2);
+	if (calib_res != 0)
 	{
-		return res;
+		return calib_res;
 	}
+
+	Geo_Hash.set_scan_to_marker_RT(app_config.geo_hash.scan_to_marker_RT);
+
+	double epipolar_threshold = app_config.recon.epipolar_threshold;
+	float min_z_range         = app_config.recon.min_z_range;
+	float max_z_range         = app_config.recon.max_z_range;
+	double max_reproj_err     = app_config.recon.max_reproj_err;
+	double max_ratio          = app_config.recon.max_ratio;
+
+	int res = Mark_Recon_3D.Set_2D_Config(epipolar_threshold,
+	                                      min_z_range,
+	                                      max_z_range,
+	                                      max_reproj_err,
+	                                      max_ratio);
+	//for (int ii = 6; ii < 8; ii++)
+	{
+		res = Mark_Recon_3D.Get_3D_Recon_Marker(imgs1[9],
+		                                        imgs2[9]);
+	    if (res != 0)
+	    {
+	    	return res;
+	    }
+		//system("pause");
+	}
+	
 	// 输出结果
 	//std::cout << "三维重建标记点数量: " << Mark_Recon_3D.frame_3d_points.size() << std::endl;
 	//for (size_t ii = 0; ii < Mark_Recon_3D.frame_3d_points.size(); ii++)
@@ -269,22 +267,15 @@ int main()
 	//system("pause");
 
 	// 4. 双目跟踪，输出位姿
+	// TODO: 多筛选两次，比较匹配误差，防止随机选点出现匹配失误的问题
 	res = Geo_Hash.Get_Track_Pose(Mark_Recon_3D.frame_3d_points,
 	                              cosTolerance,
                                   minPercent);
-
-	std::cout << "对应点数量： " << Geo_Hash.corres_template_points_ID.size() << std::endl;
-	std::cout << " Realtime Rt is: " << std::endl;
-	std::cout << std::fixed << std::setprecision(8);  // 强制保留 8 位小数
-	for (int i = 0; i < 4; i++)
+	if (res != 0)
 	{
-		for (int j = 0; j < 4; j++)
-		{
-			std::cout << std::setw(8) << Geo_Hash.Rt.at<double>(i, j) << " ";
-		}
-		std::cout << std::endl;
+		return res;
 	}
-
+	 
 	//// 9. 输出结果
 	//std::cout << "最后成功重建三维标记点数量: " << Geo_Hash.filtered_frame_3d_points.size() << std::endl;
 	//for (size_t i = 0; i < Geo_Hash.filtered_frame_3d_points.size(); ++i)

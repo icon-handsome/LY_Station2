@@ -209,30 +209,14 @@ struct HmiConfig {
 };
 
 struct LbPoseConfig {
+    /// LB 算法权威配置（标定、GeoHash、Recon 等），对应 third_party/LB/track_config.ini
+    QString trackConfigFile;
+    /// 可选：覆盖 track_config.ini [Paths] template_points
+    QString templateFile;
+    /// 离线/回退：数据根目录与左右图 glob（在线 CXP 采集不使用）
     QString dataRoot;
     QString leftPattern;
     QString rightPattern;
-    QString templateFile;
-    float minDistance = 30.0f;
-    float maxDistance = 650.0f;
-    float cosTolerance = 0.015f;
-    float minPercent = 0.5f;
-    /// 极线匹配距离阈值（像素），demo 默认 15.5
-    double epipolarThreshold = 15.5;
-    /// 三维重建 Z 深度过滤（mm）
-    float minZRange = 1200.0f;
-    float maxZRange = 5000.0f;
-    /// 最大重投影误差（像素）
-    double maxReprojErr = 5.5;
-    /// 唯一性比率测试
-    double maxRatio = 0.7;
-    /// 左/右相机内参 3×3、畸变 1×5、外参 4×4（行主序），空则使用 demo 默认值
-    QVector<double> leftIntrinsic3x3;
-    QVector<double> leftDistortion5;
-    QVector<double> leftExtrinsic4x4;
-    QVector<double> rightIntrinsic3x3;
-    QVector<double> rightDistortion5;
-    QVector<double> rightExtrinsic4x4;
 };
 
 /** LBN 位姿检测配置。生产环境请多工况标定，勿仅按单帧离线 success 放大容差。 */

@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.21)
 project(PoKouCeLiang LANGUAGES CXX)
 
 set(PO_KOU_OPENCV_ROOT
-    "${CMAKE_CURRENT_SOURCE_DIR}/../LB/opencv-3.4.3-vc14_vc15/opencv/build"
+    "${SCAN_TRACKING_OPENCV_BUILD_ROOT}"
     CACHE PATH
     "Path to the bundled OpenCV build used by Po_Kou_Ce_Liang"
 )
@@ -19,7 +19,7 @@ find_package(PCL 1.12 REQUIRED COMPONENTS
 )
 
 find_package(OpenCV REQUIRED
-    PATHS "${PO_KOU_OPENCV_ROOT}/x64/vc15/lib"
+    PATHS "${SCAN_TRACKING_OPENCV_LIB_DIR}"
     NO_DEFAULT_PATH
 )
 

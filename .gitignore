@@ -56,9 +56,9 @@ third_party/Thicknessmeasurement/*.sdf
 third_party/Thicknessmeasurement/*.suo
 third_party/Thicknessmeasurement/*.vcxproj.user
 third_party/Thicknessmeasurement/thickness_result.json
-# LB: bundled OpenCV tree/installer (local path only, see third_party/LBN/CMakeLists.txt)
-third_party/LB/opencv-3.4.3-vc14_vc15/
-third_party/LB/opencv-3.4.3-vc14_vc15.exe
+# OpenCV bundle (local install, shared by LB/LBN/Po_Kou)
+third_party/opencv-3.4.3-vc14_vc15/
+third_party/opencv-3.4.3-vc14_vc15.exe
 # MVS: IDE samples/runtime bundles (headers under Development/ are tracked)
 third_party/MVS/Applications/
 third_party/MVS/MVS/

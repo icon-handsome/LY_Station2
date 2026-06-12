@@ -1,4 +1,5 @@
 #pragma once
+#include "AppConfig.h"
 #include <iostream>
 #include <vector>
 #include <cmath>
@@ -20,13 +21,20 @@ public:
 		double max_ratio;                   // 唯一性比率测试，有助于提升稳定性
 		cv::Mat I1, D1, E1, I2, D2, E2;     // 标定参数,内参、畸变、外参
 
-		Config()                            // 显式写出构造函数进行初始化  
+		Config()                            // init from AppConfig
 		{
-			epipolar_threshold = 15.5;      // 极线匹配精度约束：极线距离阈值通常在 0.5 - 2.0 像素之间 2.0
-			min_z_range        = 1200.0f;   // 深度过滤
-			max_z_range        = 5000.0f;
-			max_reproj_err     = 5.5;       // 最大重投影误差约束, 0.2 1.0
-			max_ratio          = 0.7;       // 唯一性比率测试，有助于提升稳定性
+			const AppConfig::Recon& recon = AppConfig::Instance().recon;
+			epipolar_threshold = recon.epipolar_threshold;
+			min_z_range        = recon.min_z_range;
+			max_z_range        = recon.max_z_range;
+			max_reproj_err     = recon.max_reproj_err;
+			max_ratio          = recon.max_ratio;
+			I1                 = recon.I1.clone();
+			D1                 = recon.D1.clone();
+			E1                 = recon.E1.clone();
+			I2                 = recon.I2.clone();
+			D2                 = recon.D2.clone();
+			E2                 = recon.E2.clone();
 		}
 	} config;
 

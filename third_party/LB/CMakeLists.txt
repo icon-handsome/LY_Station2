@@ -2,70 +2,66 @@ cmake_minimum_required(VERSION 3.21)
 
 project(LbPoseDetection LANGUAGES CXX)
 
-set(LB_OPENCV_ROOT
-    "${CMAKE_CURRENT_SOURCE_DIR}/opencv-3.4.3-vc14_vc15/opencv/build"
-    CACHE PATH
-    "Path to the bundled OpenCV build"
-)
-
-find_package(PCL 1.12 REQUIRED COMPONENTS
-    common
-    features
-    filters
-    io
-    kdtree
-    sample_consensus
-    search
-    segmentation
-    surface
-)
-
 find_package(OpenCV REQUIRED
-    PATHS "${CMAKE_CURRENT_SOURCE_DIR}/opencv-3.4.3-vc14_vc15/opencv/build/x64/vc15/lib"
+    PATHS "${SCAN_TRACKING_OPENCV_LIB_DIR}"
     NO_DEFAULT_PATH
 )
 
-file(GLOB LB_SOURCES CONFIGURE_DEPENDS
+set(LB_LIBRARY_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/TR_Mark_3D_Recon.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/TR_Mark_Track.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/AppConfig.cpp"
 )
 
-file(GLOB LB_HEADERS CONFIGURE_DEPENDS
+set(LB_LIBRARY_HEADERS
     "${CMAKE_CURRENT_SOURCE_DIR}/TR_Mark_3D_Recon.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/TR_Mark_Track.h"
-    "${CMAKE_CURRENT_SOURCE_DIR}/Filter.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/AppConfig.h"
 )
 
-add_library(lb_pose_detection STATIC ${LB_SOURCES})
+set(LB_DATA_FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/data/template-3D-ALL-Shift-Cut-Cut.txt"
+    "${CMAKE_CURRENT_SOURCE_DIR}/track_config.ini"
+)
+
+add_library(lb_pose_detection STATIC ${LB_LIBRARY_SOURCES})
 add_library(LbPoseDetection::lb_pose_detection ALIAS lb_pose_detection)
 
-target_sources(lb_pose_detection PRIVATE ${LB_HEADERS})
-source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" PREFIX "third_party/LB" FILES ${LB_SOURCES} ${LB_HEADERS})
+target_sources(lb_pose_detection
+    PRIVATE
+        ${LB_LIBRARY_HEADERS}
+        ${LB_DATA_FILES}
+)
+
+set_source_files_properties(${LB_DATA_FILES} PROPERTIES HEADER_FILE_ONLY TRUE)
+
+source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" PREFIX "third_party/LB" FILES
+    ${LB_LIBRARY_SOURCES}
+    ${LB_LIBRARY_HEADERS}
+    ${LB_DATA_FILES}
+)
 
 target_include_directories(lb_pose_detection
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/opencv-3.4.3-vc14_vc15/opencv/build/include"
-        ${PCL_INCLUDE_DIRS}
+        "${SCAN_TRACKING_OPENCV_INCLUDE_DIR}"
 )
 
 target_link_libraries(lb_pose_detection
     PUBLIC
         ${OpenCV_LIBS}
-        ${PCL_LIBRARIES}
 )
 
 target_compile_features(lb_pose_detection PUBLIC cxx_std_17)
 
-target_compile_definitions(lb_pose_detection
-    PUBLIC
-        ${PCL_DEFINITIONS}
-)
-
 if(MSVC)
-    target_compile_options(lb_pose_detection PRIVATE /utf-8 /bigobj)
+    # Legacy vendor headers use out-of-class qualified member declarations.
+    target_compile_options(lb_pose_detection PRIVATE /utf-8 /bigobj /permissive)
 endif()
 
 set_target_properties(lb_pose_detection PROPERTIES
     FOLDER "third_party"
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
 )

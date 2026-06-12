@@ -2,15 +2,8 @@ cmake_minimum_required(VERSION 3.21)
 
 project(LbnPoseDetection LANGUAGES CXX)
 
-# Reuse the validated OpenCV bundle shipped with third_party/LB.
-set(LBN_OPENCV_ROOT
-    "${CMAKE_CURRENT_SOURCE_DIR}/../LB/opencv-3.4.3-vc14_vc15/opencv/build"
-    CACHE PATH
-    "Path to the bundled OpenCV build used by LBN"
-)
-
 find_package(OpenCV REQUIRED
-    PATHS "${LBN_OPENCV_ROOT}/x64/vc15/lib"
+    PATHS "${SCAN_TRACKING_OPENCV_LIB_DIR}"
     NO_DEFAULT_PATH
 )
 
@@ -45,7 +38,7 @@ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" PREFIX "third_party/LBN" FILES
 target_include_directories(lbn_pose
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}"
-        "${LBN_OPENCV_ROOT}/include"
+        "${SCAN_TRACKING_OPENCV_INCLUDE_DIR}"
 )
 
 target_link_libraries(lbn_pose
@@ -56,7 +49,7 @@ target_link_libraries(lbn_pose
 target_compile_features(lbn_pose PUBLIC cxx_std_17)
 
 if(MSVC)
-    target_compile_options(lbn_pose PRIVATE /utf-8 /bigobj)
+    target_compile_options(lbn_pose PRIVATE /utf-8 /bigobj /permissive)
 endif()
 
 set_target_properties(lbn_pose PROPERTIES

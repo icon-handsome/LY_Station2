@@ -24,7 +24,7 @@ Index:
 
 # 跳过体积巨大的第三方预编译树（头文件仍可通过 compile_commands 解析）
 If:
-  PathMatch: .*/third_party/LB/opencv[^/]*/.*
+  PathMatch: .*/third_party/opencv[^/]*/.*
 
 Index:
   Background: Skip
