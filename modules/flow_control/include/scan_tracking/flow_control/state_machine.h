@@ -282,6 +282,9 @@ private:
     // 执行当前活动任务
     void executeActiveTask();
 
+    // 算法旁路模式：跳过 Handler/算法，直接回写 PLC 成功结果
+    void executeBypassActiveTask();
+
     // 执行上料抓取任务
     void executeLoadGraspTask();
 
@@ -355,6 +358,13 @@ private:
         int pathId,
         int segmentIndex,
         const scan_tracking::mech_eye::CaptureResult& result,
+        const scan_tracking::vision::MultiCameraCaptureBundle& bundle);
+
+    // 算法旁路：完成 PLC 握手但不缓存点云（采集后立即丢弃）
+    void commitBypassScanSegmentCapture(
+        int pathId,
+        int segmentIndex,
+        int capturedPointCount,
         const scan_tracking::vision::MultiCameraCaptureBundle& bundle);
 
     // 后台 PCL 点云 refinement（与 PLC 握手并行；PCL 在 processPointCloudFrame 内串行）

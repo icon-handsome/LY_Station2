@@ -77,6 +77,8 @@ struct FlowControlConfig {
     int pollIntervalMs;
     int heartbeatIntervalMs;
     int simulatedProcessingMs;
+    /// 临时联调：跳过检测/位姿/点云后处理算法；Trig_ScanSegment 仍执行相机采集
+    bool algorithmBypassEnabled = false;
     /// @deprecated 分段点云/海康已改内存缓存；仅 LatencyTest 等调试落盘仍可读此路径
     QString scanCacheDirectory;
     /// @deprecated 不再用于分段 PLY 生命周期

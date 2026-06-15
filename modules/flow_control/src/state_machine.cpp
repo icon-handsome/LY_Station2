@@ -76,6 +76,12 @@ constexpr int kBackgroundRefinementJoinTimeoutMs = 300000;
 constexpr quint16 kInspectionResOk = 1;
 constexpr quint16 kInspectionResTimeoutNg = 6;
 
+bool isAlgorithmBypassEnabled()
+{
+    const auto* configMgr = scan_tracking::common::ConfigManager::instance();
+    return configMgr != nullptr && configMgr->flowControlConfig().algorithmBypassEnabled;
+}
+
 // TODO(field-commissioning): 现场联调临时策略——仅超时向 PLC 报 NG（Res_Inspection=6）；
 // 算法 NG、缺段、Tracking 不可用等其它情况一律回 Res=1(OK)。日志/HMI 仍保留真实结果码。
 // 联调结束、恢复按蓝友/业务判定写 Res 后，删除本函数并在 executeInspectionTask 中直传 actualResultCode。
@@ -642,6 +648,10 @@ StateMachine::~StateMachine()
 void StateMachine::start()
 {
     qInfo(LOG_FLOW) << QStringLiteral("状态机启动。");
+    if (isAlgorithmBypassEnabled()) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("[算法旁路] 已启用：跳过检测/位姿/点云后处理算法；Trig_ScanSegment 仍执行相机采集。");
+    }
     clearActiveTask();           // 清除当前活动任务
     resetScanSegmentCache();     // 清空扫描缓存
     m_isPollingPlc = false;      // 重置 PLC 轮询标志
@@ -1145,6 +1155,11 @@ void StateMachine::processTrigger(const protocol::TriggerDefinition& trigger, co
     }
 
     if (trigger.stage == protocol::Stage::Inspection && m_activeTask.inspectionPathId <= 0) {
+        if (isAlgorithmBypassEnabled()) {
+            m_activeTask.inspectionPathId = 1;
+            qInfo(LOG_FLOW).noquote()
+                << QStringLiteral("[算法旁路] Trig_Inspection 无缓存路径，使用虚拟路径 ID=1。");
+        } else {
         const QString status = multiPathCacheStatusText();
         qWarning(LOG_FLOW).noquote()
             << QStringLiteral("[多路径] 拒绝 Trig_Inspection（当前无已扫满的任一路径），保留已缓存点云。")
@@ -1167,6 +1182,7 @@ void StateMachine::processTrigger(const protocol::TriggerDefinition& trigger, co
         setState(AppState::Ready);
         publishIpcStatus();
         return;
+        }
     }
 
     {
@@ -1229,10 +1245,95 @@ void StateMachine::rejectDisabledTrigger(const protocol::TriggerDefinition& trig
  * 
  * 根据触发定义的 trigOffset 分发到已注册的 Handler。
  */
+void StateMachine::executeBypassActiveTask()
+{
+    if (m_activeTask.definition == nullptr) {
+        return;
+    }
+
+    const protocol::TriggerDefinition& trigger = *m_activeTask.definition;
+    qWarning(LOG_FLOW).noquote()
+        << QStringLiteral("[算法旁路] 跳过检测/位姿等算法，PLC 握手回写成功：")
+        << protocol::triggerName(trigger);
+
+    switch (trigger.stage) {
+    case protocol::Stage::LoadGrasp:
+        writeLoadGraspResult();
+        completeActiveTask(1, protocol::AckState::Completed, true);
+        emit loadGraspFinished(1, 125.0f, 250.0f, 375.0f, 0.0f, 90.0f, 180.0f);
+        break;
+    case protocol::Stage::StationMaterialCheck:
+        writeAsciiPlaceholder(protocol::registers::kSelfCheckFailWord0, 2, QStringLiteral("OK"));
+        completeActiveTask(1, protocol::AckState::Completed, true);
+        break;
+    case protocol::Stage::PoseCheck: {
+        const QVector<double> identityRt = {
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        };
+        writeFloatPlaceholder(protocol::registers::kPoseDeviationMm, 0.0f);
+        completeActiveTask(1, protocol::AckState::Completed, true);
+        emit poseCheckFinished(true, 1, 0.0, identityRt, QStringLiteral("算法旁路"));
+        break;
+    }
+    case protocol::Stage::ScanSegment:
+        qInfo(LOG_FLOW).noquote()
+            << QStringLiteral("[算法旁路] Trig_ScanSegment：执行相机采集，跳过 LBN/LB/点云后处理算法");
+        executeScanSegmentTask();
+        break;
+    case protocol::Stage::Inspection: {
+        InspectionSummary summary;
+        summary.resultCode = 1;
+        writeInspectionResult(summary);
+        completeActiveTask(1, protocol::AckState::Completed, true);
+        tracking::InspectionMeasurement measurement;
+        emit inspectionFinished(1, 0, 0, 0, measurement, QStringLiteral("算法旁路"));
+        break;
+    }
+    case protocol::Stage::UnloadCalc:
+        writeUnloadCalcResult();
+        completeActiveTask(1, protocol::AckState::Completed, true);
+        emit unloadCalcFinished(1, 500.0f, 600.0f, 700.0f, 0.0f, 0.0f, 90.0f);
+        break;
+    case protocol::Stage::SelfCheck:
+        if (m_modbus && m_modbus->isConnected()) {
+            m_modbus->writeRegisters(protocol::registers::kSelfCheckFailWord0, {0, 0});
+            m_modbus->writeRegisters(protocol::registers::kSelfCheckFailWord1, {0});
+        }
+        completeActiveTask(1, protocol::AckState::Completed, true);
+        emit selfCheckFinished(1, 0);
+        break;
+    case protocol::Stage::ResultReset:
+        executeResultResetTask();
+        break;
+    default:
+        if (trigger.trigOffset == 27) {
+            if (m_modbus && m_modbus->isConnected()) {
+                writeAsciiPlaceholder(
+                    protocol::registers::kCodeValueAscii,
+                    protocol::registers::kCodeValueRegisterCount,
+                    QStringLiteral("BY"));
+            }
+            completeActiveTask(1, protocol::AckState::Completed, true);
+            emit codeReadFinished(1, QStringLiteral("BY"));
+        } else {
+            completeActiveTask(1, protocol::AckState::Completed, true);
+        }
+        break;
+    }
+}
+
 void StateMachine::executeActiveTask()
 {
     if (m_activeTask.definition == nullptr) {
         return;  // 没有活动任务，直接返回
+    }
+
+    if (isAlgorithmBypassEnabled()) {
+        executeBypassActiveTask();
+        return;
     }
 
     ITaskHandler* handler = m_handlerRegistry
@@ -1315,6 +1416,24 @@ void StateMachine::onVisionBundleCaptureFinished(scan_tracking::vision::MultiCam
         m_currentCalibrationMatrix = m_baseCalibrationMatrix;
     }
     const bool needRotation = resolveNeedRotationForSegment(pathIdForCapture, m_activeTask.scanSegmentIndex);
+    if (isAlgorithmBypassEnabled()) {
+        if (!result.pointCloud.isValid()) {
+            finishScanSegmentFailure(
+                7,
+                3,
+                722,
+                QStringLiteral("Mech-Eye 点云无效，无法缓存"),
+                QStringLiteral("Mech-Eye 点云无效，无法缓存"));
+            return;
+        }
+
+        const int segmentIndex = m_activeTask.scanSegmentIndex;
+        const int pathIdForCache = resolvePathIdForIncomingSegment(segmentIndex);
+        const int capturedPointCount = result.pointCloud.pointCount;
+        commitBypassScanSegmentCapture(pathIdForCache, segmentIndex, capturedPointCount, bundle);
+        return;
+    }
+
     applyLbnCalibrationUpdate(pathIdForCapture, m_activeTask.scanSegmentIndex, needRotation, bundle);
 
     if (!result.pointCloud.isValid()) {
@@ -1384,6 +1503,51 @@ void StateMachine::commitScanSegmentCaptureImmediate(
         << QStringLiteral(" 任务ID=") << m_activeTask.taskId
         << QStringLiteral(" 点数=") << result.pointCloud.pointCount
         << QStringLiteral(" 总缓存=") << totalCachedPointCloudCount();
+
+    completeActiveTask(1);
+    emit scanFinished(segmentIndex, 1, imageCount, cloudFrameCount);
+}
+
+void StateMachine::commitBypassScanSegmentCapture(
+    int pathId,
+    int segmentIndex,
+    int capturedPointCount,
+    const scan_tracking::vision::MultiCameraCaptureBundle& bundle)
+{
+    if (pathId != m_currentPathId) {
+        qInfo(LOG_FLOW).noquote()
+            << QStringLiteral("[多路径] 切换路径")
+            << QStringLiteral(" 段号=") << segmentIndex
+            << QStringLiteral(" 旧路径ID=") << m_currentPathId
+            << QStringLiteral(" 新路径ID=") << pathId;
+        m_currentPathId = pathId;
+        m_currentPathSegments.clear();
+    }
+
+    m_currentPathSegments.insert(segmentIndex);
+
+    {
+        std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
+        m_pathSegmentCaptureResults[pathId].remove(segmentIndex);
+        m_pathSegmentCaptureBundles[pathId].remove(segmentIndex);
+    }
+
+    int imageCount = countHikImagesInBundle(bundle);
+    if (imageCount == 0) {
+        imageCount = 1;
+    }
+    const int cloudFrameCount = capturedPointCount > 0 ? 1 : 0;
+
+    writeScanSegmentResult(segmentIndex, imageCount, cloudFrameCount);
+    m_progress = 100;
+    publishIpcStatus();
+
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("[算法旁路] 采集完成，点云已丢弃不入缓存")
+        << QStringLiteral(" [路径") << pathId << QStringLiteral("][段") << segmentIndex << QStringLiteral("]")
+        << QStringLiteral(" 任务ID=") << m_activeTask.taskId
+        << QStringLiteral(" 丢弃点数=") << capturedPointCount
+        << QStringLiteral(" 2D帧数=") << imageCount;
 
     completeActiveTask(1);
     emit scanFinished(segmentIndex, 1, imageCount, cloudFrameCount);

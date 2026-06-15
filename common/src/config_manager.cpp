@@ -442,6 +442,7 @@ void ConfigManager::writeDefaults(QSettings& settings)
     settings.setValue("pollIntervalMs", 100);
     settings.setValue("heartbeatIntervalMs", 1000);
     settings.setValue("simulatedProcessingMs", 300);
+    settings.setValue("algorithmBypassEnabled", false);
     settings.endGroup();
 
     settings.beginGroup("Tracking");
@@ -685,6 +686,8 @@ void ConfigManager::load(const QString& filePath)
     m_flowControlConfig.pollIntervalMs = settings.value("pollIntervalMs", 100).toInt();
     m_flowControlConfig.heartbeatIntervalMs = settings.value("heartbeatIntervalMs", 1000).toInt();
     m_flowControlConfig.simulatedProcessingMs = settings.value("simulatedProcessingMs", 300).toInt();
+    m_flowControlConfig.algorithmBypassEnabled =
+        settings.value("algorithmBypassEnabled", false).toBool();
     m_flowControlConfig.scanCacheDirectory = settings.value("scanCacheDirectory").toString().trimmed();
     m_flowControlConfig.retainSegmentPly = settings.value("retainSegmentPly", true).toBool();
     settings.endGroup();
