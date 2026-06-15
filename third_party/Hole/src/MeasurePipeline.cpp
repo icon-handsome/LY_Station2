@@ -1,3 +1,5 @@
+// ??/???????????????????? V1.1??
+// IPC ???? runWithScanCloud / runPipelineWithPreprocessedScan ?????
 #include "HeadMeasure/MeasurePipeline.h"
 
 #include "HeadMeasure/Geometry.h"
@@ -13,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <iostream>
 #include <limits>
 #include <sstream>
@@ -72,6 +75,40 @@ CloudPtr cropCloud(const CloudConstPtr& input, const CropBox& box)
     return out;
 }
 
+bool isPointInCropBox(const PointT& point, const CropBox& box)
+{
+    return point.x >= box.min.x() && point.x <= box.max.x() &&
+           point.y >= box.min.y() && point.y <= box.max.y() &&
+           point.z >= box.min.z() && point.z <= box.max.z();
+}
+
+CloudPtr cropCloudAny(const CloudConstPtr& input, const std::vector<CropBox>& boxes)
+{
+    if (boxes.empty())
+    {
+        return CloudPtr(new Cloud(*input));
+    }
+
+    CloudPtr out(new Cloud);
+    out->reserve(input->size());
+    for (std::size_t i = 0; i < input->size(); ++i)
+    {
+        const PointT& point = input->points[i];
+        for (std::size_t b = 0; b < boxes.size(); ++b)
+        {
+            if (isPointInCropBox(point, boxes[b]))
+            {
+                out->push_back(point);
+                break;
+            }
+        }
+    }
+    out->width = static_cast<uint32_t>(out->size());
+    out->height = 1;
+    out->is_dense = input->is_dense;
+    return out;
+}
+
 void printCloudInfo(const std::string& name, const CloudConstPtr& cloud) {
     if (!cloud || cloud->empty()) {
         std::cout << "cloud_info name=" << name << " points=0" << std::endl;
@@ -88,29 +125,29 @@ void printCloudInfo(const std::string& name, const CloudConstPtr& cloud) {
 
 CloudPtr preprocess(const CloudConstPtr& input, const MeasureConfig& cfg)
 {
-	// ¦Ë??ÈÎ
+	// ???
     CloudPtr transformed(new Cloud);
     pcl::transformPointCloud(*input, *transformed, cfg.poseCorrection);
 
-	// ?¨¹?
-    CloudPtr cropped = cropCloud(transformed, cfg.crop);
+	// ü
+    //CloudPtr cropped = cropCloudAny(transformed, cfg.cropBoxes);
 
-	// ¦Ë??????????
+	// ???
     CloudPtr filtered(new Cloud);
-    if (cfg.statisticalMeanK > 0 && cropped->size() > static_cast<std::size_t>(cfg.statisticalMeanK))
+	if (cfg.statisticalMeanK > 0 && transformed->size() > static_cast<std::size_t>(cfg.statisticalMeanK))
 	{
         pcl::StatisticalOutlierRemoval<PointT> sor;
-        sor.setInputCloud(cropped);
+		sor.setInputCloud(transformed);
         sor.setMeanK(cfg.statisticalMeanK);
         sor.setStddevMulThresh(cfg.statisticalStddevMul);
         sor.filter(*filtered);
     }
 	else
 	{
-        filtered = cropped;
+		filtered = transformed;
     }
 
-	// ??????
+	// ???
     CloudPtr down(new Cloud);
     if (cfg.voxelLeafMm > 0.0) 
 	{
@@ -127,7 +164,8 @@ CloudPtr preprocess(const CloudConstPtr& input, const MeasureConfig& cfg)
     return down;
 }
 
-CloudPtr mergeFrames(const std::vector<std::string>& paths, const MeasureConfig& cfg) {
+CloudPtr mergeFrames(const std::vector<std::string>& paths, const MeasureConfig& cfg) 
+{
     CloudPtr merged(new Cloud);
     for (std::size_t i = 0; i < paths.size(); ++i)
 	{
@@ -135,7 +173,7 @@ CloudPtr mergeFrames(const std::vector<std::string>& paths, const MeasureConfig&
 
 		PointT min_pt, max_pt;
 		pcl::getMinMax3D(*frame, min_pt, max_pt);
-		std::cout << "????????¦¶: "
+		std::cout << "???: "
 			      << "X: [" << min_pt.x << ", " << max_pt.x << "], "
 			      << "Y: [" << min_pt.y << ", " << max_pt.y << "], "
 			      << "Z: [" << min_pt.z << ", " << max_pt.z << "]" << std::endl;
@@ -218,7 +256,7 @@ FitReport fitPlanePca(const CloudConstPtr& cloud, Eigen::Vector4d& plane)
     return report;
 }
 
-// ?????scanInTemplate---???????
+// scanInTemplate---?
 FitReport alignScanToTemplate(const CloudConstPtr& scan,
                               const CloudConstPtr& templ,
                               const MeasureConfig& cfg,
@@ -338,25 +376,25 @@ CloudPtr buildStraightSideCloud(const CloudConstPtr& scan, const MeasureConfig& 
               << " direction=" << (angleOver90 ? "negative_fitted_normal" : "positive_fitted_normal")
               << " points=" << straight->size() << std::endl;
 
-    /* ????PCD????????????????????????????????????
-    const std::string straightPath = "C:/Users/lenovo/Desktop/straight_side_cropped.pcd";
-    if (straight && !straight->empty())
-    {
-        const int saveRc = pcl::io::savePCDFileBinary(straightPath, *straight);
-        if (saveRc == 0)
-        {
-            std::cout << "???¨¹?????????¹×" << straightPath << " ??????" << straight->size() << std::endl;
-        }
-        else
-        {
-            std::cout << "???¨¹????????????" << straightPath << " ??????" << saveRc << std::endl;
-        }
-    }
-    else
-    {
-        std::cout << "???¨¹?????????¦Ä????" << std::endl;
-    }
-    */
+    //// PCD????????
+    //const std::string straightPath = "C:/Users/lenovo/Desktop/straight_side_cropped.pcd";
+    //if (straight && !straight->empty())
+    //{
+    //    const int saveRc = pcl::io::savePCDFileBinary(straightPath, *straight);
+    //    if (saveRc == 0)
+    //    {
+    //        std::cout << "??ü??" << straightPath << " " << straight->size() << std::endl;
+    //    }
+    //    else
+    //    {
+    //        std::cout << "??ü???" << straightPath << " ?" << saveRc << std::endl;
+    //    }
+    //}
+    //else
+    //{
+    //    std::cout << "??ü???" << std::endl;
+    //}
+    //
     return straight;
 }
 
@@ -383,23 +421,23 @@ CloudPtr buildStraightSideFeatureCloud(const CloudConstPtr& scan, const MeasureC
               << " direction=" << (angleOver90 ? "negative_fitted_normal" : "positive_fitted_normal")
               << " points=" << featureCloud->size() << std::endl;
 
-    /* ????PCD????????????????????????????????????
+    /* PCD????????
     const std::string featurePath = "C:/Users/lenovo/Desktop/straight_side_feature_cropped.pcd";
     if (featureCloud && !featureCloud->empty())
     {
         const int saveRc = pcl::io::savePCDFileBinary(featurePath, *featureCloud);
         if (saveRc == 0)
         {
-            std::cout << "???????????????¹×" << featurePath << " ??????" << featureCloud->size() << std::endl;
+            std::cout << "???" << featurePath << " " << featureCloud->size() << std::endl;
         }
         else
         {
-            std::cout << "??????????????????" << featurePath << " ??????" << saveRc << std::endl;
+            std::cout << "????" << featurePath << " ?" << saveRc << std::endl;
         }
     }
     else
     {
-        std::cout << "???????????????¦Ä????" << std::endl;
+        std::cout << "????" << std::endl;
     }
     */
     return featureCloud;
@@ -409,8 +447,9 @@ CylinderModel fitCylinderByPcaAxis(const CloudConstPtr& cloud, const MeasureConf
 {
     CylinderModel model;
     model.fit.name = "straight_side_cylinder";
-    model.fit.inlierCount = static_cast<int>(cloud->size());
-    if (cloud->size() < 10)
+    model.fit.inlierCount = cloud ? static_cast<int>(cloud->size()) : 0;
+    std::cout << "fitCylinderByPcaAxis enter points=" << model.fit.inlierCount << std::endl;
+    if (!cloud || cloud->size() < 10)
     {
         model.fit.rmsMm = std::numeric_limits<double>::quiet_NaN();
         model.fit.maxAbsMm = std::numeric_limits<double>::quiet_NaN();
@@ -437,7 +476,7 @@ CylinderModel fitCylinderByPcaAxis(const CloudConstPtr& cloud, const MeasureConf
         inliers.push_back(static_cast<int>(i));
     }
 
-    const int maxIter = 5;
+    const int maxIter = 2;         // ????????????
     double radius = 0.0;
     Eigen::Vector3d axisPoint = origin;
 
@@ -482,11 +521,13 @@ CylinderModel fitCylinderByPcaAxis(const CloudConstPtr& cloud, const MeasureConf
         std::vector<double> sortedAbs = absResiduals;
         std::sort(sortedAbs.begin(), sortedAbs.end());
         const double medianAbs = sortedAbs[sortedAbs.size() / 2];
-        double robustThreshold = std::max(cfg.cylinderDistanceThresholdMm, 3.0 * 1.4826 * medianAbs);
+        const double configuredThreshold = cfg.cylinderDistanceThresholdMm > 0.0 ? cfg.cylinderDistanceThresholdMm : 2.0;
+        double robustThreshold = 3.0 * 1.4826 * medianAbs;
         if (robustThreshold <= 0.0 || !std::isfinite(robustThreshold))
         {
-            robustThreshold = cfg.cylinderDistanceThresholdMm > 0.0 ? cfg.cylinderDistanceThresholdMm : 2.0;
+            robustThreshold = configuredThreshold;
         }
+        robustThreshold = std::max(configuredThreshold, std::min(robustThreshold, 2.5 * configuredThreshold));
 
         std::vector<int> nextInliers;
         nextInliers.reserve(inliers.size());
@@ -497,6 +538,11 @@ CylinderModel fitCylinderByPcaAxis(const CloudConstPtr& cloud, const MeasureConf
                 nextInliers.push_back(inliers[k]);
             }
         }
+        std::cout << "cylinder_fit_iter=" << iter
+                  << " radius_mm=" << radius
+                  << " threshold_mm=" << robustThreshold
+                  << " inliers_before=" << inliers.size()
+                  << " inliers_after=" << nextInliers.size() << std::endl;
         if (nextInliers.size() >= 10)
         {
             inliers.swap(nextInliers);
@@ -547,7 +593,7 @@ CylinderModel fitCylinderByPcaAxis(const CloudConstPtr& cloud, const MeasureConf
             }
         }
 
-        if (sliceCenters.size() >= 2)
+        if (iter + 1 < maxIter && sliceCenters.size() >= 2)
         {
             Eigen::Vector3d centerMean(0.0, 0.0, 0.0);
             for (std::size_t i = 0; i < sliceCenters.size(); ++i)
@@ -578,7 +624,6 @@ CylinderModel fitCylinderByPcaAxis(const CloudConstPtr& cloud, const MeasureConf
 
     double sum2Final = 0.0;
     double maxAbsFinal = 0.0;
-    double radiusSum = 0.0;
     std::vector<double> radialDistances;
     radialDistances.reserve(inliers.size());
     for (std::size_t k = 0; k < inliers.size(); ++k)
@@ -587,11 +632,6 @@ CylinderModel fitCylinderByPcaAxis(const CloudConstPtr& cloud, const MeasureConf
         const Eigen::Vector3d p(pt.x, pt.y, pt.z);
         const double radial = (p - closestPointOnLine(p, axisPoint, axis)).norm();
         radialDistances.push_back(radial);
-        radiusSum += radial;
-    }
-    if (!radialDistances.empty())
-    {
-        radius = radiusSum / static_cast<double>(radialDistances.size());
     }
     for (std::size_t i = 0; i < radialDistances.size(); ++i)
     {
@@ -606,6 +646,9 @@ CylinderModel fitCylinderByPcaAxis(const CloudConstPtr& cloud, const MeasureConf
     model.fit.inlierCount = static_cast<int>(inliers.size());
     model.fit.rmsMm = radialDistances.empty() ? std::numeric_limits<double>::quiet_NaN() : std::sqrt(sum2Final / static_cast<double>(radialDistances.size()));
     model.fit.maxAbsMm = maxAbsFinal;
+    std::cout << "fitCylinderByPcaAxis leave inliers=" << model.fit.inlierCount
+              << " radius_mm=" << model.radiusMm
+              << " rms_mm=" << model.fit.rmsMm << std::endl;
     return model;
 }
 CylinderModel fitOpeningCylinderIterative(const CloudConstPtr& cloud,
@@ -731,6 +774,7 @@ CylinderModel fitOpeningCylinderIterative(const CloudConstPtr& cloud,
     model.fit.rmsMm = std::sqrt(sum2 / static_cast<double>(cloud->size()));
     model.fit.maxAbsMm = maxAbs;
     std::cout << "fit name=" << model.fit.name
+		      << " radius=" <<  model.radiusMm
               << " opening_axis_initial=(" << axisInitial.x() << "," << axisInitial.y() << "," << axisInitial.z() << ")"
               << " rms_mm=" << model.fit.rmsMm
               << " max_abs_mm=" << model.fit.maxAbsMm
@@ -738,7 +782,7 @@ CylinderModel fitOpeningCylinderIterative(const CloudConstPtr& cloud,
     return model;
 }
 
-// ???
+// ?
 std::vector<CircleSection> sliceByCylinderAxis(const CloudConstPtr& cloud,
                                                const CylinderModel& cylinder,
                                                const MeasureConfig& cfg)
@@ -757,7 +801,7 @@ std::vector<CircleSection> sliceByCylinderAxis(const CloudConstPtr& cloud,
         h.push_back(value);
         minH = std::min(minH, value);
     }
-	minH += 10.0;                         // ??¨¹????????????????10.0mm
+	minH += 10.0;                         // ?ü???10.0mm
     std::vector<CircleSection> sections;
     for (int i = 0; i < cfg.sliceCount; ++i)
 	{
@@ -784,17 +828,17 @@ std::vector<CircleSection> sliceByCylinderAxis(const CloudConstPtr& cloud,
         sliceCloud->width = static_cast<uint32_t>(sliceCloud->size());
         sliceCloud->height = 1;
         sliceCloud->is_dense = cloud->is_dense;
-    /* ????PCD????????????????????????????????????
+    /* PCD????????
         std::ostringstream slicePath;
         slicePath << "C:/Users/lenovo/Desktop/axis_slice_" << i << ".pcd";
         const int sliceSaveRc = pcl::io::savePCDFileBinary(slicePath.str(), *sliceCloud);
         if (sliceSaveRc == 0) 
 		{
-            std::cout << "???????????¹×" << slicePath.str() << " ??????" << sliceCloud->size() << std::endl;
+            std::cout << "???" << slicePath.str() << " " << sliceCloud->size() << std::endl;
         } 
 		else 
 		{
-            std::cout << "??????????????" << slicePath.str() << " ??????" << sliceSaveRc << std::endl;
+            std::cout << "????" << slicePath.str() << " ?" << sliceSaveRc << std::endl;
         }
 
     */
@@ -985,7 +1029,7 @@ bool detectOpeningByProjectionImage(const CloudConstPtr& cloud,
         return false;
     }
 
-	// ????????????
+	// ??
     Eigen::Vector3d u;
     Eigen::Vector3d v;
     projectionBasis(feature.projectionDirection, u, v);
@@ -1014,13 +1058,13 @@ bool detectOpeningByProjectionImage(const CloudConstPtr& cloud,
         maxY = std::max(maxY, q.y());
     }
 
-	// ???????
+	// ???
     const int width = std::max(50, feature.projectionImageWidth);
     const int height = std::max(50, feature.projectionImageHeight);
     const double sx = (maxX - minX) / static_cast<double>(std::max(1, width - 1));
     const double sy = (maxY - minY) / static_cast<double>(std::max(1, height - 1));
     const double pixelMm = std::max(1e-6, 0.5 * (sx + sy));
-    std::vector<unsigned char> occ(width * height, 0);       // ???????????????????????
+    std::vector<unsigned char> occ(width * height, 0);       // ???????
     for (std::size_t i = 0; i < pts.size(); ++i)
     {
         const int x = static_cast<int>((pts[i].x() - minX) / sx + 0.5);
@@ -1039,19 +1083,19 @@ bool detectOpeningByProjectionImage(const CloudConstPtr& cloud,
         }
     }
 
-	// ???????????????????(¦Ä????????)?????
+	// ??????(??õ)?
     std::vector<unsigned char> visited(width * height, 0);
     double bestScore = std::numeric_limits<double>::max();
     bool found = false;
     Eigen::Vector2d bestCenter(0.0, 0.0);
     double bestDiameter = 0.0;
     int bestBoundaryCount = 0;
-    const int dirs[4][2] = {{1,0},{-1,0},{0,1},{0,-1}};  // 4?????????????????????
+    const int dirs[4][2] = {{1,0},{-1,0},{0,1},{0,-1}};  // 4?
     for (int y0 = 1; y0 < height - 1; ++y0)
     {
         for (int x0 = 1; x0 < width - 1; ++x0)
         {
-            const int seed = y0 * width + x0;           // ????????¦Ä?????????????????????????????????????????????????§á??????????????????
+            const int seed = y0 * width + x0;           // ??????????????????
             if (occ[seed] || visited[seed])
             {
                 continue;
@@ -1105,13 +1149,13 @@ bool detectOpeningByProjectionImage(const CloudConstPtr& cloud,
                     boundarySumY += y;
                 }
             }
-            if (touchesBorder || area < 10 || boundaryCount < 4)  // ????????????§³????????????????????
+            if (touchesBorder || area < 10 || boundaryCount < 4)  // ?????
             {
                 continue;
             }
 
-			// 1. ??????????? Area = pi * r^2 ??????? d = 2 * sqrt(Area / pi)
-			// 2. ???? pixelMm?????????????????íà??¦Ë????????????????¦Ë?????????????¦Ë
+			// 1. ?? Area = pi * r^2 ? d = 2 * sqrt(Area / pi)
+			// 2.  pixelMm???????????
             const double d = 2.0 * std::sqrt(static_cast<double>(area) / kPi) * pixelMm;
             if (std::abs(d - feature.expectedDiameterMm) > feature.diameterToleranceMm)
             {
@@ -1138,8 +1182,8 @@ bool detectOpeningByProjectionImage(const CloudConstPtr& cloud,
     center2d = bestCenter;
     diameterMm = bestDiameter;
 
-    // 2D??????????????????????????????????????????
-    // ????????¿‚????3D?????????—¨???2D??????projection_direction???????????
+    // 2D??????????
+    // ÿ???3D?????2Dprojection_direction???
     std::vector<Eigen::Vector3d> boundary3d;
     const double boundaryRadius = bestDiameter * 0.5;
     const double boundaryBand = std::max(2.0, pixelMm * 3.0);
@@ -1207,8 +1251,190 @@ Eigen::Matrix4f rotationAroundAxis(const Eigen::Vector3d& point, const Eigen::Ve
     return m;
 }
 
-// ??????
+
+
+// ?
 OpeningResult solveOpeningsByProjectionAndLocalIcp(const MeasureConfig& cfg,
+                                                   const CloudConstPtr& templ,
+                                                   const CloudConstPtr& scan,
+                                                   const CylinderModel& headCylinder)
+{
+    OpeningResult result;
+    if (templ->empty() || cfg.templateOpenings.empty())
+    {
+        return result;
+    }
+
+    for (std::size_t i = 0; i < cfg.templateOpenings.size(); ++i)
+    {
+        const OpeningFeature& feature = cfg.templateOpenings[i];
+        Eigen::Vector3d templateCenter3d;
+        Eigen::Vector3d scanCenter3d;
+        Eigen::Vector2d templateCenter2d;
+        Eigen::Vector2d scanCenter2d;
+        double templateDiameter = 0.0;
+        double scanDiameter = 0.0;
+  //      const bool templateFound = detectOpeningByProjectionImage(templ, feature, templateCenter3d, templateCenter2d, templateDiameter);
+  //      const bool scanFound = detectOpeningByProjectionImage(scan, feature, scanCenter3d, scanCenter2d, scanDiameter);
+  //      if (!templateFound || !scanFound)
+  //      {
+  //          std::cout << "opening name=" << feature.name << " status=skip reason=projection_center_not_found" << std::endl;
+  //          continue;
+  //      }
+
+  //      // ????????????
+  //      // templateRadial / scanRadial ?????
+  //      // ????????????
+  //      Eigen::Vector3d templateRadial = templateCenter3d - closestPointOnLine(templateCenter3d, headCylinder.point, headCylinder.axis);
+  //      Eigen::Vector3d scanRadial = scanCenter3d - closestPointOnLine(scanCenter3d, headCylinder.point, headCylinder.axis);
+  //      if (templateRadial.norm() < 1e-6 || scanRadial.norm() < 1e-6)
+  //      {
+  //          continue;
+  //      }
+  //      templateRadial.normalize();
+  //      scanRadial.normalize();
+  //      const double crossSign = headCylinder.axis.normalized().dot(scanRadial.cross(templateRadial));
+  //      const double dot = clampValue(scanRadial.dot(templateRadial), -1.0, 1.0);
+  //      const double delta = (crossSign >= 0.0 ? 1.0 : -1.0) * std::acos(dot);
+  //      Eigen::Matrix4f roughRotation = rotationAroundAxis(headCylinder.point, headCylinder.axis, delta);
+  //      CloudPtr rotatedScan(new Cloud);
+  //      pcl::transformPointCloud(*scan, *rotatedScan, roughRotation); 
+  //      Eigen::Vector4f scanCenterHp(static_cast<float>(scanCenter3d.x()),
+  //                                   static_cast<float>(scanCenter3d.y()),
+  //                                   static_cast<float>(scanCenter3d.z()),
+  //                                   1.0f);
+  //      Eigen::Vector4f rotatedScanCenterHp = roughRotation * scanCenterHp;
+  //      Eigen::Vector3d rotatedScanCenter(rotatedScanCenterHp.x(), rotatedScanCenterHp.y(), rotatedScanCenterHp.z());
+		//// ???
+
+		CloudPtr localTemplate = cropCloud(templ, feature.projectionCrop); 
+        //CloudPtr localScan = cropCloud(rotatedScan, feature.projectionCrop);
+		CloudPtr localScan = cropCloud(scan, feature.projectionCrop);
+        Eigen::Matrix4f localTf;
+        FitReport fit = localIcp(localTemplate, localScan, cfg, localTf);
+		std::cout << "opening_localIcp= " << fit.name
+                          << " rmse=" << fit.rmsMm
+                          << " maxrmse=" << fit.maxAbsMm
+						  << " inner count =" << fit.inlierCount << std::endl;
+		// icp?
+
+
+		// ????
+        CloudPtr featureCloud(new Cloud);
+        for (std::size_t k = 0; k < feature.cylinderFeaturePoints.size(); ++k)
+        {
+            try
+            {
+                Eigen::Vector4f hp(static_cast<float>(feature.cylinderFeaturePoints[k].x()),
+                                   static_cast<float>(feature.cylinderFeaturePoints[k].y()),
+                                   static_cast<float>(feature.cylinderFeaturePoints[k].z()),
+                                   1.0f);
+                Eigen::Vector4f mapped = localTf * hp;
+                Eigen::Vector3d mappedFeature(mapped.x(), mapped.y(), mapped.z());
+				PointT np;
+				int status = nearestPoint(localScan, mappedFeature, feature.searchRadiusMm, np);
+				if (status != 0)
+				{
+					continue;
+				}
+                featureCloud->push_back(np);
+                std::cout << "opening_feature_correspondence name=" << feature.name
+                          << " index=" << k
+                          << " mapped=(" << mappedFeature.x() << "," << mappedFeature.y() << "," << mappedFeature.z() << ")"
+                          << " nearest=(" << np.x << "," << np.y << "," << np.z << ")" << std::endl;
+            }
+            catch (const std::exception&)
+            {
+            }
+        }
+        if (featureCloud->size() < 5)
+        {
+            std::cout << "opening name=" << feature.name << " status=skip reason=feature_points_not_enough count=" << featureCloud->size() << std::endl;
+            continue;
+        }
+
+        const Eigen::Vector3d openingAxisHint = feature.projectionDirection.normalized();
+        CylinderModel openingCylinder = fitOpeningCylinderIterative(featureCloud, openingAxisHint, "opening_cylinder_" + feature.name);
+       
+		
+		
+		CloudPtr openingCylinderSample(new Cloud);
+        Eigen::Vector3d cylU;
+        Eigen::Vector3d cylV;
+        cylinderBasis(openingCylinder.axis, cylU, cylV);
+        const double sampleHeightMm = std::max(20.0, feature.expectedDiameterMm);
+        for (int si = 0; si < 200; ++si)
+        {
+            const double angle = 2.0 * kPi * static_cast<double>(si % 40) / 40.0;
+            const double h = sampleHeightMm * (static_cast<double>(si / 40) / 4.0 - 0.5);
+            const Eigen::Vector3d p = openingCylinder.point
+                                    + openingCylinder.axis.normalized() * h
+                                    + cylU * (openingCylinder.radiusMm * std::cos(angle))
+                                    + cylV * (openingCylinder.radiusMm * std::sin(angle));
+            PointT pt;
+            pt.x = static_cast<float>(p.x());
+            pt.y = static_cast<float>(p.y());
+            pt.z = static_cast<float>(p.z());
+            openingCylinderSample->push_back(pt);
+        }
+        openingCylinderSample->width = static_cast<uint32_t>(openingCylinderSample->size());
+        openingCylinderSample->height = 1;
+        openingCylinderSample->is_dense = true;
+    /* PCD????????
+        std::ostringstream openingSamplePath;
+        openingSamplePath << "C:/Users/lenovo/Desktop/opening_cylinder_sample_" << feature.name << ".pcd";
+        const int openingSampleSaveRc = pcl::io::savePCDFileBinary(openingSamplePath.str(), *openingCylinderSample);
+        std::cout << "opening_cylinder_sample name=" << feature.name
+                  << " saved=" << (openingSampleSaveRc == 0 ? 1 : 0)
+                  << " points=" << openingCylinderSample->size()
+                  << " path=" << openingSamplePath.str() << std::endl;
+
+    */
+		/*Eigen::Vector4f adjustedCenterHp(static_cast<float>(scanCenter3d.x()),
+			                             static_cast<float>(scanCenter3d.y()),
+			                             static_cast<float>(scanCenter3d.z()),
+                                         1.0f);
+        Eigen::Vector4f rotatedAdjustedCenterHp = roughRotation * adjustedCenterHp;
+        Eigen::Vector3d adjustedCenter(rotatedAdjustedCenterHp.x(), rotatedAdjustedCenterHp.y(), rotatedAdjustedCenterHp.z());
+      */
+		// C2????õ??projection_direction?8mm
+        // ?????ICP???
+       // const Eigen::Vector3d openingCenterOnSurface = closestPointOnLine(adjustedCenter, openingCylinder.point, openingCylinder.axis);        
+		
+		
+		std::cout << "opening_cylinder name=" << feature.name
+                  << " axis=(" << openingCylinder.axis.x() << "," << openingCylinder.axis.y() << "," << openingCylinder.axis.z() << ")"
+                  << " axis_point=(" << openingCylinder.point.x() << "," << openingCylinder.point.y() << "," << openingCylinder.point.z() << ")"
+                 // << " surface_center=(" << openingCenterOnSurface.x() << "," << openingCenterOnSurface.y() << "," << openingCenterOnSurface.z() << ")"
+                  //<< " adjusted_scan_center=(" << adjustedCenter.x() << "," << adjustedCenter.y() << "," << adjustedCenter.z() << ")"
+                  << " diameter_mm=" << 2.0 * openingCylinder.radiusMm << std::endl;
+
+        result = OpeningResult();
+        result.name = feature.name;
+		// ?
+        result.axisToHeadAxisAngleDeg = angleDeg(openingCylinder.axis, headCylinder.axis);
+        if (result.axisToHeadAxisAngleDeg > 90.0)
+        {
+            result.axisToHeadAxisAngleDeg = 180.0 - result.axisToHeadAxisAngleDeg;
+        }
+		// ??????
+		const double c2Radius = (openingCylinder.point - closestPointOnLine(openingCylinder.point, headCylinder.point, headCylinder.axis)).norm();
+        // ?
+		result.centerToInnerWallDistanceMm = std::abs(headCylinder.radiusMm - c2Radius);
+        result.fit = openingCylinder.fit;
+
+		std::cout << "?" 
+			      << " ?? mm  " << result.centerToInnerWallDistanceMm
+				  << " ???  " << result.axisToHeadAxisAngleDeg << std::endl;
+        return result;
+    }
+
+    return result;
+}
+
+
+// ?
+OpeningResult solveOpeningsByProjectionAndLocalIcp_1(const MeasureConfig& cfg,
                                                                 const CloudConstPtr& templ,
                                                                 const CloudConstPtr& scan,
                                                                 const CylinderModel& headCylinder)
@@ -1236,9 +1462,9 @@ OpeningResult solveOpeningsByProjectionAndLocalIcp(const MeasureConfig& cfg,
             continue;
         }
 
-        // ????????????????????????????????????????????§³?
-        // templateRadial / scanRadial ??????????????????????????????
-        // ???????????????????§ß????????????????????????????????????
+        // ????????????
+        // templateRadial / scanRadial ?????
+        // ????????????
         Eigen::Vector3d templateRadial = templateCenter3d - closestPointOnLine(templateCenter3d, headCylinder.point, headCylinder.axis);
         Eigen::Vector3d scanRadial = scanCenter3d - closestPointOnLine(scanCenter3d, headCylinder.point, headCylinder.axis);
         if (templateRadial.norm() < 1e-6 || scanRadial.norm() < 1e-6)
@@ -1259,16 +1485,16 @@ OpeningResult solveOpeningsByProjectionAndLocalIcp(const MeasureConfig& cfg,
                                      1.0f);
         Eigen::Vector4f rotatedScanCenterHp = roughRotation * scanCenterHp;
         Eigen::Vector3d rotatedScanCenter(rotatedScanCenterHp.x(), rotatedScanCenterHp.y(), rotatedScanCenterHp.z());
-		// ?????ÈÎ??????
+		// ???
 
         CloudPtr localTemplate = cropCloud(templ, feature.projectionCrop);
         CloudPtr localScan = cropCloud(rotatedScan, feature.projectionCrop);
         Eigen::Matrix4f localTf;
         FitReport fit = localIcp(localTemplate, localScan, cfg, localTf);
-		// ????icp??????
+		// icp?
 
 
-		// ??????????????????????????????????
+		// ????
         CloudPtr featureCloud(new Cloud);
         for (std::size_t k = 0; k < feature.cylinderFeaturePoints.size(); ++k)
         {
@@ -1329,7 +1555,7 @@ OpeningResult solveOpeningsByProjectionAndLocalIcp(const MeasureConfig& cfg,
         openingCylinderSample->width = static_cast<uint32_t>(openingCylinderSample->size());
         openingCylinderSample->height = 1;
         openingCylinderSample->is_dense = true;
-    /* ????PCD????????????????????????????????????
+    /* PCD????????
         std::ostringstream openingSamplePath;
         openingSamplePath << "C:/Users/lenovo/Desktop/opening_cylinder_sample_" << feature.name << ".pcd";
         const int openingSampleSaveRc = pcl::io::savePCDFileBinary(openingSamplePath.str(), *openingCylinderSample);
@@ -1346,8 +1572,8 @@ OpeningResult solveOpeningsByProjectionAndLocalIcp(const MeasureConfig& cfg,
         Eigen::Vector4f rotatedAdjustedCenterHp = roughRotation * adjustedCenterHp;
         Eigen::Vector3d adjustedCenter(rotatedAdjustedCenterHp.x(), rotatedAdjustedCenterHp.y(), rotatedAdjustedCenterHp.z());
       
-		// C2?????????????????????????projection_direction?????????8mm??
-        // ???????????????????????????????????ICP????????????????
+		// C2????õ??projection_direction?8mm
+        // ?????ICP???
         const Eigen::Vector3d openingCenterOnSurface = closestPointOnLine(adjustedCenter, openingCylinder.point, openingCylinder.axis);        
 		
 		
@@ -1360,26 +1586,27 @@ OpeningResult solveOpeningsByProjectionAndLocalIcp(const MeasureConfig& cfg,
 
         result = OpeningResult();
         result.name = feature.name;
-		// ?????
+		// ?
         result.axisToHeadAxisAngleDeg = angleDeg(openingCylinder.axis, headCylinder.axis);
         if (result.axisToHeadAxisAngleDeg > 90.0)
         {
             result.axisToHeadAxisAngleDeg = 180.0 - result.axisToHeadAxisAngleDeg;
         }
-		// ???????????????????????
+		// ??????
         const double c2Radius = (openingCenterOnSurface - closestPointOnLine(openingCenterOnSurface, headCylinder.point, headCylinder.axis)).norm();
-        // ???????
+        // ?
 		result.centerToInnerWallDistanceMm = std::abs(headCylinder.radiusMm - c2Radius);
         result.fit = openingCylinder.fit;
 
-		std::cout << "?????????????" 
-			      << " ??????? mm  " << result.centerToInnerWallDistanceMm
-				  << " ?????????  " << result.axisToHeadAxisAngleDeg << std::endl;
+		std::cout << "?" 
+			      << " ?? mm  " << result.centerToInnerWallDistanceMm
+				  << " ???  " << result.axisToHeadAxisAngleDeg << std::endl;
         return result;
     }
 
     return result;
 }
+
 struct StraightSlicePoint
 {
     Eigen::Vector3d p;
@@ -1680,7 +1907,7 @@ bool solveStraightBByResidualWindow(const std::vector<StraightSlicePoint>& slice
         }
     }
 
-    // ???????B?????????????????????B??§Ó????????¦Ë???????
+    // ?B??B?????
     Eigen::Vector2d searchDir = roughB2 - a2;
     if (searchDir.norm() < 5.0)
     {
@@ -1713,7 +1940,7 @@ bool solveStraightBByResidualWindow(const std::vector<StraightSlicePoint>& slice
         return false;
     }
 
-    // A??????????¦¶????????????????????????????????????????????
+    // A?????????????????
     std::vector<Eigen::Vector2d> linePts;
     const double lineFitLength = std::max(10.0, cfg.straightBLineFitLengthMm);
     for (std::size_t i = 0; i < ordered.size(); ++i)
@@ -1751,8 +1978,8 @@ bool solveStraightBByResidualWindow(const std::vector<StraightSlicePoint>& slice
         baseAbsResiduals.push_back(std::abs(residual));
     }
     std::sort(baseAbsResiduals.begin(), baseAbsResiduals.end());
-    const double baseMad = baseAbsResiduals.empty() ? 0.0 : baseAbsResiduals[baseAbsResiduals.size() / 2]; // ????????§Ö????§Ó????¦Ë?????????
-    const double residualThreshold = std::max(cfg.straightBResidualMinThresholdMm, 1.5 * 1.4826 * baseMad); // 1.4826*MAD??????????sigma??1.5?????????§Ø????
+    const double baseMad = baseAbsResiduals.empty() ? 0.0 : baseAbsResiduals[baseAbsResiduals.size() / 2]; // ?????????
+    const double residualThreshold = std::max(cfg.straightBResidualMinThresholdMm, 1.5 * 1.4826 * baseMad); // 1.4826*MAD??sigma1.5????
     const int stableCount = std::max(1, cfg.straightBResidualWindowCount);
 
     std::vector<double> residuals;
@@ -1763,8 +1990,8 @@ bool solveStraightBByResidualWindow(const std::vector<StraightSlicePoint>& slice
         residuals.push_back((q - line.point).dot(normal));
     }
 
-    // ????????¦Ê??????????????stableCount????§Ó???????????????
-    // ???????????????????¦²?B??????????????????
+    // ????stableCount?????£
+    // ??????B?????????
     int foundStart = -1;
     const double roughBS = (roughB2 - a2).dot(searchDir);
     const double searchStartS = lineFitLength;
@@ -1847,8 +2074,8 @@ bool estimateStraightSideFromBTemplates(const CloudConstPtr& straightSideFeature
     }
 
     const double bevelOffset = straightBevelOffsetMm(cfg);
-	std::vector<double> straight_edge_tapers;           // ???§Ò??
-	std::vector<double> straight_edge_lengths;          // ?????
+	std::vector<double> straight_edge_tapers;           // ??
+	std::vector<double> straight_edge_lengths;          // ???
     for (std::size_t i = 0; i < cfg.straightEndpointPairs.size(); ++i)
     {
         const StraightEndpointPair& pair = cfg.straightEndpointPairs[i];
@@ -1865,7 +2092,7 @@ bool estimateStraightSideFromBTemplates(const CloudConstPtr& straightSideFeature
             Eigen::Vector3d radialDir;
             CloudPtr sliceCloud;
             std::vector<StraightSlicePoint> slice = buildStraightBPlaneSlice(straightSideFeature, cylinder, roughB, cfg, radialDir, sliceCloud);
-    /* ????PCD????????????????????????????????????
+    /* PCD????????
             std::ostringstream path;
             path << "C:/Users/lenovo/Desktop/straight_B_slice_" << i << ".pcd";
             const int saveRc = pcl::io::savePCDFileBinary(path.str(), *sliceCloud);
@@ -1876,7 +2103,7 @@ bool estimateStraightSideFromBTemplates(const CloudConstPtr& straightSideFeature
 
     */
             std::vector<StraightSlicePoint> croppedSlice = cropStraightSliceBelowOffsetPlane(slice, bevelOffset);
-    /* ????PCD????????????????????????????????????
+    /* PCD????????
             CloudPtr croppedSliceCloud(new Cloud);
             for (std::size_t ci = 0; ci < croppedSlice.size(); ++ci)
             {
@@ -1958,7 +2185,7 @@ bool estimateStraightSideFromBTemplates(const CloudConstPtr& straightSideFeature
             const double taperMagnitude = length * std::sin(theta);
             const double radiusA = (pointA.p - closestPointOnLine(pointA.p, cylinder.point, axis)).norm();
             const double radiusB = (pointB - closestPointOnLine(pointB, cylinder.point, axis)).norm();
-            // ???§Ò??????????A??B????????????????????????????§³?????????????????
+            // ????AB???????????
             const double radialChange = radiusB - radiusA;
             const double deviation = radialChange >= 0.0 ? taperMagnitude : -taperMagnitude;
             straight_edge_lengths.push_back(length);
@@ -1988,8 +2215,8 @@ bool estimateStraightSideFromBTemplates(const CloudConstPtr& straightSideFeature
     {
         return false;
     }
-	heightMm = medianValue(straight_edge_lengths);     // ???????????
-	deviationMm = medianValue(straight_edge_tapers);   // ???§Ò????????
+	heightMm = medianValue(straight_edge_lengths);     // ?????
+	deviationMm = medianValue(straight_edge_tapers);   // ????
 	std::cout << " straight_result valid_pairs=" << straight_edge_lengths.size()
               << " straight_edge_lengths(median) mm=" << heightMm
               << " straight_edge_tapers(median) mm=" << deviationMm << std::endl;
@@ -2019,10 +2246,10 @@ MeasureResult MeasurePipeline::runWithScanCloud(const CloudConstPtr& rawScan)
     return runPipelineWithPreprocessedScan(scan);
 }
 
-MeasureResult MeasurePipeline::run() 
+MeasureResult MeasurePipeline::run()
 {
     if (config_.inputFrames.empty())
-	{
+    {
         throw std::runtime_error("config input_frames is empty");
     }
 
@@ -2035,8 +2262,11 @@ MeasureResult MeasurePipeline::runPipelineWithPreprocessedScan(const CloudConstP
 {
     MeasureResult result;
     CloudPtr templ(new Cloud);
-	CloudPtr scanInTemplate(new Cloud);
-	*scanInTemplate = *scan;
+    CloudPtr scanInTemplate(new Cloud);
+    if (scan && !scan->empty())
+    {
+        *scanInTemplate = *scan;
+    }
 	if (1)
 	{
 		clock_t start_t, end_t;
@@ -2048,49 +2278,53 @@ MeasureResult MeasurePipeline::runPipelineWithPreprocessedScan(const CloudConstP
 			printFit(result.icpFit);
 		}
 		end_t = clock();
-		std::cout << "??????????" << 0.001 * (end_t - start_t) << " s" << std::endl;
-    /* ????PCD????????????????????????????????????
+		std::cout << "???" << 0.001 * (end_t - start_t) << " s" << std::endl;
+    /* PCD????????
 		const std::string alignedPath = "C:/Users/lenovo/Desktop/aligned_scan_in_template.pcd";
 		if (scanInTemplate && !scanInTemplate->empty())
 		{
 			const int saveRc = pcl::io::savePCDFileBinary(alignedPath, *scanInTemplate);
 			if (saveRc == 0)
 			{
-				std::cout << "????????????¹×" << alignedPath << " ??????" << scanInTemplate->size() << std::endl;
+				std::cout << "??" << alignedPath << " " << scanInTemplate->size() << std::endl;
 			}
 			else
 			{
-				std::cout << "???????????????" << alignedPath << " ??????" << saveRc << std::endl;
+				std::cout << "???" << alignedPath << " ?" << saveRc << std::endl;
 			}
 		}
 		else
 		{
-			std::cout << "????????????¦Ä????" << std::endl;
+			std::cout << "???" << std::endl;
 		}
     */
 	}
 	 
-	// ????????????
+	// ???
     FitReport topFit;
     buildTopPlaneCloud(scanInTemplate, config_, topFit);
     result.topPlaneFit = topFit;
     printFit(result.topPlaneFit);
 	
-	// ??????¨¹?
+	// ???ü
     CloudPtr straightSide = buildStraightSideCloud(scanInTemplate, config_, topFit);
-    std::cout << "straight_side_points=" << straightSide->size() << '\n';
+    if (!straightSide)
+    {
+        throw std::runtime_error("straight side cloud pointer is null");
+    }
+    std::cout << "straight_side_points=" << straightSide->size() << std::endl;
 	
-	// ??????
+	// ?
     CylinderModel cylinder = fitCylinderByPcaAxis(straightSide, config_);
     result.cylinderFit = cylinder.fit;
     printFit(result.cylinderFit);
     std::cout << "cylinder_model axis=(" << cylinder.axis.x() << "," << cylinder.axis.y() << "," << cylinder.axis.z() << ")"
               << " center_point=(" << cylinder.point.x() << "," << cylinder.point.y() << "," << cylinder.point.z() << ")"
               << " diameter_mm=" << 2.0 * cylinder.radiusMm << std::endl;
-    result.innerDiameterMm = 2.0 * cylinder.radiusMm;                    // ???????????
+    result.innerDiameterMm = 2.0 * cylinder.radiusMm;                    // ???
     result.innerCircumferenceMm = kPi * result.innerDiameterMm;
 
-	// ???????????
+	// 
 	if (1)
 	{
 		CloudPtr straightCylinderSample(new Cloud);
@@ -2115,7 +2349,7 @@ MeasureResult MeasurePipeline::runPipelineWithPreprocessedScan(const CloudConstP
 		straightCylinderSample->width = static_cast<uint32_t>(straightCylinderSample->size());
 		straightCylinderSample->height = 1;
 		straightCylinderSample->is_dense = true;
-    /* ????PCD????????????????????????????????????
+    /* PCD????????
 		const std::string straightCylinderSamplePath = "C:/Users/lenovo/Desktop/straight_cylinder_sample.pcd";
 		const int straightCylinderSaveRc = pcl::io::savePCDFileBinary(straightCylinderSamplePath, *straightCylinderSample);
 		std::cout << "straight_cylinder_sample saved=" << (straightCylinderSaveRc == 0 ? 1 : 0)
@@ -2124,7 +2358,7 @@ MeasureResult MeasurePipeline::runPipelineWithPreprocessedScan(const CloudConstP
     */
 	} 
 
-    // ????????????
+    // ??
     result.sections = sliceByCylinderAxis(straightSide, cylinder, config_);
     std::vector<double> roundnessValues;
     roundnessValues.reserve(result.sections.size());
@@ -2157,7 +2391,7 @@ MeasureResult MeasurePipeline::runPipelineWithPreprocessedScan(const CloudConstP
             continue;
         }
 
-        // ??????????????????????§Ó?????????????¨°???§³????????
+        // ÿ???????ò???
         std::vector<Eigen::Vector2d> roundnessPts;
         roundnessPts.reserve(pts.size());
         std::vector<double> roundAbsResiduals;
@@ -2171,9 +2405,9 @@ MeasureResult MeasurePipeline::runPipelineWithPreprocessedScan(const CloudConstP
         if (!roundAbsResiduals.empty())
         {
             std::sort(roundAbsResiduals.begin(), roundAbsResiduals.end());
-            // MAD??¦Ë????????????????????§Ó???????????????????????????
+            // MAD????????????
             const double mad = roundAbsResiduals[roundAbsResiduals.size() / 2];
-            roundnessThreshold = std::max(roundnessThreshold, 3.0 * 1.4826 * mad); // 1.4826??MAD????????????????????
+            roundnessThreshold = std::max(roundnessThreshold, 3.0 * 1.4826 * mad); // 1.4826MAD??????
         }
         for (std::size_t ri = 0; ri < pts.size(); ++ri)
         {
@@ -2201,7 +2435,7 @@ MeasureResult MeasurePipeline::runPipelineWithPreprocessedScan(const CloudConstP
 
     if (!roundnessValues.empty())
     {
-        result.roundnessToleranceMm = medianValue(roundnessValues);         // ??????
+        result.roundnessToleranceMm = medianValue(roundnessValues);         // ??
         double roundnessSum = 0.0;
         for (std::size_t ri = 0; ri < roundnessValues.size(); ++ri)
         {
@@ -2213,17 +2447,17 @@ MeasureResult MeasurePipeline::runPipelineWithPreprocessedScan(const CloudConstP
                   << " average_mm=" << roundnessAverage << std::endl;
     }
 
-	// ?????????????????????????????????????????????
+	// ??????½?¿??
 	CloudPtr straightSideFeature = buildStraightSideFeatureCloud(scanInTemplate, config_);
 
-	// ?????
+	// ??
     if (!estimateStraightSideFromBTemplates(straightSideFeature, cylinder, config_, result.straightSideSlopeDeg, result.straightSideHeightMm))
     {
         std::cout << "straight_result failed" << std::endl;
     }
 
 
-	// ??????
+	// ?
     result.opening = solveOpeningsByProjectionAndLocalIcp(config_, templ, scanInTemplate, cylinder);
     printFit(result.opening.fit);
 

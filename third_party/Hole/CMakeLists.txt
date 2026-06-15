@@ -29,6 +29,10 @@ set(HOLE_CONFIG_FILES
     config/sample_config.json
 )
 
+set(HOLE_TEMPLATE_FILES
+    template/.gitkeep
+)
+
 add_library(head_measure STATIC
     ${HOLE_SOURCES}
 )
@@ -39,6 +43,7 @@ target_sources(head_measure
     PRIVATE
         ${HOLE_HEADERS}
         ${HOLE_CONFIG_FILES}
+        ${HOLE_TEMPLATE_FILES}
 )
 
 set_source_files_properties(${HOLE_CONFIG_FILES} PROPERTIES HEADER_FILE_ONLY TRUE)
@@ -47,6 +52,7 @@ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" PREFIX "third_party/Hole" FILES
     ${HOLE_SOURCES}
     ${HOLE_HEADERS}
     ${HOLE_CONFIG_FILES}
+    ${HOLE_TEMPLATE_FILES}
 )
 
 target_include_directories(head_measure

@@ -48,7 +48,7 @@ struct MeasureConfig
     std::vector<StraightEndpointPair> straightEndpointPairs;
 
     Eigen::Matrix4f poseCorrection = Eigen::Matrix4f::Identity();
-    CropBox crop;
+    std::vector<CropBox> cropBoxes;
 
     int statisticalMeanK{30};
     double statisticalStddevMul{1.0};

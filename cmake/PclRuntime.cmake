@@ -86,6 +86,9 @@ function(scan_tracking_deploy_hole_runtime target_name)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${_hole_source_root}/config/path2.json"
             "$<TARGET_FILE_DIR:${target_name}>/hole/config/path2.json"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${_hole_source_root}/template"
+            "$<TARGET_FILE_DIR:${target_name}>/hole/template"
         COMMENT "Deploying Hole measurement runtime config"
     )
 endfunction()

@@ -1566,7 +1566,7 @@ int FastGeoHash::Get_Track_Pose(std::vector<cv::Point3f>& frame_3d_points,
 	//}
 
 	// 输出位姿
-	cv::Mat                  Rt;
+	cv::Mat                  Rt;                      // 模板到双目坐标系变换
 	std::vector<cv::Point3f> corres_template_pnts;    // 本帧最终通过校验的点对应的模板点
 	corres_template_pnts.reserve(corres_template_points_ID.size());
 	for (int ii = 0; ii < corres_template_points_ID.size(); ii++)
@@ -1586,15 +1586,16 @@ int FastGeoHash::Get_Track_Pose(std::vector<cv::Point3f>& frame_3d_points,
 		return 500;
 	}
 
-	int res_err = computeRigidTransformSVD(filtered_frame_3d_points,
-		                                   corres_template_pnts,
+	// 注意：这里的变换是从扫描头模板坐标系变换到双目坐标系（全局）
+	int res_err = computeRigidTransformSVD(corres_template_pnts,
+		                                   filtered_frame_3d_points,
 		                                   Rt);
 	if (res_err != 0 || Rt.empty())
 	{
 		return res_err;
 	}
 
-	std::cout << " Inital Rt is: " << std::endl;
+	std::cout << " Inital Rt（from Template to Vision） is: " << std::endl;
 	std::cout << std::fixed << std::setprecision(8);  // 强制保留 8 位小数
 	for (int i = 0; i < 4; i++)
 	{
@@ -1626,15 +1627,15 @@ int FastGeoHash::Get_Track_Pose(std::vector<cv::Point3f>& frame_3d_points,
 
 		    for (int i = 0; i < filtered_frame_3d_points.size(); i++)
 	        {
-	        	cv::Mat pt_homo = (cv::Mat_<double>(4, 1) << filtered_frame_3d_points[i].x,
-	        		                                         filtered_frame_3d_points[i].y,
-	        												 filtered_frame_3d_points[i].z,
+	        	cv::Mat pt_homo = (cv::Mat_<double>(4, 1) << corres_template_pnts[i].x,
+	        		                                         corres_template_pnts[i].y,
+	        												 corres_template_pnts[i].z,
 	        												 1.0); // 构造齐次向量
 	        	cv::Mat trans_p = Rt * pt_homo;
 	        
-	        	double dist = (trans_p.at<double>(0, 0) - corres_template_pnts[i].x) * (trans_p.at<double>(0, 0) - corres_template_pnts[i].x) + 
-	        		          (trans_p.at<double>(1, 0) - corres_template_pnts[i].y) * (trans_p.at<double>(1, 0) - corres_template_pnts[i].y) + 
-	        		          (trans_p.at<double>(2, 0) - corres_template_pnts[i].z) * (trans_p.at<double>(2, 0) - corres_template_pnts[i].z);
+	        	double dist = (trans_p.at<double>(0, 0) - filtered_frame_3d_points[i].x) * (trans_p.at<double>(0, 0) - filtered_frame_3d_points[i].x) + 
+	        		          (trans_p.at<double>(1, 0) - filtered_frame_3d_points[i].y) * (trans_p.at<double>(1, 0) - filtered_frame_3d_points[i].y) + 
+	        		          (trans_p.at<double>(2, 0) - filtered_frame_3d_points[i].z) * (trans_p.at<double>(2, 0) - filtered_frame_3d_points[i].z);
 	        	dist = sqrt(dist);
 	        
 	        	if (dist < dist_thresh)
@@ -1651,8 +1652,8 @@ int FastGeoHash::Get_Track_Pose(std::vector<cv::Point3f>& frame_3d_points,
 			}
 	        if (new_filtered_frame_3d_points.size() > 4)
 	        {
-	        	res_err = computeRigidTransformSVD(new_filtered_frame_3d_points,
-	        	                                   new_corres_template_points,
+				res_err = computeRigidTransformSVD(new_corres_template_points,
+	        	                                   new_filtered_frame_3d_points,
 	        	                                   Rt);
 	            if (res_err != 0 || Rt.empty())
 	            {
@@ -1662,7 +1663,6 @@ int FastGeoHash::Get_Track_Pose(std::vector<cv::Point3f>& frame_3d_points,
 
 		}
 	}
-
 
 	Rt_global = Rt * scan_to_marker_RT;
 
@@ -1685,7 +1685,7 @@ int FastGeoHash::Get_Track_Pose(std::vector<cv::Point3f>& frame_3d_points,
 	}
 	std::cout << std::endl;
 
-	std::cout << " Opt Rt is: " << std::endl;
+	std::cout << " Opt Rt（from Template to Vision） is: " << std::endl;
 	std::cout << std::fixed << std::setprecision(8);  // 强制保留 8 位小数
 	for (int i = 0; i < 4; i++)
 	{
@@ -1696,7 +1696,18 @@ int FastGeoHash::Get_Track_Pose(std::vector<cv::Point3f>& frame_3d_points,
 		std::cout << std::endl;
 	}
 
-	std::cout << " Realtime Rt_global is: " << std::endl;
+	std::cout << " scan_to_marker_RT is: " << std::endl;
+	std::cout << std::fixed << std::setprecision(8);  // 强制保留 8 位小数
+	for (int i = 0; i < 4; i++)
+	{
+		for (int j = 0; j < 4; j++)
+		{
+			std::cout << std::setw(8) << scan_to_marker_RT.at<double>(i, j) << " ";
+		}
+		std::cout << std::endl;
+	}
+
+	std::cout << " Realtime Rt_global（from Scanner to Vision） is: " << std::endl;
 	std::cout << std::fixed << std::setprecision(8);  // 强制保留 8 位小数
 	for (int i = 0; i < 4; i++)
 	{

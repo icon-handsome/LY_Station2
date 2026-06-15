@@ -1,5 +1,7 @@
 #pragma once
 
+// Bevel measurement API (V1.1 sync); BevelSolveOptions is IPC recipe extension.
+
 #include <Eigen/Core>
 #include <opencv2/core.hpp>
 #include <pcl/point_cloud.h>
@@ -43,7 +45,7 @@ struct BevelConfig
 
     bool outlierRemoval = true;
     int sorMeanK = 30;
-    double sorStddevMulThresh = 1.0;  // 标准差倍数，默认通常�?.0左右，来微调去噪的强烈程�?
+    double sorStddevMulThresh = 1.0;  // ????????????.0??????????????
     int imageWidth = 512;
     int imageHeight = 512;
     Eigen::Vector3f planeCenter = Eigen::Vector3f::Zero();
@@ -55,7 +57,7 @@ struct BevelConfig
     bool saveNormalizedProjectionImage = true;
     std::string normalizedProjectionImagePath = "data/debug/projection_pca.png";
 
-    std::string svmModelPath = "D:/1 自研/15 兰铀算法/测量算法/坡口测量/坡口类型数据训练/坡口类型识别/opencv_test/svm_weight.xml";
+    std::string svmModelPath = "D:/1 ??/15 ????/????/????/????????/??????/opencv_test/svm_weight.xml";
 
     int icpMaxIterations = 80;
     double icpMaxCorrespondenceDistance = 5.0;

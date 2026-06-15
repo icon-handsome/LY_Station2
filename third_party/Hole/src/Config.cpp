@@ -1,8 +1,10 @@
+// 配置解析，同步自「柱面和开孔测量 V1.1」（支持 crop_boxes，兼容 crop_min/max）。
 #include "HeadMeasure/Config.h"
 
 #include <Eigen/Dense>
 
 #include <fstream>
+#include <iostream>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
@@ -124,6 +126,28 @@ Eigen::Vector3d vector3d(const std::vector<double>& v, const Eigen::Vector3d& fa
     return {v[0], v[1], v[2]};
 }
 
+CropBox cropBoxFromBlock(const std::string& block) {
+    CropBox box;
+    std::vector<double> cropMin = numbersForKey(block, "crop_min");
+    std::vector<double> cropMax = numbersForKey(block, "crop_max");
+    if (cropMin.empty()) {
+        cropMin = numbersForKey(block, "min");
+    }
+    if (cropMax.empty()) {
+        cropMax = numbersForKey(block, "max");
+    }
+    if (cropMin.size() == 3)
+    {
+        box.min = Eigen::Vector3f(cropMin[0], cropMin[1], cropMin[2]);
+    }
+    if (cropMax.size() == 3)
+    {
+        box.max = Eigen::Vector3f(cropMax[0], cropMax[1], cropMax[2]);
+    }
+    return box;
+}
+
+
 }  // namespace
 
 MeasureConfig loadConfig(const std::string& path)
@@ -143,15 +167,14 @@ MeasureConfig loadConfig(const std::string& path)
         }
     }
 
-    const auto cropMin = numbersForKey(text, "crop_min");
-    const auto cropMax = numbersForKey(text, "crop_max");
-    if (cropMin.size() == 3)
-	{
-        cfg.crop.min = Eigen::Vector3f(cropMin[0], cropMin[1], cropMin[2]);
+    const std::vector<std::string> cropBlocks = objectBlocksForKey(text, "crop_boxes");
+    for (std::size_t i = 0; i < cropBlocks.size(); ++i)
+    {
+        cfg.cropBoxes.push_back(cropBoxFromBlock(cropBlocks[i]));
     }
-    if (cropMax.size() == 3)
-	{
-        cfg.crop.max = Eigen::Vector3f(cropMax[0], cropMax[1], cropMax[2]);
+    if (cfg.cropBoxes.empty())
+    {
+        cfg.cropBoxes.push_back(cropBoxFromBlock(text));
     }
     cfg.statisticalMeanK = intForKey(text, "statistical_mean_k", cfg.statisticalMeanK);
     cfg.statisticalStddevMul = numberForKey(text, "statistical_stddev_mul", cfg.statisticalStddevMul);
@@ -220,15 +243,16 @@ MeasureConfig loadConfig(const std::string& path)
         const auto openingFeatureValues = numbersForKey(block, "cylinder_feature_points");
         for (std::size_t i = 0; i + 2 < openingFeatureValues.size(); i += 3)
         {
-            f.cylinderFeaturePoints.push_back(
-                Eigen::Vector3d(openingFeatureValues[i],
-                                openingFeatureValues[i + 1],
-                                openingFeatureValues[i + 2]));
+            f.cylinderFeaturePoints.push_back(Eigen::Vector3d(openingFeatureValues[i], openingFeatureValues[i + 1], openingFeatureValues[i + 2]));
         }
+        std::cout << "opening_config name=" << f.name
+                  << " cylinder_feature_points=" << f.cylinderFeaturePoints.size() << std::endl;
         cfg.templateOpenings.push_back(f);
     }
 
     return cfg;
 }
+
+
 
 }  // namespace hm
