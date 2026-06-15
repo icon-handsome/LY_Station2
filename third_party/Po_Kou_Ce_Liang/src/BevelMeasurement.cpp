@@ -62,6 +62,8 @@ std::string normalizeConfigText(std::string text)
     replaceAll(text, "\xE2\x88\x92", "-"); // minus sign
     replaceAll(text, "\xE2\x80\x93", "-"); // en dash
     replaceAll(text, "\xE2\x80\x94", "-"); // em dash
+    replaceAll(text, "\xa7\xe4\xa7\xaa?", "-"); // mojibake minus sign
+    replaceAll(text, "\xe2\x88?", "-"); // mojibake minus sign
     return text;
 }
 

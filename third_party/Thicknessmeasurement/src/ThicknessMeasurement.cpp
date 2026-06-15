@@ -1,4 +1,6 @@
-﻿#include "ThicknessMeasurement.h"
+﻿// 厚度测量核心算法，同步自「厚度测量 V1.1」。
+// IPC 集成保留 MeasureThicknessFromClouds 内存接口；V1.1 调试 std::cout 已剔除。
+#include "ThicknessMeasurement.h"
 
 #include <cstdlib>
 #include <cmath>
@@ -362,51 +364,45 @@ bool MeasureThicknessFromClouds(
         return false;
     }
 
- 
-
     // 只用第一帧内表面扫描点云做 ICP，位姿表示扫描坐标系到模板坐标系的变换。
-	pcl::IterativeClosestPoint<PointT, PointT> icp;
-	icp.setInputSource(innerScanFiltered);
-	icp.setInputTarget(templateCloud);
-	icp.setMaximumIterations(config.icp.maxIterations);
-	icp.setMaxCorrespondenceDistance(config.icp.maxCorrespondenceDistance);
-	icp.setTransformationEpsilon(config.icp.transformationEpsilon);
-	icp.setEuclideanFitnessEpsilon(config.icp.euclideanFitnessEpsilon);
-	if (0)
-	{
-		pcl::registration::CorrespondenceRejectorTrimmed::Ptr trimmed(new pcl::registration::CorrespondenceRejectorTrimmed);
-		trimmed->setOverlapRatio(static_cast<float>(0.98));
-		trimmed->setMinCorrespondences(200.0);
-		icp.addCorrespondenceRejector(trimmed);
-	}
+    pcl::IterativeClosestPoint<PointT, PointT> icp;
+    icp.setInputSource(innerScanFiltered);
+    icp.setInputTarget(templateCloud);
+    icp.setMaximumIterations(config.icp.maxIterations);
+    icp.setMaxCorrespondenceDistance(config.icp.maxCorrespondenceDistance);
+    icp.setTransformationEpsilon(config.icp.transformationEpsilon);
+    icp.setEuclideanFitnessEpsilon(config.icp.euclideanFitnessEpsilon);
+    if (0)
+    {
+        pcl::registration::CorrespondenceRejectorTrimmed::Ptr trimmed(
+            new pcl::registration::CorrespondenceRejectorTrimmed);
+        trimmed->setOverlapRatio(static_cast<float>(0.98));
+        trimmed->setMinCorrespondences(200.0);
+        icp.addCorrespondenceRejector(trimmed);
+    }
 
-	CloudT aligned;
-	icp.align(aligned);
-	result->icpFitnessScore = icp.getFitnessScore();
+    CloudT aligned;
+    icp.align(aligned);
+    result->icpFitnessScore = icp.getFitnessScore();
 
+    const Eigen::Matrix4f scanToTemplate = icp.getFinalTransformation();
 
-	const Eigen::Matrix4f scanToTemplate = icp.getFinalTransformation();
+    CloudT::Ptr scanAlignedToTemplate(new CloudT);
+    pcl::transformPointCloud(*innerScanFiltered, *scanAlignedToTemplate, scanToTemplate);
 
-	CloudT::Ptr scanAlignedToTemplate(new CloudT);
-	pcl::transformPointCloud(*innerScanFiltered, *scanAlignedToTemplate, scanToTemplate);
-	//pcl::io::savePCDFileBinary("C:/Users/lenovo/Desktop/scanAlignedToTemplate.pcd", *scanAlignedToTemplate);
-
-	CloudT::Ptr outerScanInTemplate = TransformCloud(outerScanFiltered, scanToTemplate);
-	CloudT::Ptr wholeScanInTemplate(new CloudT);
-	*wholeScanInTemplate = *scanAlignedToTemplate;
-	*wholeScanInTemplate += *outerScanInTemplate;
-	//pcl::io::savePCDFileBinary("C:/Users/lenovo/Desktop/wholeScanInTemplate.pcd", *wholeScanInTemplate);
+    CloudT::Ptr outerScanInTemplate = TransformCloud(outerScanFiltered, scanToTemplate);
+    CloudT::Ptr wholeScanInTemplate(new CloudT);
+    *wholeScanInTemplate = *scanAlignedToTemplate;
+    *wholeScanInTemplate += *outerScanInTemplate;
 
     pcl::KdTreeFLANN<PointT> tree;
     tree.setInputCloud(wholeScanInTemplate);
 
     Eigen::Vector3d nearest[2];
-    Eigen::Vector3d templateFeatures[2];
     for (int i = 0; i < 2; ++i)
     {
         // 特征点绑定在模板点云上，不再使用 ICP 位姿变换。
         const Eigen::Vector3d feature = ToEigen(config.templateFeaturePoints[i]);
-        templateFeatures[i] = feature;
         result->templateFeaturePoints[i] = FromEigen(feature);
         if (!FindNearestPoint(tree, feature, &nearest[i], error))
         {
@@ -428,6 +424,15 @@ bool MeasureThicknessFromClouds(
 
 bool MeasureThickness(const ThicknessConfig& config, ThicknessResult* result, std::string* error)
 {
+    if (result == NULL)
+    {
+        if (error != NULL)
+        {
+            *error = "result output pointer is null";
+        }
+        return false;
+    }
+
     CloudT::Ptr templateCloud(new CloudT);
     CloudT::Ptr innerScanCloud(new CloudT);
     CloudT::Ptr outerScanCloud(new CloudT);
