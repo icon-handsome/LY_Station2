@@ -8,6 +8,10 @@ tools/*
 first/
 .cmake/
 CMakeLists.txt.user
+# JetBrains IDE (local)
+.idea/
+# Office temp lock files
+~$*
 # VS Code (Personal Settings)
 .vscode/ipch/
 .vscode/*.suo
