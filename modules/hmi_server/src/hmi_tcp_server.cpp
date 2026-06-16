@@ -16,7 +16,7 @@
 #include "scan_tracking/vision/hik_cxp_camera_service.h"
 #include "scan_tracking/vision/hik_camera_service.h"
 #include "scan_tracking/vision/hik_camera_c_controller.h"
-#include "scan_tracking/tracking/tracking_service.h"  // InspectionMeasurement, appendInspectionMeasurementFields
+#include "scan_tracking/flow_control/inspection_types.h"
 #include "scan_tracking/common/config_manager.h"
 
 #include <cmath>
@@ -218,7 +218,6 @@ void HmiTcpServer::disconnectServiceSignals()
 }
 void HmiTcpServer::setMechEyeService(mech_eye::MechEyeService* svc) { m_mechEyeService = svc; }
 void HmiTcpServer::setVisionPipelineService(vision::VisionPipelineService* svc) { m_visionPipeline = svc; }
-void HmiTcpServer::setTrackingService(tracking::TrackingService* svc) { m_trackingService = svc; }
 void HmiTcpServer::setHikCameraServices(vision::HikCxpCameraService* hikA, vision::HikCxpCameraService* hikB,
                                         vision::HikCameraService* hikC) {
     m_hikCameraA = hikA;
@@ -310,6 +309,11 @@ void HmiTcpServer::initializeMessageHandlers()
     m_messageHandlers[QString::fromLatin1(msg_type::kCmdRefreshCamera)]    = &HmiTcpServer::handleCmdRefreshCamera;  // 刷新相机
     m_messageHandlers[QString::fromLatin1(msg_type::kCmdCaptureMechEye)]   = &HmiTcpServer::handleCmdCaptureMechEye;  // 捕获 MechEye
     m_messageHandlers[QString::fromLatin1(msg_type::kCmdCaptureBundle)]    = &HmiTcpServer::handleCmdCaptureBundle;  // 捕获 Bundle
+
+    m_messageHandlers[QString::fromLatin1(msg_type::kCmdSetBevelRecipe)] =
+        &HmiTcpServer::handleCmdSetBevelRecipe;
+    m_messageHandlers[QString::fromLatin1(msg_type::kCmdDebugTriggerInspection)] =
+        &HmiTcpServer::handleCmdDebugTriggerInspection;
     
     // 直接触发命令（占位实现）
     m_messageHandlers[QString::fromLatin1(msg_type::kCmdTriggerScan)]         = &HmiTcpServer::handleCmdTriggerScan;  // 触发扫描
@@ -319,11 +323,6 @@ void HmiTcpServer::initializeMessageHandlers()
     m_messageHandlers[QString::fromLatin1(msg_type::kCmdTriggerCodeRead)]     = &HmiTcpServer::handleCmdTriggerCodeRead;  // 触发条码读取
     m_messageHandlers[QString::fromLatin1(msg_type::kCmdTriggerResultReset)]  = &HmiTcpServer::handleCmdTriggerResultReset;  // 触发结果复位
 
-    // 调试命令（需 config.ini [Hmi] allowDebugTriggerInspection=true）
-    m_messageHandlers[QString::fromLatin1(msg_type::kCmdDebugTriggerInspection)] =
-        &HmiTcpServer::handleCmdDebugTriggerInspection;
-    m_messageHandlers[QString::fromLatin1(msg_type::kCmdSetBevelRecipe)] =
-        &HmiTcpServer::handleCmdSetBevelRecipe;
     m_messageHandlers[QString::fromLatin1(msg_type::kCmdReportPersonZoneAlarm)] =
         &HmiTcpServer::handleCmdReportPersonZoneAlarm;
     // 兼容显控侧 zone 误拼为 zome
@@ -547,52 +546,16 @@ void HmiTcpServer::handleCmdGetConfig(const QJsonObject& message)
     flowControlObj[QLatin1String("simulatedProcessingMs")] = cfgMgr->flowControlConfig().simulatedProcessingMs; // 模拟处理间隔
     configPayload[QLatin1String("flowControl")] = flowControlObj;
     
-    // 7. Tracking / Bevel 配置
+    // 7. Tracking 配置
     QJsonObject trackingObj;
     trackingObj[QLatin1String("scanSegmentTotal")] = cfgMgr->trackingConfig().scanSegmentTotal;
     configPayload[QLatin1String("tracking")] = trackingObj;
 
-    QJsonObject bevelObj;
-    bevelObj[QLatin1String("configPath")] = cfgMgr->bevelConfig().configPath;
-    bevelObj[QLatin1String("templateDir")] = cfgMgr->bevelConfig().templateDir;
-    bevelObj[QLatin1String("angleTolDeg")] = static_cast<double>(cfgMgr->bevelConfig().angleTolDeg);
-    bevelObj[QLatin1String("lengthTolMm")] = static_cast<double>(cfgMgr->bevelConfig().lengthTolMm);
-    const common::BevelRecipe recipe = cfgMgr->bevelRecipe();
-    QJsonObject recipeObj;
-    recipeObj[QLatin1String("active")] = recipe.active;
-    recipeObj[QLatin1String("bevel_type")] = recipe.bevelType;
-    recipeObj[QLatin1String("angle_deg")] = static_cast<double>(recipe.angleDeg);
-    recipeObj[QLatin1String("length")] = static_cast<double>(recipe.lengthMm);
-    recipeObj[QLatin1String("has_hole")] = recipe.hasHole;
-    bevelObj[QLatin1String("recipe")] = recipeObj;
-    QJsonArray presetArray;
-    for (const common::BevelRecipePreset& preset : common::standardBevelRecipePresets()) {
-        QJsonObject presetObj;
-        presetObj[QLatin1String("bevel_type")] = preset.bevelType;
-        presetObj[QLatin1String("name")] = preset.name;
-        presetObj[QLatin1String("angle_deg")] = static_cast<double>(preset.angleDeg);
-        presetObj[QLatin1String("length")] = static_cast<double>(preset.lengthMm);
-        presetArray.append(presetObj);
-    }
-    bevelObj[QLatin1String("presets")] = presetArray;
-    configPayload[QLatin1String("bevel")] = bevelObj;
-
     QJsonObject hmiObj;
     hmiObj[QLatin1String("enabled")] = cfgMgr->hmiConfig().enabled;
     hmiObj[QLatin1String("tcpPort")] = cfgMgr->hmiConfig().tcpPort;
-    hmiObj[QLatin1String("allowDebugTriggerInspection")] = cfgMgr->hmiConfig().allowDebugTriggerInspection;
     configPayload[QLatin1String("hmi")] = hmiObj;
-    
-    // 8. LbPose 配置
-    QJsonObject lbPoseObj;
-    lbPoseObj[QLatin1String("trackConfigFile")] = cfgMgr->lbPoseConfig().trackConfigFile;
-    lbPoseObj[QLatin1String("dataRoot")] = cfgMgr->lbPoseConfig().dataRoot;
-    lbPoseObj[QLatin1String("leftPattern")] = cfgMgr->lbPoseConfig().leftPattern;
-    lbPoseObj[QLatin1String("rightPattern")] = cfgMgr->lbPoseConfig().rightPattern;
-    lbPoseObj[QLatin1String("templateFile")] = cfgMgr->lbPoseConfig().templateFile;
-    configPayload[QLatin1String("lbPose")] = lbPoseObj;
-    
-    // 构建响应
+
     QJsonObject payload = buildResponsePayload(true, QStringLiteral("配置已获取")); // 构建响应Payload
     payload[QLatin1String("config")] = configPayload;
     
@@ -683,180 +646,6 @@ void HmiTcpServer::handleCmdTriggerResultReset(const QJsonObject& message)
 {
     const QString msgId = message.value(QLatin1String("msgId")).toString();
     sendResponse(QLatin1String(msg_type::kCmdTriggerResultReset), msgId, false, QStringLiteral("直接触发未实现，请使用 PLC"));
-}
-
-void HmiTcpServer::handleCmdDebugTriggerInspection(const QJsonObject& message)
-{
-    const QString msgId = message.value(QLatin1String("msgId")).toString();
-
-    // 1. 配置开关：演示环境在 config.ini 打开，生产环境务必保持 false
-    const auto* cfgMgr = common::ConfigManager::instance();
-    if (cfgMgr == nullptr || !cfgMgr->hmiConfig().allowDebugTriggerInspection) {
-        sendResponse(
-            QLatin1String(msg_type::kCmdDebugTriggerInspection),
-            msgId,
-            false,
-            QStringLiteral("调试综合检测未启用，请在 config.ini [Hmi] 设置 allowDebugTriggerInspection=true 后重启 Core"));
-        return;
-    }
-
-    if (m_stateMachine == nullptr) {
-        sendResponse(
-            QLatin1String(msg_type::kCmdDebugTriggerInspection),
-            msgId,
-            false,
-            QStringLiteral("状态机不可用，无法读取点云缓存"));
-        return;
-    }
-
-    // 2. 读取当前缓存段位（多路径场景下 cache 可能含多段，见 multiPathNote）
-    const QVector<int> cachedSegments = m_stateMachine->cachedScanSegmentIndices();
-
-    // 3. 用缓存跑综合检测（按路径 inspectionType 分流坡口/Hole；不写 PLC、不清缓存）
-    const tracking::InspectionResult inspectionResult = m_stateMachine->runDebugInspectionOnCachedSegments();
-
-    // 4. 无论合格/不合格都推 event.inspection.finished 给显控
-    publishInspectionResult(inspectionResult);
-
-    // 5. 命令响应：附带缓存摘要，便于演示排障
-    QJsonObject payload = buildResponsePayload(
-        true,
-        QStringLiteral("调试综合检测已完成，event.inspection.finished 已推送（resultCode=%1）")
-            .arg(inspectionResult.resultCode));
-    payload[QLatin1String("resultCode")] = inspectionResult.resultCode;
-    payload[QLatin1String("ngReasonWord0")] = inspectionResult.ngReasonWord0;
-    payload[QLatin1String("cachedSegmentCount")] = cachedSegments.size();
-    QJsonArray segmentArray;
-    for (int segmentIndex : cachedSegments) {
-        segmentArray.append(segmentIndex);
-    }
-    payload[QLatin1String("cachedSegmentIndices")] = segmentArray;
-    payload[QLatin1String("inspectionMessage")] = inspectionResult.message;
-    payload[QLatin1String("multiPathNote")] = QStringLiteral(
-        "综合检测会将当前可检测路径上的分段点云合并为单云，并按 scan_paths 配置的 inspectionType 调用坡口（Po_Kou）或 Hole（HeadMeasure）算法。");
-
-    QJsonObject envelope;
-    envelope[QStringLiteral("version")] = QLatin1String(kProtocolVersion);
-    envelope[QStringLiteral("msgId")] = msgId;
-    envelope[QStringLiteral("type")] = QLatin1String(msg_type::kCmdDebugTriggerInspection);
-    envelope[QStringLiteral("timestamp")] = QDateTime::currentMSecsSinceEpoch();
-    envelope[QStringLiteral("payload")] = payload;
-    sendToClient(envelope);
-
-    qInfo(LOG_HMI_SERVER).noquote()
-        << QStringLiteral("[TCPIP] 调试综合检测完成")
-        << QStringLiteral(" cachedSegments=") << cachedSegments
-        << QStringLiteral(" resultCode=") << inspectionResult.resultCode
-        << QStringLiteral(" message=") << inspectionResult.message;
-}
-
-void HmiTcpServer::handleCmdSetBevelRecipe(const QJsonObject& message)
-{
-    const QString msgId = message.value(QLatin1String("msgId")).toString();
-    const QJsonObject payload = message.value(QLatin1String("payload")).toObject();
-
-    auto* cfgMgr = common::ConfigManager::instance();
-    if (cfgMgr == nullptr) {
-        sendResponse(
-            QLatin1String(msg_type::kCmdSetBevelRecipe),
-            msgId,
-            false,
-            QStringLiteral("配置管理器未初始化"));
-        return;
-    }
-
-    if (!payload.contains(QLatin1String("bevel_type"))) {
-        sendResponse(
-            QLatin1String(msg_type::kCmdSetBevelRecipe),
-            msgId,
-            false,
-            QStringLiteral("缺少必填字段：bevel_type"));
-        return;
-    }
-
-    const int bevelType = payload.value(QLatin1String("bevel_type")).toInt(-1);
-    if (bevelType < 0) {
-        sendResponse(
-            QLatin1String(msg_type::kCmdSetBevelRecipe),
-            msgId,
-            false,
-            QStringLiteral("bevel_type 不能为负数"));
-        return;
-    }
-
-    double angleDeg = payload.value(QLatin1String("angle_deg")).toDouble(0.0);
-    double lengthMm = payload.value(QLatin1String("length")).toDouble(0.0);
-    const bool hasAngle = payload.contains(QLatin1String("angle_deg"));
-    const bool hasLength = payload.contains(QLatin1String("length"));
-
-    if (!hasAngle || !hasLength) {
-        const common::BevelRecipe preset = common::bevelRecipePresetForType(bevelType);
-        if (!preset.active) {
-            sendResponse(
-                QLatin1String(msg_type::kCmdSetBevelRecipe),
-                msgId,
-                false,
-                QStringLiteral("未知 bevel_type=%1，或未同时提供 angle_deg 与 length").arg(bevelType));
-            return;
-        }
-        if (!hasAngle) {
-            angleDeg = preset.angleDeg;
-        }
-        if (!hasLength) {
-            lengthMm = preset.lengthMm;
-        }
-    }
-
-    if (!(angleDeg > 0.0) || !std::isfinite(angleDeg)) {
-        sendResponse(
-            QLatin1String(msg_type::kCmdSetBevelRecipe),
-            msgId,
-            false,
-            QStringLiteral("angle_deg 必须为大于 0 的有效数值"));
-        return;
-    }
-    if (!(lengthMm > 0.0) || !std::isfinite(lengthMm)) {
-        sendResponse(
-            QLatin1String(msg_type::kCmdSetBevelRecipe),
-            msgId,
-            false,
-            QStringLiteral("length 必须为大于 0 的有效数值"));
-        return;
-    }
-
-    common::BevelRecipe recipe;
-    recipe.active = true;
-    recipe.bevelType = bevelType;
-    recipe.angleDeg = static_cast<float>(angleDeg);
-    recipe.lengthMm = static_cast<float>(lengthMm);
-    recipe.hasHole = payload.value(QLatin1String("has_hole")).toBool(false);
-    cfgMgr->setBevelRecipe(recipe);
-
-    QJsonObject responsePayload = buildResponsePayload(
-        true, QStringLiteral("坡口工艺配方已更新"));
-    responsePayload[QLatin1String("bevel_type")] = recipe.bevelType;
-    responsePayload[QLatin1String("angle_deg")] = static_cast<double>(recipe.angleDeg);
-    responsePayload[QLatin1String("length")] = static_cast<double>(recipe.lengthMm);
-    responsePayload[QLatin1String("has_hole")] = recipe.hasHole;
-    responsePayload[QLatin1String("angleTolDeg")] =
-        static_cast<double>(cfgMgr->bevelConfig().angleTolDeg);
-    responsePayload[QLatin1String("lengthTolMm")] =
-        static_cast<double>(cfgMgr->bevelConfig().lengthTolMm);
-
-    QJsonObject envelope;
-    envelope[QStringLiteral("version")] = QLatin1String(kProtocolVersion);
-    envelope[QStringLiteral("msgId")] = msgId;
-    envelope[QStringLiteral("type")] = QLatin1String(msg_type::kCmdSetBevelRecipe);
-    envelope[QStringLiteral("timestamp")] = QDateTime::currentMSecsSinceEpoch();
-    envelope[QStringLiteral("payload")] = responsePayload;
-    sendToClient(envelope);
-
-    qInfo(LOG_HMI_SERVER).noquote()
-        << QStringLiteral("[TCPIP] 坡口配方已更新")
-        << QStringLiteral(" bevel_type=") << recipe.bevelType
-        << QStringLiteral(" angle_deg=") << recipe.angleDeg
-        << QStringLiteral(" length=") << recipe.lengthMm
-        << QStringLiteral(" has_hole=") << recipe.hasHole;
 }
 
 void HmiTcpServer::handleCmdReportPersonZoneAlarm(const QJsonObject& message)
@@ -992,6 +781,32 @@ void HmiTcpServer::handleCmdCaptureBundle(const QJsonObject& message)
     } else {
         sendResponse(QLatin1String(msg_type::kCmdCaptureBundle), msgId, false, QStringLiteral("视觉流水线不可用"));
     }
+}
+
+void HmiTcpServer::handleCmdSetBevelRecipe(const QJsonObject& message)
+{
+    const QString msgId = message.value(QLatin1String("msgId")).toString();
+    sendResponse(
+        QLatin1String(msg_type::kCmdSetBevelRecipe),
+        msgId,
+        false,
+        QStringLiteral("坡口配方已移除：第二工位检测流程尚未实现"));
+}
+
+void HmiTcpServer::handleCmdDebugTriggerInspection(const QJsonObject& message)
+{
+    const QString msgId = message.value(QLatin1String("msgId")).toString();
+
+    flow_control::InspectionResult result;
+    result.resultCode = 8;
+    result.message = QStringLiteral("第二工位检测流程尚未实现");
+    publishInspectionResult(result);
+
+    sendResponse(
+        QLatin1String(msg_type::kCmdDebugTriggerInspection),
+        msgId,
+        false,
+        result.message);
 }
 
 // --- 状态推送实现 ---
@@ -1433,7 +1248,7 @@ QJsonObject HmiTcpServer::buildDeviceStatusPayload() const
         faultWord0 |= (1u << kBitHik2d);
     }
 
-    if (m_trackingService) {
+    if (m_visionPipeline && m_visionPipeline->isStarted()) {
         onlineWord0 |= (1u << kBitTracking);
     }
 
@@ -1512,8 +1327,7 @@ void HmiTcpServer::connectStateMachineSignals()
         sendToClient(buildEnvelope(QLatin1String(msg_type::kEventScanFinished), nextEventId(), payload));
     }, Qt::UniqueConnection);
 
-    // TODO(hmi-demo): 综合检测结果改由 TrackingService::deliverInspectionResult → publishInspectionResult 直推，
-    // 不再绑定 inspectionFinished，避免与显控收到重复 event.inspection.finished。
+    // 综合检测结果由业务层调用 publishInspectionResult() 直推 event.inspection.finished。
 
     // 位姿校验完成
     connect(m_stateMachine, &flow_control::StateMachine::poseCheckFinished, this,
@@ -1734,7 +1548,6 @@ void HmiTcpServer::connectVisionPipelineSignals()
         payload[QLatin1String("mechOk")] = bundle.mechEyeResult.success();
         payload[QLatin1String("hikAOk")] = bundle.hikCameraAResult.success();
         payload[QLatin1String("hikBOk")] = bundle.hikCameraBResult.success();
-        payload[QLatin1String("lbOk")] = bundle.lbPoseResult.success;
         sendToClient(buildEnvelope(QLatin1String(msg_type::kEventBundleCaptured), nextEventId(), payload));
     });
 }
@@ -1795,28 +1608,16 @@ void HmiTcpServer::uninstallLogForwarder()
 
 // --- 综合检测结果推送（演示初版）---
 
-QJsonObject HmiTcpServer::buildInspectionFinishedPayload(const tracking::InspectionResult& result)
+QJsonObject HmiTcpServer::buildInspectionFinishedPayload(const flow_control::InspectionResult& result)
 {
     QJsonObject payload;
     payload[QLatin1String("resultCode")] = result.resultCode;
     payload[QLatin1String("ngReasonWord0")] = result.ngReasonWord0;
     payload[QLatin1String("ngReasonWord1")] = result.ngReasonWord1;
     payload[QLatin1String("measureItemCount")] = result.measureItemCount;
-    tracking::appendInspectionMeasurementFields(payload, result.measurement);
-    tracking::appendHeadDisplayMetricsFields(payload, result.measurement);
+    flow_control::appendInspectionMeasurementFields(payload, result.measurement);
     payload[QLatin1String("message")] = result.message;
     payload[QLatin1String("sourcePointCount")] = result.sourcePointCount;
-
-    if (const auto* cfgMgr = common::ConfigManager::instance()) {
-        const common::BevelRecipe recipe = cfgMgr->bevelRecipe();
-        const common::BevelConfig& bevelConfig = cfgMgr->bevelConfig();
-        payload[QLatin1String("expected_bevel_type")] = recipe.bevelType;
-        payload[QLatin1String("expected_angle_deg")] = static_cast<double>(recipe.angleDeg);
-        payload[QLatin1String("expected_length")] = static_cast<double>(recipe.lengthMm);
-        payload[QLatin1String("has_hole")] = recipe.hasHole;
-        payload[QLatin1String("angle_tol_deg")] = static_cast<double>(bevelConfig.angleTolDeg);
-        payload[QLatin1String("length_tol_mm")] = static_cast<double>(bevelConfig.lengthTolMm);
-    }
 
     return payload;
 }
@@ -1827,12 +1628,11 @@ void HmiTcpServer::publishInitialInspectionDisplay()
         return;
     }
 
-    tracking::InspectionResult idle;
+    flow_control::InspectionResult idle;
     idle.resultCode = 0;
     idle.measureItemCount = 0;
     idle.sourcePointCount = 0;
     idle.message = QStringLiteral("等待检测");
-    idle.measurement.bevelType = 0;
     idle.measurement.qualityCode = 0;
 
     const QJsonObject payload = buildInspectionFinishedPayload(idle);
@@ -1842,12 +1642,12 @@ void HmiTcpServer::publishInitialInspectionDisplay()
         << QStringLiteral("[TCPIP] 显控连接后已推送初始检测展示帧 event.inspection.finished（全零占位）");
 }
 
-void HmiTcpServer::publishInspectionResult(const tracking::InspectionResult& result)
+void HmiTcpServer::publishInspectionResult(const flow_control::InspectionResult& result)
 {
     if (!hasClient()) {
         // TODO(hmi-demo): 无显控连接时缓存最后一帧，连接后补发
         qInfo(LOG_HMI_SERVER).noquote()
-            << QStringLiteral("[TCPIP] 坡口测量结果未推送（无显控连接）")
+            << QStringLiteral("[TCPIP] 检测结果未推送（无显控连接）")
             << QStringLiteral(" resultCode=") << result.resultCode
             << QStringLiteral(" message=") << result.message;
         return;
@@ -1857,12 +1657,11 @@ void HmiTcpServer::publishInspectionResult(const tracking::InspectionResult& res
     sendToClient(buildEnvelope(QLatin1String(msg_type::kEventInspectionFinished), nextEventId(), payload));
 
     qInfo(LOG_HMI_SERVER).noquote()
-        << QStringLiteral("[TCPIP] 坡口测量结果已推送 event.inspection.finished")
+        << QStringLiteral("[TCPIP] 检测结果已推送 event.inspection.finished")
         << QStringLiteral(" resultCode=") << result.resultCode
         << QStringLiteral(" ngWord0=") << result.ngReasonWord0
         << QStringLiteral(" measureItems=") << result.measureItemCount
-        << QStringLiteral(" angleDeg=") << result.measurement.headAngleTol
-        << QStringLiteral(" lengthMm=") << result.measurement.bluntHeightTol
+        << QStringLiteral(" qualityCode=") << result.measurement.qualityCode
         << QStringLiteral(" message=") << result.message;
 }
 

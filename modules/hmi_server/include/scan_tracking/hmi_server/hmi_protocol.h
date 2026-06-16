@@ -79,11 +79,9 @@ inline constexpr const char* kCmdRefreshCamera       = "cmd.refresh_camera";
 inline constexpr const char* kCmdModbusConnect       = "cmd.modbus_connect";
 inline constexpr const char* kCmdModbusDisconnect    = "cmd.modbus_disconnect";
 
-/// 调试用：用状态机缓存点云触发坡口综合检测（需 config.ini allowDebugTriggerInspection=true）
+/// 第一工位遗留：第二工位返回不支持，保留协议兼容
+inline constexpr const char* kCmdSetBevelRecipe      = "cmd.set_bevel_recipe";
 inline constexpr const char* kCmdDebugTriggerInspection = "cmd.debug_trigger_inspection";
-
-/// 设置坡口工艺配方（bevel_type / angle_deg / length）
-inline constexpr const char* kCmdSetBevelRecipe = "cmd.set_bevel_recipe";
 
 /// 显控上报监控区域人员状态：payload.alarm true=有人，false=无人（可周期重复上报）
 inline constexpr const char* kCmdReportPersonZoneAlarm = "cmd.report_person_zone_alarm";

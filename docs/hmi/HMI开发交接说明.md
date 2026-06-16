@@ -1,12 +1,11 @@
 # HMI 显控 TCP 开发交接说明
 
-**文档版本**: v1.4  
-**最后更新**: 2026-06-01  
-**适用范围**: 本仓库（IPC Core，Windows）— **仅 TCP Server 端**；麒麟 OS Qt 显控为独立 Client 工程。
+**文档版本**: v1.5  
+**最后更新**: 2026-06-16  
+**适用范围**: 本仓库（IPC_Station2，第二工位专用）— **仅 TCP Server 端**；麒麟 OS Qt 显控为独立 Client 工程。
 
-> **v1.2 变更**：蓝友检测结果经 `publishInspectionResult` 直推 `event.inspection.finished`（含失败）；新增 `cmd.debug_trigger_inspection` 与 `[Hmi] allowDebugTriggerInspection` 配置开关。  
-> **v1.3 变更**：补充分段落盘与调试检测加载 PLY 说明（`ScanTracking_CaptureCache`）。  
-> **v1.4 变更**：主流程改内存缓存；调试检测从内存读取三段点云；位姿拼接落盘至 `output/run_*`。
+> **v1.5 变更（第二工位骨架）**：本仓已移除 `TrackingService` 与第一工位坡口算法；`event.inspection.finished` 测量字段精简为 `quality_code`；`cmd.debug_trigger_inspection` / `cmd.set_bevel_recipe` 保留协议占位（返回未实现）；已删除 `[Hmi] allowDebugTriggerInspection`。  
+> **v1.4 变更**：主流程改内存缓存；调试检测从内存读取三段点云；位姿拼接落盘至 `output/run_*`。（**第一工位路径已不在本仓**）
 
 > **新接手请先读**：本文 → [`HMI现场联调_阶段0-1.md`](./HMI现场联调_阶段0-1.md) → [`封头检测工位_TCP_IP显控通信协议_v1.0.md`](../protocols/封头检测工位_TCP_IP显控通信协议_v1.0.md)
 
@@ -39,23 +38,23 @@
 | `modules/hmi_server/` → `scan_tracking_hmi_protocol` | 协议常量、`buildEnvelope`、`serializeFrame` |
 | `modules/hmi_server/` → `scan_tracking_hmi_server` | `HmiTcpServer`、`HmiSession`；监听、推送、命令分发 |
 | `app/src/console_runtime.cpp` | 读 `config.ini [Hmi]` 创建 `HmiTcpServer`、`bindServiceSignals()`、`start()` |
-| `config.ini` `[Hmi]` | `enabled`、`tcpPort`（默认 9900）、`allowDebugTriggerInspection`（默认 false） |
+| `config.ini` `[Hmi]` | `enabled`、`tcpPort`（默认 9900） |
 
 **日志分类**：`hmi.server`、`hmi.session`；带 `[TCPIP]` 前缀的收发摘要（高频 status/心跳不刷屏）。
 
-### 2.1 蓝友检测结果推送链路（2026-05 演示版）
+### 2.1 检测结果推送链路（第二工位）
 
 ```text
-Trig_Inspection / cmd.debug_trigger_inspection
-  → TrackingService::inspectSegments（蓝友 runFirstStationDetection）
-  → deliverInspectionResult / HmiTcpServer::publishInspectionResult
-  → TCP event.inspection.finished（resultCode=1 或 2 均推送）
+Trig_Inspection（PLC）或 cmd.debug_trigger_inspection（显控）
+  → InspectionHandler（当前 Res=8 占位；实现后填业务）
+  → HmiTcpServer::publishInspectionResult
+  → TCP event.inspection.finished
 ```
 
-- 正式 PLC 路径：`console_runtime` 注入 `InspectionResultNotifier`，检测完成即推显控。
-- 调试路径：`cmd.debug_trigger_inspection` 走与正式检测相同的蓝友链路；若内存无点云，会先 **`loadSegmentCaptureResultsForInspection`** 从路径级内存缓存加载 `[Tracking]` 三段点云。**不写 PLC**；是否清缓存取决于状态机复位策略。须 `allowDebugTriggerInspection=true`。
-- **分段缓存**：`event.scan.finished` 等可带 `cachedSegmentIndices`；位姿拼接产物在 `output/run_*/`（HMI 协议**未**暴露路径，复盘请直接看该目录）。
-- **多路径**：可缓存多段，蓝友仍只取 `[Tracking]` 三个段位（外/内/孔）；路径级融合见未完成清单 §2.3.2。
+- 显控 TCP 连接成功后推送**初始占位帧**（`resultCode=0`，`message="等待检测"`）。
+- 第二工位检测实现后：在 Handler 或业务层构造 `InspectionResult` 并调用 `publishInspectionResult`。
+- `cmd.debug_trigger_inspection`：当前推送 Res=8 占位结果，**不写 PLC**；用于显控 UI 联调。
+- `cmd.set_bevel_recipe`：返回失败说明（第一工位坡口配方已移除）。
 
 ---
 
@@ -84,16 +83,17 @@ Trig_Inspection / cmd.debug_trigger_inspection
 - [x] `cmd.modbus_connect` / `cmd.modbus_disconnect`
 - [x] `cmd.capture_mech_eye` / `cmd.capture_bundle`
 - [x] `cmd.refresh_camera`（当前仅刷新 MechEye）
-- [x] `cmd.debug_trigger_inspection`（**须** `allowDebugTriggerInspection=true`；用缓存点云跑蓝友并推 `event.inspection.finished`）
+- [x] `cmd.debug_trigger_inspection`（占位：推送 Res=8 的 `event.inspection.finished`，不写 PLC）
+- [x] `cmd.set_bevel_recipe`（占位：返回「第二工位未实现」）
 
-### 3.4 检测测量结构化（阶段 3.1）
+### 3.4 检测测量结构化
 
-- [x] `event.inspection.finished` 含 8 项算法测量字段
-- [x] 检测失败（NG）同样推送事件，`outlinerErrorLog` / `inlinerErrorLog` 可用
+- [x] `event.inspection.finished` 含 `resultCode`、`ngReasonWord*`、`measureItemCount`、`quality_code`、`message`
+- [x] 连接后初始占位帧 + 检测完成推送（OK/NG/未实现均推送）
 
 ### 3.5 配置与设备故障字
 
-- [x] `config.ini [Hmi]`：`enabled`、`tcpPort`、`allowDebugTriggerInspection`
+- [x] `config.ini [Hmi]`：`enabled`、`tcpPort`
 - [x] `status.device.faultWord0` 位表聚合，见协议 §2.4
 
 ---
@@ -102,14 +102,13 @@ Trig_Inspection / cmd.debug_trigger_inspection
 
 | 项 | 状态 | 说明 |
 |----|------|------|
-| `cmd.trigger_scan` / `cmd.trigger_inspection` 等 | **拒绝** | 须 PLC→状态机触发（防撞机）；**勿与** `cmd.debug_trigger_inspection` 混淆 |
-| `cmd.debug_trigger_inspection` | **配置门控** | 默认 `allowDebugTriggerInspection=false`；生产/日常开发保持 false |
+| `cmd.trigger_scan` / `cmd.trigger_inspection` 等 | **拒绝** | 须 PLC→状态机触发（防撞机） |
+| `cmd.debug_trigger_inspection` | **占位** | 推送未实现结果；不写 PLC |
+| `cmd.set_bevel_recipe` | **占位** | 第一工位配方已移除 |
 | `event.task.*` | 未实现 | 协议常量已有 |
 | `event.log` | 默认关闭 | `kForwardQtLogsToHmi=false` |
 | 无显控连接时补发最后一帧检测结果 | 未实现 | TODO(hmi-demo) |
-| 多路径蓝友融合结果 | 未实现 | 见 §2.3.2、`multiPathNote` 响应字段 |
 | Qt 显控 Client + UI | **外部仓库** | 本仓库不维护客户端 |
-| HMI 展示 LBN 结果 | 未做 | 见 LBN 交接说明 |
 
 ---
 
@@ -117,17 +116,16 @@ Trig_Inspection / cmd.debug_trigger_inspection
 
 | 场景 | 文件 |
 |------|------|
-| 服务启动 / 检测推送回调注册 | `app/src/console_runtime.cpp` |
+| 服务启动 | `app/src/console_runtime.cpp` |
 | 命令分发 / 状态推送 / `publishInspectionResult` | `modules/hmi_server/src/hmi_tcp_server.cpp` |
-| 调试命令 / 缓存点云检测 | `StateMachine::runDebugInspectionOnCachedSegments` |
-| 蓝友检测与回调 | `modules/tracking/src/tracking_service.cpp` |
+| 检测 Handler 占位 | `modules/flow_control/src/handlers/inspection_handler.cpp` |
 | 帧组包 / 协议常量 | `modules/hmi_server/src/hmi_protocol.cpp`、`hmi_protocol.h` |
 
 ---
 
 ## 6. 现场联调（Core + 外部 Qt Client）
 
-1. `config.ini`：`[Hmi] enabled=true`、`tcpPort=9900`；演示调试命令时另设 `allowDebugTriggerInspection=true` 并重启 Core
+1. `config.ini`：`[Hmi] enabled=true`、`tcpPort=9900`
 2. 启动 `scan-tracking.exe`，确认 HMI TCP 监听日志
 3. 由 **Qt 显控** 或任意遵守协议的 TCP 客户端连接并联调（见联调文档）
 4. 验收步骤：[`HMI现场联调_阶段0-1.md`](./HMI现场联调_阶段0-1.md)
@@ -140,7 +138,7 @@ Trig_Inspection / cmd.debug_trigger_inspection
 2. 按 `hmi_protocol.h` 实现长度头 + JSON 解帧与 `type` 分发
 3. 可引用本仓库 `scan_tracking_hmi_protocol` 的常量与 `serializeFrame` 逻辑（拷贝或子模块，勿在本仓库加 Client 目标）
 4. UI 绑定 `status.*` / `event.*`；**不要**调用 `cmd.trigger_*`（Core 会拒绝）
-5. 演示检测页可调用 `cmd.debug_trigger_inspection`（仅当 Core 侧开关为 true）
+5. 演示检测页可调用 `cmd.debug_trigger_inspection`（当前为占位推送）
 
 ---
 
@@ -150,5 +148,4 @@ Trig_Inspection / cmd.debug_trigger_inspection
 |------|------|
 | [封头检测工位_TCP_IP显控通信协议_v1.0.md](../protocols/封头检测工位_TCP_IP显控通信协议_v1.0.md) | 消息与 payload |
 | [HMI现场联调_阶段0-1.md](./HMI现场联调_阶段0-1.md) | 联调验收 |
-| [算法使用API.md](../station1/算法使用API.md) | 测量字段对照 |
-| [项目未完成事项清单_v1.0.md](../station1/项目未完成事项清单_v1.0.md) | §三 HMI |
+| [第二工位骨架删减说明.md](../station2/第二工位骨架删减说明.md) | 本仓 HMI 保留范围 |

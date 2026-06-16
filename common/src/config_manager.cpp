@@ -74,27 +74,19 @@ QString scanPathsConfigPath(const StationProfile& stationProfile, const QString&
         return resolveConfigRelativePath(stationProfile.scanPathsConfigPath, configFilePath);
     }
 
-    const QString exeDirPath =
-        QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("scan_paths_config.json"));
-    if (QFileInfo::exists(exeDirPath)) {
-        return exeDirPath;
+    const QString fallbackPath =
+        resolveConfigRelativePath(QStringLiteral("config/scan_paths/station2_placeholder.json"), configFilePath);
+    if (QFileInfo::exists(fallbackPath)) {
+        return fallbackPath;
     }
 
-    QDir rootDir(QCoreApplication::applicationDirPath());
-    if (rootDir.cdUp() && rootDir.cdUp() && rootDir.cdUp()) {
-        QString rootPath = rootDir.filePath(QStringLiteral("scan_paths_config.json"));
-        if (QFileInfo::exists(rootPath)) {
-            return rootPath;
-        }
-    }
-
-    return exeDirPath;
+    return fallbackPath;
 }
 
 void applyStationSettings(QSettings& settings, StationProfile& profile, QString* profileIni)
 {
     if (settings.contains(QStringLiteral("stationId"))) {
-        profile.stationId = stationIdFromInt(settings.value(QStringLiteral("stationId"), 1).toInt());
+        profile.stationId = stationIdFromInt(settings.value(QStringLiteral("stationId"), 2).toInt());
     }
     if (settings.contains(QStringLiteral("stationName"))) {
         profile.stationName = settings.value(QStringLiteral("stationName"), profile.stationName).toString();
@@ -184,160 +176,11 @@ const CameraConfig& ConfigManager::cameraConfig() const { return m_cameraConfig;
 const VisionConfig& ConfigManager::visionConfig() const { return m_visionConfig; }
 const FlowControlConfig& ConfigManager::flowControlConfig() const { return m_flowControlConfig; }
 const TrackingConfig& ConfigManager::trackingConfig() const { return m_trackingConfig; }
-const BevelConfig& ConfigManager::bevelConfig() const { return m_bevelConfig; }
-
-const HoleConfig& ConfigManager::holeConfig() const { return m_holeConfig; }
-
-const ThicknessConfig& ConfigManager::thicknessConfig() const { return m_thicknessConfig; }
-
-const InternalSurfaceConfig& ConfigManager::internalSurfaceConfig() const
-{
-    return m_internalSurfaceConfig;
-}
-
-InspectionType inspectionTypeFromString(const QString& value)
-{
-    const QString normalized = value.trimmed().toLower();
-    if (normalized == QStringLiteral("hole") || normalized == QStringLiteral("opening")) {
-        return InspectionType::Hole;
-    }
-    if (normalized == QStringLiteral("thickness")
-        || normalized == QStringLiteral("weld")
-        || normalized == QStringLiteral("焊缝")) {
-        return InspectionType::Thickness;
-    }
-    return InspectionType::Bevel;
-}
-
-QString inspectionTypeToString(InspectionType type)
-{
-    switch (type) {
-    case InspectionType::Hole:
-        return QStringLiteral("hole");
-    case InspectionType::Thickness:
-        return QStringLiteral("thickness");
-    case InspectionType::Bevel:
-    default:
-        return QStringLiteral("bevel");
-    }
-}
-
-InspectionType ConfigManager::inspectionTypeForPath(int pathId) const
-{
-    for (const ScanPathConfig& path : m_scanPathsConfig.scanPaths) {
-        if (path.pathId == pathId) {
-            return path.inspectionType;
-        }
-    }
-    return InspectionType::Bevel;
-}
-
-QString ConfigManager::holeConfigPathForPath(int pathId) const
-{
-    for (const ScanPathConfig& path : m_scanPathsConfig.scanPaths) {
-        if (path.pathId == pathId && !path.holeConfigPath.trimmed().isEmpty()) {
-            return path.holeConfigPath.trimmed();
-        }
-    }
-    return m_holeConfig.configPath;
-}
-
-QString ConfigManager::thicknessConfigPathForPath(int pathId) const
-{
-    for (const ScanPathConfig& path : m_scanPathsConfig.scanPaths) {
-        if (path.pathId == pathId && !path.thicknessConfigPath.trimmed().isEmpty()) {
-            return path.thicknessConfigPath.trimmed();
-        }
-    }
-    return m_thicknessConfig.configPath;
-}
-
-int ConfigManager::innerScanSegmentIndexForPath(int pathId) const
-{
-    for (const ScanPathConfig& path : m_scanPathsConfig.scanPaths) {
-        if (path.pathId == pathId) {
-            return path.innerScanSegmentIndex;
-        }
-    }
-    return 0;
-}
-
-int ConfigManager::outerScanSegmentIndexForPath(int pathId) const
-{
-    for (const ScanPathConfig& path : m_scanPathsConfig.scanPaths) {
-        if (path.pathId == pathId) {
-            return path.outerScanSegmentIndex;
-        }
-    }
-    return 0;
-}
-
-QVector<BevelRecipePreset> standardBevelRecipePresets()
-{
-    return {
-        BevelRecipePreset{
-            0,
-            QStringLiteral("45deg_1mm"),
-            45.0f,
-            1.0f,
-        },
-        BevelRecipePreset{
-            1,
-            QStringLiteral("30deg_6mm"),
-            30.0f,
-            6.0f,
-        },
-    };
-}
-
-BevelRecipe bevelRecipePresetForType(int bevelType)
-{
-    for (const BevelRecipePreset& preset : standardBevelRecipePresets()) {
-        if (preset.bevelType == bevelType) {
-            BevelRecipe recipe;
-            recipe.active = true;
-            recipe.bevelType = preset.bevelType;
-            recipe.angleDeg = preset.angleDeg;
-            recipe.lengthMm = preset.lengthMm;
-            return recipe;
-        }
-    }
-    return BevelRecipe{};
-}
-
-void ConfigManager::setBevelRecipe(const BevelRecipe& recipe)
-{
-    std::lock_guard<std::mutex> lock(m_bevelRecipeMutex);
-    m_runtimeBevelRecipe = recipe;
-    m_runtimeBevelRecipe.active = true;
-    m_runtimeRecipeSet = true;
-}
-
-BevelRecipe ConfigManager::bevelRecipe() const
-{
-    std::lock_guard<std::mutex> lock(m_bevelRecipeMutex);
-    if (m_runtimeRecipeSet) {
-        return m_runtimeBevelRecipe;
-    }
-    return m_bevelConfig.defaultRecipe;
-}
-
-bool ConfigManager::hasActiveBevelRecipe() const
-{
-    return bevelRecipe().active;
-}
-
 const OrbbecGeminiConfig& ConfigManager::orbbecGeminiConfig() const { return m_orbbecGeminiConfig; }
 const LivoxMid360Config& ConfigManager::livoxMid360Config() const { return m_livoxMid360Config; }
 const TfminiPlusConfig& ConfigManager::tfminiPlusConfig() const { return m_tfminiPlusConfig; }
 QString ConfigManager::configFilePath() const { return m_configFilePath; }
 const HmiConfig& ConfigManager::hmiConfig() const { return m_hmiConfig; }
-const LbPoseConfig& ConfigManager::lbPoseConfig() const { return m_lbPoseConfig; }
-const LbnPoseConfig& ConfigManager::lbnPoseConfig() const { return m_lbnPoseConfig; }
-const PointCloudProcessingConfig& ConfigManager::pointCloudProcessingConfig() const
-{
-    return m_pointCloudProcessingConfig;
-}
 const ScanPathsConfig& ConfigManager::scanPathsConfig() const { return m_scanPathsConfig; }
 const StationProfile& ConfigManager::stationProfile() const { return m_stationProfile; }
 
@@ -367,11 +210,11 @@ void ConfigManager::writeDefaults(QSettings& settings)
     settings.endGroup();
 
     settings.beginGroup("Station");
-    settings.setValue("stationId", 1);
-    settings.setValue("stationName", QStringLiteral("第一工位-封头"));
-    settings.setValue("scanPathsConfigPath", QStringLiteral("config/scan_paths/station1_default.json"));
-    settings.setValue("defaultWorkMode", QStringLiteral("MODE_END_CAP"));
-    settings.setValue("profileIni", QStringLiteral("config/station_profiles/station1_endcap.ini"));
+    settings.setValue("stationId", 2);
+    settings.setValue("stationName", QStringLiteral("第二工位-圆筒半成品"));
+    settings.setValue("scanPathsConfigPath", QStringLiteral("config/scan_paths/station2_placeholder.json"));
+    settings.setValue("defaultWorkMode", QStringLiteral("MODE_CYLINDER_SEMI"));
+    settings.setValue("profileIni", QStringLiteral("config/station_profiles/station2_cylinder_semi.ini"));
     settings.endGroup();
 
     settings.beginGroup("Vision");
@@ -411,65 +254,14 @@ void ConfigManager::writeDefaults(QSettings& settings)
     settings.setValue("hikCxpCameraBSerial", "DA9122998");
     settings.endGroup();
 
-    settings.beginGroup("LbPose");
-    settings.setValue(
-        "trackConfigFile",
-        QStringLiteral("third_party/LB/track_config.ini"));
-    settings.setValue("dataRoot", QStringLiteral("third_party/LB/data"));
-    settings.setValue("leftPattern", "");
-    settings.setValue("rightPattern", "");
-    settings.setValue("templateFile", "");
-    settings.endGroup();
-
-    // 首次生成 config.ini 时的 [LbnPose] 默认（与 150200 离线验收一致，生产宜再标定）
-    settings.beginGroup("LbnPose");
-    settings.setValue("enabled", true);
-    settings.setValue("useIdentityRtWithoutMarkers", false);
-    settings.setValue("dataRoot", "D:/work/LY/IPC-192.168.110.173_track-main/third_party/LBN/data");
-    settings.setValue("templateFile", "D:/work/LY/IPC-192.168.110.173_track-main/third_party/LBN/data/template-3D-ALL-Shift-Cut-Cut.txt");
-    settings.setValue("minDistance", 20.0);
-    settings.setValue("maxDistance", 650.0);
-    settings.setValue("cosTolerance", 0.05);
-    settings.setValue("minPercent", 0.2);
-    settings.setValue("cloudSearchRadiusPx", 20);
-    settings.setValue("markerMinArea", 200);
-    settings.setValue("markerMaxArea", 30000);
-    settings.setValue("markerIntensityThreshold", 40);
-    settings.setValue("markerDebscanDistPx", 120.0);
-    settings.endGroup();
-
     settings.beginGroup("FlowControl");
     settings.setValue("pollIntervalMs", 100);
     settings.setValue("heartbeatIntervalMs", 1000);
     settings.setValue("simulatedProcessingMs", 300);
-    settings.setValue("algorithmBypassEnabled", false);
     settings.endGroup();
 
     settings.beginGroup("Tracking");
     settings.setValue("scanSegmentTotal", 3);
-    settings.endGroup();
-
-    settings.beginGroup("Bevel");
-    settings.setValue("configPath", "bevel/config.txt");
-    settings.setValue("templateDir", "bevel/data/templates");
-    settings.setValue("angleTolDeg", 2.0);
-    settings.setValue("lengthTolMm", 1.0);
-    settings.setValue("defaultBevelType", 0);
-    settings.setValue("defaultAngleDeg", 45.0);
-    settings.setValue("defaultLengthMm", 1.0);
-    settings.endGroup();
-
-    settings.beginGroup("Hole");
-    settings.setValue("configPath", "hole/config/default.json");
-    settings.setValue("icpRmsMaxMm", 5.0);
-    settings.setValue("cylinderRmsMaxMm", 3.0);
-    settings.endGroup();
-
-    settings.beginGroup("InternalSurface");
-    settings.setValue("configPath", "internal_surface/config/algorithm_config.json");
-    settings.setValue("templateType", 1);
-    settings.setValue("minDepthMm", 0.0);
-    settings.setValue("minVolumeM3", 0.0);
     settings.endGroup();
 
     settings.beginGroup("OrbbecGemini");
@@ -637,130 +429,14 @@ void ConfigManager::load(const QString& filePath)
         settings.value("hikCxpCameraBSerial", "DA9122998").toString();
     settings.endGroup();
 
-    settings.beginGroup("LbPose");
-    m_lbPoseConfig.trackConfigFile = resolveConfigRelativePath(
-        settings.value(
-            "trackConfigFile",
-            QStringLiteral("third_party/LB/track_config.ini"))
-            .toString(),
-        m_configFilePath);
-    m_lbPoseConfig.dataRoot = resolveConfigRelativePath(
-        settings.value(
-            "dataRoot",
-            QStringLiteral("third_party/LB/data"))
-            .toString(),
-        m_configFilePath);
-    m_lbPoseConfig.leftPattern = settings.value("leftPattern", "").toString();
-    m_lbPoseConfig.rightPattern = settings.value("rightPattern", "").toString();
-    m_lbPoseConfig.templateFile = resolveConfigRelativePath(
-        settings.value("templateFile", "").toString(),
-        m_configFilePath);
-    settings.endGroup();
-
-    // [LbnPose] 默认值与 testdata/test 150200 离线调通一致；上线前请多扫描验证，见 docs/station1/算法使用API.md
-    settings.beginGroup("LbnPose");
-    m_lbnPoseConfig.enabled = settings.value("enabled", true).toBool();
-    m_lbnPoseConfig.useIdentityRtWithoutMarkers =
-        settings.value("useIdentityRtWithoutMarkers", false).toBool();
-    m_lbnPoseConfig.dataRoot = settings.value(
-        "dataRoot",
-        QStringLiteral("D:/work/LY/IPC-192.168.110.173_track-main/third_party/LBN/data"))
-        .toString();
-    m_lbnPoseConfig.templateFile = settings.value(
-        "templateFile",
-        QStringLiteral("D:/work/LY/IPC-192.168.110.173_track-main/third_party/LBN/data/template-3D-ALL-Shift-Cut-Cut.txt"))
-        .toString();
-    m_lbnPoseConfig.minDistance = settings.value("minDistance", 20.0).toFloat();
-    m_lbnPoseConfig.maxDistance = settings.value("maxDistance", 650.0).toFloat();
-    m_lbnPoseConfig.cosTolerance = settings.value("cosTolerance", 0.05).toFloat();
-    m_lbnPoseConfig.minPercent = settings.value("minPercent", 0.2).toFloat();
-    m_lbnPoseConfig.cloudSearchRadiusPx = settings.value("cloudSearchRadiusPx", 20).toInt();
-    m_lbnPoseConfig.markerMinArea = settings.value("markerMinArea", 200).toInt();
-    m_lbnPoseConfig.markerMaxArea = settings.value("markerMaxArea", 30000).toInt();
-    m_lbnPoseConfig.markerIntensityThreshold = settings.value("markerIntensityThreshold", 40).toInt();
-    m_lbnPoseConfig.markerDebscanDistPx =
-        settings.value("markerDebscanDistPx", 120.0).toFloat();
-    settings.endGroup();
-
     settings.beginGroup("FlowControl");
     m_flowControlConfig.pollIntervalMs = settings.value("pollIntervalMs", 100).toInt();
     m_flowControlConfig.heartbeatIntervalMs = settings.value("heartbeatIntervalMs", 1000).toInt();
     m_flowControlConfig.simulatedProcessingMs = settings.value("simulatedProcessingMs", 300).toInt();
-    m_flowControlConfig.algorithmBypassEnabled =
-        settings.value("algorithmBypassEnabled", false).toBool();
-    m_flowControlConfig.scanCacheDirectory = settings.value("scanCacheDirectory").toString().trimmed();
-    m_flowControlConfig.retainSegmentPly = settings.value("retainSegmentPly", true).toBool();
-    settings.endGroup();
-
-    settings.beginGroup("PointCloudProcessing");
-    m_pointCloudProcessingConfig.enabled = settings.value("enabled", true).toBool();
-    m_pointCloudProcessingConfig.depthMinMm =
-        settings.value("depthMinMm", m_visionConfig.mechDepthRangeMin).toFloat();
-    m_pointCloudProcessingConfig.depthMaxMm =
-        settings.value("depthMaxMm", m_visionConfig.mechDepthRangeMax).toFloat();
-    m_pointCloudProcessingConfig.outlierRemovalEnabled =
-        settings.value("outlierRemovalEnabled", true).toBool();
-    m_pointCloudProcessingConfig.outlierMeanK = settings.value("outlierMeanK", 50).toInt();
-    m_pointCloudProcessingConfig.outlierStddevMul =
-        settings.value("outlierStddevMul", 1.0).toFloat();
-    m_pointCloudProcessingConfig.smoothingEnabled = settings.value("smoothingEnabled", true).toBool();
-    m_pointCloudProcessingConfig.mlsSearchRadiusMm =
-        settings.value("mlsSearchRadiusMm", 5.0).toFloat();
-    m_pointCloudProcessingConfig.mlsPolynomialOrder =
-        settings.value("mlsPolynomialOrder", 2).toInt();
-    m_pointCloudProcessingConfig.downsampleEnabled =
-        settings.value("downsampleEnabled", true).toBool();
-    m_pointCloudProcessingConfig.voxelLeafSizeMm =
-        settings.value("voxelLeafSizeMm", 2.0).toFloat();
-    m_pointCloudProcessingConfig.minPointsAfterProcessing =
-        settings.value("minPointsAfterProcessing", 1000).toInt();
     settings.endGroup();
 
     settings.beginGroup("Tracking");
     m_trackingConfig.scanSegmentTotal = settings.value("scanSegmentTotal", 3).toInt();
-    settings.endGroup();
-
-    settings.beginGroup("Bevel");
-    m_bevelConfig.configPath =
-        settings.value("configPath", QStringLiteral("bevel/config.txt")).toString();
-    m_bevelConfig.templateDir =
-        settings.value("templateDir", QStringLiteral("bevel/data/templates")).toString();
-    m_bevelConfig.angleTolDeg =
-        settings.value("angleTolDeg", 2.0).toFloat();
-    m_bevelConfig.lengthTolMm =
-        settings.value("lengthTolMm", 1.0).toFloat();
-    m_bevelConfig.defaultRecipe.bevelType =
-        settings.value("defaultBevelType", 0).toInt();
-    m_bevelConfig.defaultRecipe.angleDeg =
-        settings.value("defaultAngleDeg", 45.0).toFloat();
-    m_bevelConfig.defaultRecipe.lengthMm =
-        settings.value("defaultLengthMm", 1.0).toFloat();
-    m_bevelConfig.defaultRecipe.active =
-        m_bevelConfig.defaultRecipe.angleDeg > 0.0f
-        && m_bevelConfig.defaultRecipe.lengthMm > 0.0f;
-    settings.endGroup();
-
-    settings.beginGroup("Hole");
-    m_holeConfig.configPath =
-        settings.value("configPath", QStringLiteral("hole/config/default.json")).toString();
-    m_holeConfig.icpRmsMaxMm =
-        settings.value("icpRmsMaxMm", 5.0).toDouble();
-    m_holeConfig.cylinderRmsMaxMm =
-        settings.value("cylinderRmsMaxMm", 3.0).toDouble();
-    settings.endGroup();
-
-    settings.beginGroup("Thickness");
-    m_thicknessConfig.configPath = settings.value(
-        "configPath", QStringLiteral("thickness/config/thickness_config.json")).toString();
-    m_thicknessConfig.icpFitnessMax = settings.value("icpFitnessMax", 50.0).toDouble();
-    settings.endGroup();
-
-    settings.beginGroup("InternalSurface");
-    m_internalSurfaceConfig.configPath = settings.value(
-        "configPath", QStringLiteral("internal_surface/config/algorithm_config.json")).toString();
-    m_internalSurfaceConfig.templateType = settings.value("templateType", 1).toInt();
-    m_internalSurfaceConfig.minDepthMm = settings.value("minDepthMm", 0.0).toDouble();
-    m_internalSurfaceConfig.minVolumeM3 = settings.value("minVolumeM3", 0.0).toDouble();
     settings.endGroup();
 
     settings.beginGroup("OrbbecGemini");
@@ -816,8 +492,6 @@ void ConfigManager::load(const QString& filePath)
         m_hmiConfig.tcpPort = static_cast<quint16>(
             qBound(1, port, 65535));
     }
-    m_hmiConfig.allowDebugTriggerInspection =
-        settings.value("allowDebugTriggerInspection", false).toBool();
     settings.endGroup();
 
     QtMsgType minType = QtDebugMsg;
@@ -894,32 +568,7 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
     // 1. 读取配置文件元数据
     m_scanPathsConfig.version = root.value("version").toString("1.0");
     m_scanPathsConfig.lastModified = root.value("lastModified").toString();
-    
-    // 2. 读取标定矩阵 T0
-    const QJsonObject calibMatrixObj = root.value("calibrationMatrix").toObject();
-    const QJsonArray t0Array = calibMatrixObj.value("T0").toArray();
-    
-    if (t0Array.size() == 4) {
-        // 4x4 矩阵，行优先存储
-        int index = 0;
-        for (int row = 0; row < 4; ++row) {
-            const QJsonArray rowArray = t0Array.at(row).toArray();
-            for (int col = 0; col < 4; ++col) {
-                m_scanPathsConfig.calibrationMatrixT0[index++] = 
-                    static_cast<float>(rowArray.at(col).toDouble(row == col ? 1.0 : 0.0));
-            }
-        }
-    } else {
-        qWarning(LOG_CONFIG) << "标定矩阵 T0 格式错误，使用单位矩阵";
-        // 初始化为单位矩阵
-        m_scanPathsConfig.calibrationMatrixT0.fill(0.0f);
-        m_scanPathsConfig.calibrationMatrixT0[0] = 1.0f;
-        m_scanPathsConfig.calibrationMatrixT0[5] = 1.0f;
-        m_scanPathsConfig.calibrationMatrixT0[10] = 1.0f;
-        m_scanPathsConfig.calibrationMatrixT0[15] = 1.0f;
-    }
-    
-    // 3. 读取扫描路径列表
+
     const QJsonArray pathsArray = root.value("scanPaths").toArray();
     m_scanPathsConfig.scanPaths.clear();
     m_scanPathsConfig.scanPaths.reserve(pathsArray.size());
@@ -931,14 +580,7 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
         pathConfig.pathId = pathObj.value("pathId").toInt();
         pathConfig.enabled = pathObj.value("enabled").toBool(true);
         pathConfig.totalPoints = pathObj.value("totalPoints").toInt();
-        pathConfig.inspectionType = inspectionTypeFromString(
-            pathObj.value("inspectionType").toString(QStringLiteral("bevel")));
-        pathConfig.holeConfigPath = pathObj.value("holeConfigPath").toString().trimmed();
-        pathConfig.thicknessConfigPath = pathObj.value("thicknessConfigPath").toString().trimmed();
-        pathConfig.innerScanSegmentIndex = pathObj.value("innerScanSegmentIndex").toInt(0);
-        pathConfig.outerScanSegmentIndex = pathObj.value("outerScanSegmentIndex").toInt(0);
 
-        // 读取点位列表
         const QJsonArray pointsArray = pathObj.value("points").toArray();
         pathConfig.points.clear();
         pathConfig.points.reserve(pointsArray.size());
@@ -955,58 +597,24 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
         
         m_scanPathsConfig.scanPaths.push_back(pathConfig);
     }
-    
-    // 4. 读取执行策略
-    const QJsonObject execConfigObj = root.value("executionConfig").toObject();
-    m_scanPathsConfig.executeAllPaths = execConfigObj.value("executeAllPaths").toBool(false);
-    m_scanPathsConfig.allowPathSkipOnError = execConfigObj.value("allowPathSkipOnError").toBool(false);
-    
-    const QJsonArray selectedIdsArray = execConfigObj.value("selectedPathIds").toArray();
-    m_scanPathsConfig.selectedPathIds.clear();
-    m_scanPathsConfig.selectedPathIds.reserve(selectedIdsArray.size());
-    for (const QJsonValue& idValue : selectedIdsArray) {
-        m_scanPathsConfig.selectedPathIds.push_back(idValue.toInt());
-    }
-    
-    // 5. 读取转盘配置
-    const QJsonObject turntableObj = root.value("turntableConfig").toObject();
-    m_scanPathsConfig.turntableEnabled = turntableObj.value("enabled").toBool(true);
-    
-    // 6. 验证配置
+
     QString validationError;
     if (!validateScanPathsConfig(&validationError)) {
         qWarning(LOG_CONFIG) << "扫描路径配置验证失败：" << validationError;
     }
-    
-    // 7. 输出加载信息
+
     qInfo(LOG_CONFIG) << "已从以下位置加载扫描路径配置：" << jsonFilePath;
     qInfo(LOG_CONFIG).noquote()
         << "扫描路径配置："
         << "版本=" << m_scanPathsConfig.version
-        << "路径数=" << m_scanPathsConfig.scanPaths.size()
-        << "执行所有路径=" << m_scanPathsConfig.executeAllPaths
-        << "选中路径数=" << m_scanPathsConfig.selectedPathIds.size()
-        << "转盘启用=" << m_scanPathsConfig.turntableEnabled;
+        << "路径数=" << m_scanPathsConfig.scanPaths.size();
     
     // 输出每条路径的详细信息
     for (const auto& path : m_scanPathsConfig.scanPaths) {
         qInfo(LOG_CONFIG).noquote()
             << "  路径" << path.pathId
             << "启用=" << path.enabled
-            << "点位数=" << path.points.size()
-            << "inspectionType=" << inspectionTypeToString(path.inspectionType)
-            << (path.holeConfigPath.isEmpty()
-                    ? QString()
-                    : QStringLiteral(" holeConfig=") + path.holeConfigPath)
-            << (path.thicknessConfigPath.isEmpty()
-                    ? QString()
-                    : QStringLiteral(" thicknessConfig=") + path.thicknessConfigPath)
-            << (path.innerScanSegmentIndex > 0
-                    ? QStringLiteral(" innerSeg=") + QString::number(path.innerScanSegmentIndex)
-                    : QString())
-            << (path.outerScanSegmentIndex > 0
-                    ? QStringLiteral(" outerSeg=") + QString::number(path.outerScanSegmentIndex)
-                    : QString());
+            << "点位数=" << path.points.size();
     }
 }
 
@@ -1062,17 +670,7 @@ bool ConfigManager::validateScanPathsConfig(QString* errorMessage) const
             }
         }
     }
-    
-    // 4. 检查选中的路径 ID 是否存在
-    for (int selectedId : m_scanPathsConfig.selectedPathIds) {
-        if (std::find(pathIds.begin(), pathIds.end(), selectedId) == pathIds.end()) {
-            if (errorMessage) {
-                *errorMessage = QStringLiteral("选中的路径 ID 不存在：%1").arg(selectedId);
-            }
-            return false;
-        }
-    }
-    
+
     return true;
 }
 

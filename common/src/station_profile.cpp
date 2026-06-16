@@ -6,11 +6,11 @@ namespace common {
 StationId stationIdFromInt(int value)
 {
     switch (value) {
-    case 2:
-        return StationId::SecondMultiMode;
     case 1:
-    default:
         return StationId::FirstEndCap;
+    case 2:
+    default:
+        return StationId::SecondMultiMode;
     }
 }
 

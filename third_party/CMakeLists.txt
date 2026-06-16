@@ -131,26 +131,3 @@ if(SCAN_TRACKING_THIRD_PARTY_MISC_FILES)
     )
 endif()
 
-if(SCAN_TRACKING_ENABLE_LB_POSE_DETECTION)
-    add_subdirectory(LB)
-endif()
-
-if(SCAN_TRACKING_ENABLE_LBN_POSE_DETECTION)
-    add_subdirectory(LBN)
-endif()
-
-if(SCAN_TRACKING_ENABLE_BEVEL_MEASUREMENT)
-    add_subdirectory(Po_Kou_Ce_Liang)
-endif()
-
-if(SCAN_TRACKING_ENABLE_HOLE_MEASUREMENT)
-    add_subdirectory(Hole)
-endif()
-
-if(SCAN_TRACKING_ENABLE_THICKNESS_MEASUREMENT)
-    add_subdirectory(Thicknessmeasurement)
-endif()
-
-if(SCAN_TRACKING_ENABLE_INTERNAL_SURFACE_MEASUREMENT)
-    add_subdirectory(InternalSurfaceMeasurement)
-endif()

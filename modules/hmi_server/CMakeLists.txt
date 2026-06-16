@@ -45,7 +45,6 @@ target_link_libraries(scan_tracking_hmi_server
         scan_tracking_modbus
         scan_tracking_mech_eye
         scan_tracking_vision
-        scan_tracking_tracking
 )
 
 target_compile_features(scan_tracking_hmi_server PUBLIC cxx_std_17)

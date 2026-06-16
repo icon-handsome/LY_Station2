@@ -1,0 +1,14 @@
+{
+  "version": "1.0",
+  "lastModified": "2026-06-16",
+  "scanPaths": [
+    {
+      "pathId": 1,
+      "enabled": true,
+      "totalPoints": 1,
+      "points": [
+        { "pointIndex": 1, "needRotation": false }
+      ]
+    }
+  ]
+}

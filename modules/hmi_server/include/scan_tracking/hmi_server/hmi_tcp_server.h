@@ -20,7 +20,7 @@
 #include <QtCore/QVector>
 #include <QtCore/QJsonObject>
 
-#include "scan_tracking/tracking/tracking_service.h"
+#include "scan_tracking/flow_control/inspection_types.h"
 
 QT_BEGIN_NAMESPACE
 class QTcpServer;
@@ -29,7 +29,6 @@ QT_END_NAMESPACE
 namespace scan_tracking {
 namespace modbus { class ModbusService; }
 namespace mech_eye { class MechEyeService; }
-namespace tracking { class TrackingService; }
 namespace flow_control { class StateMachine; }
 namespace vision {
 class HikCxpCameraService;
@@ -82,14 +81,13 @@ public:
      * TODO(hmi-demo): 与 status.system 联动刷新 progress/alarmLevel
      * TODO(hmi-demo): 多路径/第二工位结果需扩展 payload 或新增 event 类型
      */
-    void publishInspectionResult(const tracking::InspectionResult& result);
+    void publishInspectionResult(const flow_control::InspectionResult& result);
 
     // --- 设置服务依赖（在 start() 之前调用） ---
     void setStateMachine(flow_control::StateMachine* sm);
     void setModbusService(modbus::ModbusService* svc);
     void setMechEyeService(mech_eye::MechEyeService* svc);
     void setVisionPipelineService(vision::VisionPipelineService* svc);
-    void setTrackingService(tracking::TrackingService* svc);
     void setHikCameraServices(vision::HikCxpCameraService* hikA, vision::HikCxpCameraService* hikB,
                               vision::HikCameraService* hikC = nullptr);
     void setHikCameraCController(vision::HikCameraCController* controller);
@@ -175,12 +173,6 @@ private:
     /// 处理触发结果复位指令 (安全限制：拦截 Qt 端触发，须由 PLC 触发)
     void handleCmdTriggerResultReset(const QJsonObject& message);
 
-    /// 调试用：用状态机缓存点云触发坡口检测并推送显控（需 config.ini 开关）
-    void handleCmdDebugTriggerInspection(const QJsonObject& message);
-
-    /// 设置坡口工艺配方（Qt 用户输入）
-    void handleCmdSetBevelRecipe(const QJsonObject& message);
-
     /// 显控上报监控区域有无人员（经 StateMachine 写 IPC_SafetyAction_Word 停 PLC）
     void handleCmdReportPersonZoneAlarm(const QJsonObject& message);
     
@@ -189,6 +181,9 @@ private:
     
     /// 处理发起多相机联合采集的点云/图像 Bundle 指令
     void handleCmdCaptureBundle(const QJsonObject& message);
+
+    void handleCmdSetBevelRecipe(const QJsonObject& message);
+    void handleCmdDebugTriggerInspection(const QJsonObject& message);
 
 
     // --- 状态推送函数 ---
@@ -294,7 +289,7 @@ private:
     QString nextEventId();
 
     /// 由 InspectionResult 组装 event.inspection.finished 的 payload
-    static QJsonObject buildInspectionFinishedPayload(const tracking::InspectionResult& result);
+    static QJsonObject buildInspectionFinishedPayload(const flow_control::InspectionResult& result);
 
     /// 显控连接后一次性推送全零检测展示帧（resultCode=0，便于 UI 初始化绑定）
     void publishInitialInspectionDisplay();
@@ -339,7 +334,6 @@ private:
     modbus::ModbusService* m_modbusService = nullptr;
     mech_eye::MechEyeService* m_mechEyeService = nullptr;
     vision::VisionPipelineService* m_visionPipeline = nullptr;
-    tracking::TrackingService* m_trackingService = nullptr;
     vision::HikCxpCameraService* m_hikCameraA = nullptr;
     vision::HikCxpCameraService* m_hikCameraB = nullptr;
     vision::HikCameraService* m_hikCameraC = nullptr;

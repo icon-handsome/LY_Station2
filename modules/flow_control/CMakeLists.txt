@@ -4,6 +4,7 @@ add_library(scan_tracking_flow_control STATIC
     include/scan_tracking/flow_control/station_trigger_policy.h
     include/scan_tracking/flow_control/task_handler_context.h
     include/scan_tracking/flow_control/task_handler_registry.h
+    include/scan_tracking/flow_control/inspection_types.h
     include/scan_tracking/flow_control/handlers/itask_handler.h
     include/scan_tracking/flow_control/handlers/code_read_handler.h
     include/scan_tracking/flow_control/handlers/inspection_handler.h
@@ -15,6 +16,7 @@ add_library(scan_tracking_flow_control STATIC
     include/scan_tracking/flow_control/handlers/station_material_check_handler.h
     include/scan_tracking/flow_control/handlers/unload_calc_handler.h
     src/station_trigger_policy.cpp
+    src/inspection_types.cpp
     src/state_machine.cpp
     src/handlers/code_read_handler.cpp
     src/handlers/inspection_handler.cpp
@@ -41,5 +43,4 @@ target_link_libraries(scan_tracking_flow_control
         scan_tracking_modbus
         scan_tracking_mech_eye
         scan_tracking_vision
-        scan_tracking_tracking
 )

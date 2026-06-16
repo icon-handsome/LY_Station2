@@ -17,14 +17,12 @@ void StationMaterialCheckHandler::execute(TaskHandlerContext& ctx) { ctx.machine
 void StateMachine::executeStationMaterialCheckTask()
 {
     const bool hasModbus = m_modbus != nullptr && m_modbus->isConnected();
-    const bool hasTracking = m_tracking != nullptr;
     const bool hasMechEye = m_mechEye != nullptr;
 
-    if (!hasModbus || !hasTracking || !hasMechEye) {
+    if (!hasModbus || !hasMechEye) {
         qWarning(LOG_FLOW).noquote()
             << QStringLiteral("工位检材不可用：")
             << QStringLiteral(" modbus=") << hasModbus
-            << QStringLiteral(" tracking=") << hasTracking
             << QStringLiteral(" mechEye=") << hasMechEye;
         writeAsciiPlaceholder(protocol::registers::kSelfCheckFailWord0, 2, QStringLiteral("NO"));
         completeActiveTask(5, protocol::AckState::Failed, false);
