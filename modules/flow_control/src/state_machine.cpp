@@ -358,6 +358,23 @@ QVector<int> enabledScanPathIds()
     return pathIds;
 }
 
+int segmentTotalForPath(int pathId)
+{
+    const auto* configMgr = scan_tracking::common::ConfigManager::instance();
+    if (configMgr == nullptr || pathId <= 0) {
+        return 0;
+    }
+
+    for (const auto& path : configMgr->scanPathsConfig().scanPaths) {
+        if (path.enabled && path.pathId == pathId && path.totalPoints > 0) {
+            return path.totalPoints;
+        }
+    }
+
+    const int fallback = configMgr->trackingConfig().scanSegmentTotal;
+    return fallback > 0 ? fallback : 0;
+}
+
 bool lookupNeedRotationForSegment(int pathId, int segmentIndex)
 {
     const auto* configMgr = scan_tracking::common::ConfigManager::instance();
@@ -1934,9 +1951,7 @@ QVector<int> StateMachine::cachedScanSegmentIndices() const
 
 bool StateMachine::isCurrentPathSegmentSetComplete() const
 {
-    const auto* configManager = scan_tracking::common::ConfigManager::instance();
-    const int scanSegmentTotal =
-        configManager ? configManager->trackingConfig().scanSegmentTotal : 0;
+    const int scanSegmentTotal = segmentTotalForPath(m_currentPathId);
     if (scanSegmentTotal <= 0) {
         return false;
     }
@@ -1955,9 +1970,7 @@ bool StateMachine::isPathScanComplete(int pathId) const
         return false;
     }
 
-    const auto* configManager = scan_tracking::common::ConfigManager::instance();
-    const int scanSegmentTotal =
-        configManager ? configManager->trackingConfig().scanSegmentTotal : 0;
+    const int scanSegmentTotal = segmentTotalForPath(pathId);
     if (scanSegmentTotal <= 0) {
         return false;
     }
@@ -1995,13 +2008,6 @@ int StateMachine::resolvePathIdForInspection() const
 
 bool StateMachine::hasAllScanSegmentsCached() const
 {
-    const auto* configManager = scan_tracking::common::ConfigManager::instance();
-    const int scanSegmentTotal =
-        configManager ? configManager->trackingConfig().scanSegmentTotal : 0;
-    if (scanSegmentTotal <= 0) {
-        return false;
-    }
-
     const QVector<int> pathIds = enabledScanPathIds();
     if (pathIds.isEmpty()) {
         return false;
@@ -2009,6 +2015,10 @@ bool StateMachine::hasAllScanSegmentsCached() const
 
     std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
     for (int pathId : pathIds) {
+        const int scanSegmentTotal = segmentTotalForPath(pathId);
+        if (scanSegmentTotal <= 0) {
+            return false;
+        }
         if (!m_pathSegmentCaptureResults.contains(pathId)) {
             return false;
         }
@@ -2025,12 +2035,11 @@ bool StateMachine::hasAllScanSegmentsCached() const
 
 QString StateMachine::multiPathCacheStatusText() const
 {
-    const auto* configManager = scan_tracking::common::ConfigManager::instance();
-    const int scanSegmentTotal =
-        configManager ? configManager->trackingConfig().scanSegmentTotal : 0;
     const QVector<int> pathIds = enabledScanPathIds();
-    const int expectedTotal =
-        scanSegmentTotal > 0 ? pathIds.size() * scanSegmentTotal : 0;
+    int expectedTotal = 0;
+    for (int pathId : pathIds) {
+        expectedTotal += segmentTotalForPath(pathId);
+    }
     const int cachedTotal = totalCachedPointCloudCount();
 
     QStringList pathParts;
@@ -3842,31 +3851,36 @@ quint16 StateMachine::resolveScanSegmentIndex(const QVector<quint16>& commandBlo
 bool StateMachine::validateScanSegmentRequest(const QVector<quint16>& commandBlock, QString* errorMessage)
 {
     const int segmentIndex = resolveScanSegmentIndex(commandBlock);  // 获取分段索引（32位合并）
-    // ScanSegmentTotal 从配置文件获取（PLC 不再下发此字段）
-    const auto* configManager = scan_tracking::common::ConfigManager::instance();
-    const int segmentTotal = configManager != nullptr
-        ? configManager->trackingConfig().scanSegmentTotal
-        : 0;
-    // 计算允许的最大段号：不超过总段数和系统上限的最小值
-    const int maxSegmentIndex = segmentTotal > 0 ? qMin(segmentTotal, kMaxScanSegmentIndex)
-                                                 : kMaxScanSegmentIndex;
-
-    // 检查段号是否在有效范围内 [1, maxSegmentIndex]
-    if (segmentIndex < 1 || segmentIndex > maxSegmentIndex) {
+    if (segmentIndex < 1 || segmentIndex > kMaxScanSegmentIndex) {
         if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral("扫描段号无效：段号=%1，总段数=%2，允许范围 1-%3")
+            *errorMessage = QStringLiteral("扫描段号无效：段号=%1，允许范围 1-%2")
                 .arg(segmentIndex)
-                .arg(segmentTotal)
-                .arg(maxSegmentIndex);
+                .arg(kMaxScanSegmentIndex);
         }
         qWarning(LOG_FLOW).noquote() << QStringLiteral("拒绝 Trig_ScanSegment：段号无效")
                                      << QStringLiteral(" 段号=") << segmentIndex
-                                     << QStringLiteral(" 总段数=") << segmentTotal
-                                     << QStringLiteral(" 允许最大=") << maxSegmentIndex;
+                                     << QStringLiteral(" 允许最大=") << kMaxScanSegmentIndex;
         return false;
     }
 
     const int targetPathId = resolvePathIdForIncomingSegment(segmentIndex);
+    const int segmentTotal = segmentTotalForPath(targetPathId);
+    const int maxSegmentIndex = segmentTotal > 0 ? qMin(segmentTotal, kMaxScanSegmentIndex)
+                                                 : kMaxScanSegmentIndex;
+    if (segmentIndex > maxSegmentIndex) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("扫描段号无效：段号=%1，路径=%2 总段数=%3，允许范围 1-%3")
+                .arg(segmentIndex)
+                .arg(targetPathId)
+                .arg(maxSegmentIndex);
+        }
+        qWarning(LOG_FLOW).noquote() << QStringLiteral("拒绝 Trig_ScanSegment：段号无效")
+                                     << QStringLiteral(" 段号=") << segmentIndex
+                                     << QStringLiteral(" 路径=") << targetPathId
+                                     << QStringLiteral(" 总段数=") << segmentTotal
+                                     << QStringLiteral(" 允许最大=") << maxSegmentIndex;
+        return false;
+    }
 
     {
         std::lock_guard<std::mutex> lock(m_segmentCacheMutex);
