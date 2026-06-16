@@ -16,6 +16,7 @@
 #include "scan_tracking/flow_control/inspection_types.h"
 #include "scan_tracking/mech_eye/mech_eye_types.h"
 #include "scan_tracking/modbus/modbus_service.h"
+#include "scan_tracking/vision/vision_types.h"
 
 namespace scan_tracking {
 namespace mech_eye {
@@ -95,6 +96,8 @@ private slots:
     void onModbusDisconnected();
     void onModbusError(const QString& errorString);
     void onMechEyeFatalError(mech_eye::CaptureErrorCode code, QString message);
+    void onVisionPipelineFatalError(vision::VisionErrorCode code, QString message);
+    void onBundleCaptureFinished(vision::MultiCameraCaptureBundle bundle);
     void onProcessTimeout();
 
 private:
@@ -173,6 +176,12 @@ private:
     void writeUnloadCalcResult();
     void writeScanSegmentResult(int segmentIndex, int imageCount, int cloudFrameCount);
     void writeInspectionResult(const InspectionSummary& summary);
+    void completeScanSegmentCapture(
+        quint16 resultCode,
+        int imageCount,
+        int cloudFrameCount,
+        protocol::AckState finalAckState,
+        bool dataValid);
 
     quint32 readTaskId(const QVector<quint16>& commandBlock) const;
     quint16 resolveScanSegmentIndex(const QVector<quint16>& commandBlock) const;

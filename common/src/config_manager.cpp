@@ -184,6 +184,21 @@ const HmiConfig& ConfigManager::hmiConfig() const { return m_hmiConfig; }
 const ScanPathsConfig& ConfigManager::scanPathsConfig() const { return m_scanPathsConfig; }
 const StationProfile& ConfigManager::stationProfile() const { return m_stationProfile; }
 
+const ScanPointConfig* ConfigManager::findScanPointByIndex(int segmentIndex) const
+{
+    for (const auto& path : m_scanPathsConfig.scanPaths) {
+        if (!path.enabled) {
+            continue;
+        }
+        for (const auto& point : path.points) {
+            if (point.pointIndex == segmentIndex) {
+                return &point;
+            }
+        }
+    }
+    return nullptr;
+}
+
 void ConfigManager::writeDefaults(QSettings& settings)
 {
     settings.beginGroup("App");

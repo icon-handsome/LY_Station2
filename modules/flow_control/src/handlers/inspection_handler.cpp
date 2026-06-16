@@ -15,6 +15,7 @@ void InspectionHandler::execute(TaskHandlerContext& ctx) { ctx.machine.executeIn
 
 void StateMachine::executeInspectionTask()
 {
+    // TODO(station2): 从段缓存读取 bundle，执行缺陷/编号/3D 检测，并 publishInspectionResult。
     qInfo(LOG_FLOW).noquote()
         << QStringLiteral("Trig_Inspection：第二工位流程未实现，Res=8");
     completeActiveTask(8, protocol::AckState::Failed, false);

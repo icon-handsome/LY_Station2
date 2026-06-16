@@ -747,19 +747,9 @@ void HmiTcpServer::handleCmdCaptureBundle(const QJsonObject& message)
         if (!payloadObj.contains(QLatin1String("needMechEye2D"))) {
             const auto* configMgr = scan_tracking::common::ConfigManager::instance();
             if (configMgr != nullptr) {
-                for (const auto& path : configMgr->scanPathsConfig().scanPaths) {
-                    if (!path.enabled) {
-                        continue;
-                    }
-                    for (const auto& point : path.points) {
-                        if (point.pointIndex == segmentIndex) {
-                            needMechEye2D = point.needRotation;
-                            break;
-                        }
-                    }
-                    if (needMechEye2D) {
-                        break;
-                    }
+                const auto* point = configMgr->findScanPointByIndex(segmentIndex);
+                if (point != nullptr) {
+                    needMechEye2D = point->needRotation;
                 }
             }
         }

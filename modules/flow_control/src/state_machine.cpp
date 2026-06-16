@@ -204,12 +204,14 @@ StateMachine::StateMachine(
             m_visionPipeline,
             &vision::VisionPipelineService::fatalError,
             this,
-            [](vision::VisionErrorCode code, const QString& message) {
-                qWarning(LOG_FLOW).noquote()
-                    << QStringLiteral("[VisionPipeline] 致命错误：")
-                    << static_cast<int>(code)
-                    << message;
-            });
+            &StateMachine::onVisionPipelineFatalError,
+            Qt::QueuedConnection);
+        connect(
+            m_visionPipeline,
+            &vision::VisionPipelineService::bundleCaptureFinished,
+            this,
+            &StateMachine::onBundleCaptureFinished,
+            Qt::QueuedConnection);
     }
 }
 
@@ -648,8 +650,7 @@ void StateMachine::onProcessTimeout()
     m_activeTask.captureRequestId = 0;
 
     if (m_activeTask.definition->stage == protocol::Stage::ScanSegment) {
-        writeScanSegmentResult(m_activeTask.scanSegmentIndex, 0, 0);
-        completeActiveTask(6, protocol::AckState::Failed, false);
+        completeScanSegmentCapture(6, 0, 0, protocol::AckState::Failed, false);
         return;
     }
     if (m_activeTask.definition->stage == protocol::Stage::Inspection) {
@@ -659,6 +660,142 @@ void StateMachine::onProcessTimeout()
     }
 
     completeActiveTask(6, protocol::AckState::Completed, false);
+}
+
+namespace {
+
+void countBundleFrames(const vision::MultiCameraCaptureBundle& bundle, int* imageCount, int* cloudFrameCount)
+{
+    int images = 0;
+    if (bundle.hikCameraAResult.success()) {
+        ++images;
+    }
+    if (bundle.hikCameraBResult.success()) {
+        ++images;
+    }
+    if (bundle.mechEyeResult.texture2D.isValid()) {
+        ++images;
+    }
+
+    int clouds = 0;
+    if (bundle.mechEyeResult.pointCloud.isValid()) {
+        clouds = 1;
+    }
+
+    if (imageCount != nullptr) {
+        *imageCount = images;
+    }
+    if (cloudFrameCount != nullptr) {
+        *cloudFrameCount = clouds;
+    }
+}
+
+}  // namespace
+
+void StateMachine::executeScanSegmentTask()
+{
+    // TODO(station2): 缓存段采集 bundle，供 Trig_Inspection 读取；落盘至 output/run_*。
+    const int segmentIndex = m_activeTask.scanSegmentIndex;
+    const quint32 taskId = m_activeTask.taskId;
+
+    if (m_visionPipeline == nullptr || !m_visionPipeline->isStarted()) {
+        qWarning(LOG_FLOW).noquote() << QStringLiteral("Trig_ScanSegment：视觉流水线不可用。");
+        completeScanSegmentCapture(7, 0, 0, protocol::AckState::Failed, false);
+        return;
+    }
+
+    const auto* configMgr = common::ConfigManager::instance();
+    const common::ScanPointConfig* point = nullptr;
+    if (configMgr != nullptr) {
+        point = configMgr->findScanPointByIndex(segmentIndex);
+    }
+    if (point == nullptr) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("Trig_ScanSegment：段号 %1 不在 scan_paths 配置中。").arg(segmentIndex);
+        completeScanSegmentCapture(5, 0, 0, protocol::AckState::Failed, false);
+        return;
+    }
+
+    const auto mechCaptureMode = point->needRotation
+        ? mech_eye::CaptureMode::Capture2DAnd3D
+        : mech_eye::CaptureMode::Capture3DOnly;
+
+    const quint64 requestId =
+        m_visionPipeline->requestCaptureBundle(segmentIndex, taskId, mechCaptureMode);
+    if (requestId == 0) {
+        qWarning(LOG_FLOW).noquote() << QStringLiteral("Trig_ScanSegment：发起组合采集失败。");
+        completeScanSegmentCapture(7, 0, 0, protocol::AckState::Failed, false);
+        return;
+    }
+
+    m_activeTask.captureRequestId = requestId;
+    m_progress = 20;
+    publishIpcStatus();
+    emit scanStarted(segmentIndex, taskId);
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("Trig_ScanSegment：已发起组合采集 段号=") << segmentIndex
+        << QStringLiteral(" requestId=") << requestId
+        << QStringLiteral(" mechMode=")
+        << (point->needRotation ? QStringLiteral("2D+3D") : QStringLiteral("3D"));
+}
+
+void StateMachine::onBundleCaptureFinished(vision::MultiCameraCaptureBundle bundle)
+{
+    if (m_activeTask.definition == nullptr ||
+        m_activeTask.definition->stage != protocol::Stage::ScanSegment ||
+        m_activeTask.completionAnnounced) {
+        return;
+    }
+    if (bundle.request.requestId != m_activeTask.captureRequestId) {
+        return;
+    }
+
+    int imageCount = 0;
+    int cloudFrameCount = 0;
+    countBundleFrames(bundle, &imageCount, &cloudFrameCount);
+
+    if (bundle.success()) {
+        qInfo(LOG_FLOW).noquote()
+            << QStringLiteral("Trig_ScanSegment：采集成功") << bundle.summary()
+            << QStringLiteral(" imageCount=") << imageCount
+            << QStringLiteral(" cloudFrameCount=") << cloudFrameCount;
+        completeScanSegmentCapture(1, imageCount, cloudFrameCount, protocol::AckState::Completed, true);
+        return;
+    }
+
+    qWarning(LOG_FLOW).noquote()
+        << QStringLiteral("Trig_ScanSegment：采集失败") << bundle.summary();
+    completeScanSegmentCapture(7, 0, 0, protocol::AckState::Failed, false);
+}
+
+void StateMachine::onVisionPipelineFatalError(vision::VisionErrorCode code, QString message)
+{
+    qWarning(LOG_FLOW).noquote()
+        << QStringLiteral("[VisionPipeline] 致命错误：")
+        << static_cast<int>(code)
+        << message;
+
+    if (m_activeTask.definition == nullptr ||
+        m_activeTask.definition->stage != protocol::Stage::ScanSegment ||
+        m_activeTask.completionAnnounced) {
+        return;
+    }
+
+    setAlarm(3, 723, message);
+    completeScanSegmentCapture(7, 0, 0, protocol::AckState::Failed, false);
+}
+
+void StateMachine::completeScanSegmentCapture(
+    quint16 resultCode,
+    int imageCount,
+    int cloudFrameCount,
+    protocol::AckState finalAckState,
+    bool dataValid)
+{
+    const int segmentIndex = m_activeTask.scanSegmentIndex;
+    writeScanSegmentResult(segmentIndex, imageCount, cloudFrameCount);
+    completeActiveTask(resultCode, finalAckState, dataValid);
+    emit scanFinished(segmentIndex, resultCode, imageCount, cloudFrameCount);
 }
 
 void StateMachine::onMechEyeFatalError(mech_eye::CaptureErrorCode code, QString message)
@@ -673,9 +810,8 @@ void StateMachine::onMechEyeFatalError(mech_eye::CaptureErrorCode code, QString 
         return;
     }
 
-    writeScanSegmentResult(m_activeTask.scanSegmentIndex, 0, 0);
     setAlarm(3, 723, message);
-    completeActiveTask(7, protocol::AckState::Failed, false);
+    completeScanSegmentCapture(7, 0, 0, protocol::AckState::Failed, false);
 }
 
 bool StateMachine::completeActiveTask(
@@ -771,6 +907,7 @@ void StateMachine::clearActiveTask()
 
 void StateMachine::resetScanSegmentCache()
 {
+    // TODO(station2): 清空段采集内存缓存（Trig_ResultReset 调用）。
 }
 
 void StateMachine::setAlarm(quint16 level, quint16 code, const QString& message)

@@ -153,6 +153,9 @@ public:
     const ScanPathsConfig& scanPathsConfig() const;
     const StationProfile& stationProfile() const;
 
+    /// 按全局段号（pointIndex）在已启用路径中查找点位；未找到返回 nullptr。
+    const ScanPointConfig* findScanPointByIndex(int segmentIndex) const;
+
 private:
     ConfigManager();
     ~ConfigManager();
