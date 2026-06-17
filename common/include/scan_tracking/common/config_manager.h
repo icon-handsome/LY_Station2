@@ -122,6 +122,8 @@ struct ScanPointConfig {
 struct ScanPathConfig {
     int pathId = 0;
     bool enabled = true;
+    QString segmentKind = QStringLiteral("external");
+    QString description;
     int totalPoints = 0;
     std::vector<ScanPointConfig> points;
 };
@@ -155,6 +157,9 @@ public:
 
     /// 按全局段号（pointIndex）在已启用路径中查找点位；未找到返回 nullptr。
     const ScanPointConfig* findScanPointByIndex(int segmentIndex) const;
+
+    /// 已启用路径中的扫描点位总数（供 scanSegmentTotal / HMI 展示）。
+    int enabledScanPointCount() const;
 
 private:
     ConfigManager();

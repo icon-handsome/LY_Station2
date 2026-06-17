@@ -8,12 +8,15 @@
 
 #include <atomic>
 #include <array>
+#include <functional>
 #include <memory>
 
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/flow_control/plc_protocol.h"
+#include "scan_tracking/flow_control/scan_segment_cache.h"
 #include "scan_tracking/flow_control/task_handler_context.h"
 #include "scan_tracking/flow_control/inspection_types.h"
+#include "scan_tracking/flow_control/scan_segment_cache.h"
 #include "scan_tracking/mech_eye/mech_eye_types.h"
 #include "scan_tracking/modbus/modbus_service.h"
 #include "scan_tracking/vision/vision_types.h"
@@ -67,6 +70,14 @@ public:
 
     void setAlarm(quint16 level, quint16 code, const QString& message);
     bool reportPersonZoneAlarm(bool alarm);
+
+    using InspectionResultPublisher = std::function<void(const InspectionResult&)>;
+    void setInspectionResultPublisher(InspectionResultPublisher publisher);
+
+    /// 从段缓存评估检测结果（不写 PLC）；供 HMI cmd.debug_trigger_inspection 使用。
+    InspectionResult evaluateCachedInspection(quint32 taskId = 0) const;
+
+    const ScanSegmentCache& scanSegmentCache() const { return m_scanSegmentCache; }
 
 signals:
     void stateChanged(AppState newState);
@@ -182,6 +193,8 @@ private:
         int cloudFrameCount,
         protocol::AckState finalAckState,
         bool dataValid);
+    void finishInspection(const InspectionResult& result);
+    int resolveExpectedScanSegmentCount() const;
 
     quint32 readTaskId(const QVector<quint16>& commandBlock) const;
     quint16 resolveScanSegmentIndex(const QVector<quint16>& commandBlock) const;
@@ -212,6 +225,8 @@ private:
     int m_consecutiveModbusFailures = 0;
     QVector<quint16> m_lastCommandBlock;
     protocol::registers::Pose6f m_robotTcpPose;
+    ScanSegmentCache m_scanSegmentCache;
+    InspectionResultPublisher m_inspectionResultPublisher;
     std::atomic_bool m_stopped{false};
 
     static constexpr int kMaxConsecutiveModbusFailures = 3;

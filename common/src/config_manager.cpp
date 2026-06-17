@@ -199,6 +199,17 @@ const ScanPointConfig* ConfigManager::findScanPointByIndex(int segmentIndex) con
     return nullptr;
 }
 
+int ConfigManager::enabledScanPointCount() const
+{
+    int total = 0;
+    for (const auto& path : m_scanPathsConfig.scanPaths) {
+        if (path.enabled) {
+            total += static_cast<int>(path.points.size());
+        }
+    }
+    return total;
+}
+
 void ConfigManager::writeDefaults(QSettings& settings)
 {
     settings.beginGroup("App");
@@ -594,6 +605,8 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
         ScanPathConfig pathConfig;
         pathConfig.pathId = pathObj.value("pathId").toInt();
         pathConfig.enabled = pathObj.value("enabled").toBool(true);
+        pathConfig.segmentKind = pathObj.value("segmentKind").toString(QStringLiteral("external"));
+        pathConfig.description = pathObj.value("description").toString();
         pathConfig.totalPoints = pathObj.value("totalPoints").toInt();
 
         const QJsonArray pointsArray = pathObj.value("points").toArray();
@@ -629,6 +642,7 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
         qInfo(LOG_CONFIG).noquote()
             << "  路径" << path.pathId
             << "启用=" << path.enabled
+            << "类型=" << path.segmentKind
             << "点位数=" << path.points.size();
     }
 }
@@ -647,6 +661,8 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
  */
 bool ConfigManager::validateScanPathsConfig(QString* errorMessage) const
 {
+    std::vector<int> globalPointIndices;
+
     // 1. 检查路径 ID 唯一性
     std::vector<int> pathIds;
     pathIds.reserve(m_scanPathsConfig.scanPaths.size());
@@ -670,18 +686,25 @@ bool ConfigManager::validateScanPathsConfig(QString* errorMessage) const
             }
             return false;
         }
-        
-        // 3. 检查点位索引连续性（从 1 开始）
-        for (size_t i = 0; i < path.points.size(); ++i) {
-            const int expectedIndex = static_cast<int>(i) + 1;
-            if (path.points[i].pointIndex != expectedIndex) {
-                if (errorMessage) {
-                    *errorMessage = QStringLiteral("路径 %1 的点位索引不连续：期望 %2，实际 %3")
-                        .arg(path.pathId)
-                        .arg(expectedIndex)
-                        .arg(path.points[i].pointIndex);
+
+        if (path.enabled) {
+            for (const auto& point : path.points) {
+                if (point.pointIndex <= 0) {
+                    if (errorMessage) {
+                        *errorMessage = QStringLiteral("路径 %1 的点位索引无效：%2")
+                            .arg(path.pathId)
+                            .arg(point.pointIndex);
+                    }
+                    return false;
                 }
-                return false;
+                if (std::find(globalPointIndices.begin(), globalPointIndices.end(), point.pointIndex) !=
+                    globalPointIndices.end()) {
+                    if (errorMessage) {
+                        *errorMessage = QStringLiteral("全局段号重复：%1").arg(point.pointIndex);
+                    }
+                    return false;
+                }
+                globalPointIndices.push_back(point.pointIndex);
             }
         }
     }

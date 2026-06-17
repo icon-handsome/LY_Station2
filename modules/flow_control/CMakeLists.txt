@@ -17,6 +17,8 @@ add_library(scan_tracking_flow_control STATIC
     include/scan_tracking/flow_control/handlers/unload_calc_handler.h
     src/station_trigger_policy.cpp
     src/inspection_types.cpp
+    src/scan_segment_cache.cpp
+    src/station2_inspection.cpp
     src/state_machine.cpp
     src/handlers/code_read_handler.cpp
     src/handlers/inspection_handler.cpp

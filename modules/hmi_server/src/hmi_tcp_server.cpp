@@ -548,7 +548,12 @@ void HmiTcpServer::handleCmdGetConfig(const QJsonObject& message)
     
     // 7. Tracking 配置
     QJsonObject trackingObj;
-    trackingObj[QLatin1String("scanSegmentTotal")] = cfgMgr->trackingConfig().scanSegmentTotal;
+    {
+        const int scanPointTotal = cfgMgr->enabledScanPointCount();
+        trackingObj[QLatin1String("scanSegmentTotal")] = scanPointTotal > 0
+            ? scanPointTotal
+            : cfgMgr->trackingConfig().scanSegmentTotal;
+    }
     configPayload[QLatin1String("tracking")] = trackingObj;
 
     QJsonObject hmiObj;
@@ -787,15 +792,23 @@ void HmiTcpServer::handleCmdDebugTriggerInspection(const QJsonObject& message)
 {
     const QString msgId = message.value(QLatin1String("msgId")).toString();
 
-    flow_control::InspectionResult result;
-    result.resultCode = 8;
-    result.message = QStringLiteral("第二工位检测流程尚未实现");
+    if (m_stateMachine == nullptr) {
+        sendResponse(
+            QLatin1String(msg_type::kCmdDebugTriggerInspection),
+            msgId,
+            false,
+            QStringLiteral("状态机不可用"));
+        return;
+    }
+
+    const flow_control::InspectionResult result = m_stateMachine->evaluateCachedInspection();
     publishInspectionResult(result);
 
+    const bool success = result.resultCode == 1;
     sendResponse(
         QLatin1String(msg_type::kCmdDebugTriggerInspection),
         msgId,
-        false,
+        success,
         result.message);
 }
 
@@ -947,9 +960,16 @@ QJsonObject HmiTcpServer::buildPlcStatusPayload() const
             payload[QLatin1String("recipeId")]        = cb.value(regs::kRecipeId);
             payload[QLatin1String("scanSegmentIndex")] = static_cast<int>(
                 regs::resolveScanSegmentIndexFromBlock(cb));
-            // scanSegmentTotal 从配置获取，不再从 PLC 读取
+            // scanSegmentTotal 从 scan_paths 已启用点位数获取，空配置时回退 Tracking.scanSegmentTotal
             const auto* cfgMgr = scan_tracking::common::ConfigManager::instance();
-            payload[QLatin1String("scanSegmentTotal")] = cfgMgr ? cfgMgr->trackingConfig().scanSegmentTotal : 0;
+            if (cfgMgr != nullptr) {
+                const int scanPointTotal = cfgMgr->enabledScanPointCount();
+                payload[QLatin1String("scanSegmentTotal")] = scanPointTotal > 0
+                    ? scanPointTotal
+                    : cfgMgr->trackingConfig().scanSegmentTotal;
+            } else {
+                payload[QLatin1String("scanSegmentTotal")] = 0;
+            }
             if (cb.size() > regs::kRobotStatusWord) {
                 payload[QLatin1String("robotStatusWord")] = cb.value(regs::kRobotStatusWord);
             }

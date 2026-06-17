@@ -3,6 +3,8 @@
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/common/logger.h"
 #include "scan_tracking/flow_control/station_trigger_policy.h"
+#include "scan_tracking/flow_control/scan_segment_cache.h"
+#include "scan_tracking/flow_control/station2_inspection.h"
 #include "scan_tracking/flow_control/task_handler_registry.h"
 #include "scan_tracking/mech_eye/mech_eye_service.h"
 #include "scan_tracking/vision/vision_pipeline_service.h"
@@ -495,7 +497,10 @@ void StateMachine::processTrigger(const protocol::TriggerDefinition& trigger, co
     m_activeTask.inspectionPathId = 0;
 
     if (const auto* cfgMgr = common::ConfigManager::instance()) {
-        m_activeTask.scanSegmentTotal = cfgMgr->trackingConfig().scanSegmentTotal;
+        const int configuredTotal = cfgMgr->enabledScanPointCount();
+        m_activeTask.scanSegmentTotal = configuredTotal > 0
+            ? configuredTotal
+            : cfgMgr->trackingConfig().scanSegmentTotal;
     } else {
         m_activeTask.scanSegmentTotal = 1;
     }
@@ -654,8 +659,10 @@ void StateMachine::onProcessTimeout()
         return;
     }
     if (m_activeTask.definition->stage == protocol::Stage::Inspection) {
-        writeInspectionResult({});
-        completeActiveTask(kInspectionResTimeoutNg, protocol::AckState::Failed, false);
+        InspectionResult timeoutResult;
+        timeoutResult.resultCode = kInspectionResTimeoutNg;
+        timeoutResult.message = QStringLiteral("检测任务超时");
+        finishInspection(timeoutResult);
         return;
     }
 
@@ -692,9 +699,74 @@ void countBundleFrames(const vision::MultiCameraCaptureBundle& bundle, int* imag
 
 }  // namespace
 
+void StateMachine::setInspectionResultPublisher(InspectionResultPublisher publisher)
+{
+    m_inspectionResultPublisher = std::move(publisher);
+}
+
+int StateMachine::resolveExpectedScanSegmentCount() const
+{
+    const auto* configMgr = common::ConfigManager::instance();
+    if (configMgr == nullptr) {
+        return 0;
+    }
+    const int fromScanPaths = configMgr->enabledScanPointCount();
+    if (fromScanPaths > 0) {
+        return fromScanPaths;
+    }
+    return configMgr->trackingConfig().scanSegmentTotal;
+}
+
+InspectionResult StateMachine::evaluateCachedInspection(quint32 taskId) const
+{
+    const quint32 effectiveTaskId = taskId != 0 ? taskId : m_scanSegmentCache.runTaskId();
+    return evaluateStation2Inspection(
+        m_scanSegmentCache,
+        effectiveTaskId,
+        resolveExpectedScanSegmentCount());
+}
+
+void StateMachine::finishInspection(const InspectionResult& result)
+{
+    InspectionSummary summary;
+    summary.resultCode = result.resultCode;
+    summary.ngReasonWord0 = result.ngReasonWord0;
+    summary.ngReasonWord1 = result.ngReasonWord1;
+    summary.measureItemCount = result.measureItemCount;
+    writeInspectionResult(summary);
+
+    const bool dataValid = result.resultCode == 1 || result.resultCode == 2;
+    const protocol::AckState ackState = dataValid ? protocol::AckState::Completed
+                                                  : protocol::AckState::Failed;
+    completeActiveTask(result.resultCode, ackState, dataValid);
+
+    emit inspectionFinished(
+        result.resultCode,
+        result.ngReasonWord0,
+        result.ngReasonWord1,
+        result.measureItemCount,
+        result.measurement,
+        result.message);
+
+    if (m_inspectionResultPublisher) {
+        m_inspectionResultPublisher(result);
+    }
+
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("Trig_Inspection：已完成 Res=") << result.resultCode
+        << QStringLiteral(" qualityCode=") << result.measurement.qualityCode
+        << QStringLiteral(" segments=") << result.sourcePointCount
+        << QStringLiteral(" message=") << result.message;
+}
+
+void StateMachine::executeInspectionTask()
+{
+    const InspectionResult result = evaluateCachedInspection(m_activeTask.taskId);
+    finishInspection(result);
+}
+
 void StateMachine::executeScanSegmentTask()
 {
-    // TODO(station2): 缓存段采集 bundle，供 Trig_Inspection 读取；落盘至 output/run_*。
     const int segmentIndex = m_activeTask.scanSegmentIndex;
     const quint32 taskId = m_activeTask.taskId;
 
@@ -755,10 +827,22 @@ void StateMachine::onBundleCaptureFinished(vision::MultiCameraCaptureBundle bund
     countBundleFrames(bundle, &imageCount, &cloudFrameCount);
 
     if (bundle.success()) {
+        m_scanSegmentCache.storeSegment(
+            bundle.request.segmentIndex,
+            bundle.request.taskId,
+            bundle);
+        QString persistError;
+        if (!m_scanSegmentCache.persistSegment(bundle.request.segmentIndex, &persistError)) {
+            qWarning(LOG_FLOW).noquote()
+                << QStringLiteral("Trig_ScanSegment：段落盘失败（采集仍成功）")
+                << persistError;
+        }
+
         qInfo(LOG_FLOW).noquote()
             << QStringLiteral("Trig_ScanSegment：采集成功") << bundle.summary()
             << QStringLiteral(" imageCount=") << imageCount
-            << QStringLiteral(" cloudFrameCount=") << cloudFrameCount;
+            << QStringLiteral(" cloudFrameCount=") << cloudFrameCount
+            << QStringLiteral(" runRoot=") << m_scanSegmentCache.runCaptureRoot();
         completeScanSegmentCapture(1, imageCount, cloudFrameCount, protocol::AckState::Completed, true);
         return;
     }
@@ -907,7 +991,8 @@ void StateMachine::clearActiveTask()
 
 void StateMachine::resetScanSegmentCache()
 {
-    // TODO(station2): 清空段采集内存缓存（Trig_ResultReset 调用）。
+    m_scanSegmentCache.reset();
+    qInfo(LOG_FLOW).noquote() << QStringLiteral("扫描段缓存已清空。");
 }
 
 void StateMachine::setAlarm(quint16 level, quint16 code, const QString& message)

@@ -31,4 +31,7 @@ QString captureCacheOrbbecDir(const QString& root);
 /// 同一次分段落盘共用的时间戳：yyyyMMdd_HHmmss_zzz
 QString buildCaptureTimestamp();
 
+/// 单次 PLC 任务采集落盘根目录：<applicationDir>/output/run_{taskId}_{timestamp}
+QString buildRunCaptureRoot(quint32 taskId, const QString& timestamp = QString());
+
 }  // namespace scan_tracking::common

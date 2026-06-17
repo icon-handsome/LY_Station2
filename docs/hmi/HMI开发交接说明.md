@@ -46,14 +46,14 @@
 
 ```text
 Trig_Inspection（PLC）或 cmd.debug_trigger_inspection（显控）
-  → InspectionHandler（当前 Res=8 占位；实现后填业务）
-  → HmiTcpServer::publishInspectionResult
+  → evaluateStation2Inspection（ScanSegmentCache 校验占位）
+  → finishInspection → HmiTcpServer::publishInspectionResult
   → TCP event.inspection.finished
 ```
 
 - 显控 TCP 连接成功后推送**初始占位帧**（`resultCode=0`，`message="等待检测"`）。
-- 第二工位检测实现后：在 Handler 或业务层构造 `InspectionResult` 并调用 `publishInspectionResult`。
-- `cmd.debug_trigger_inspection`：当前推送 Res=8 占位结果，**不写 PLC**；用于显控 UI 联调。
+- PLC 正式触发：写 `NG_Reason*` 寄存器并完成 Res/Ack 后推送 HMI。
+- `cmd.debug_trigger_inspection`：从缓存评估并推送，**不写 PLC**。
 - `cmd.set_bevel_recipe`：返回失败说明（第一工位坡口配方已移除）。
 
 ---

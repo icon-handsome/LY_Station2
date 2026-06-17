@@ -435,6 +435,14 @@ void ConsoleRuntime::initModules()
         hmiTcpServer_->setHikCameraCController(hikCameraCController_.get());
         hmiTcpServer_->bindServiceSignals();
 
+        stateMachine_->setInspectionResultPublisher(
+            [hmiServer = hmiTcpServer_.get()](
+                const scan_tracking::flow_control::InspectionResult& result) {
+                if (hmiServer != nullptr) {
+                    hmiServer->publishInspectionResult(result);
+                }
+            });
+
         if (!hmiTcpServer_->start()) {
             qWarning(appLog) << "HMI TCP 服务器在端口" << hmiConfig.tcpPort << "启动失败。";
         } else {

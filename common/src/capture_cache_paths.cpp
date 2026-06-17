@@ -1,6 +1,7 @@
 #include "scan_tracking/common/capture_cache_paths.h"
 
 #include <QCoreApplication>
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
 
@@ -95,6 +96,14 @@ QString captureCacheHikMonoCameraDir(const QString& root, const QString& cameraT
 QString buildCaptureTimestamp()
 {
     return QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss_zzz"));
+}
+
+QString buildRunCaptureRoot(quint32 taskId, const QString& timestamp)
+{
+    const QString ts = timestamp.trimmed().isEmpty() ? buildCaptureTimestamp() : timestamp;
+    const QString outputRoot = QCoreApplication::applicationDirPath() + QStringLiteral("/output");
+    const QString runDirName = QStringLiteral("run_%1_%2").arg(taskId).arg(ts);
+    return ensureDirectoryExists(QDir(outputRoot).absoluteFilePath(runDirName));
 }
 
 }  // namespace scan_tracking::common

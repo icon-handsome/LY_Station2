@@ -1,0 +1,18 @@
+{
+  "version": "1.0",
+  "lastModified": "2026-06-16",
+  "scanPaths": [
+    {
+      "pathId": 1,
+      "enabled": true,
+      "segmentKind": "external",
+      "description": "圆筒半成品-扫描机械臂外部多点位（转台协同；现场按实际点位扩展）",
+      "totalPoints": 3,
+      "points": [
+        { "pointIndex": 1, "needRotation": false },
+        { "pointIndex": 2, "needRotation": false },
+        { "pointIndex": 3, "needRotation": true }
+      ]
+    }
+  ]
+}

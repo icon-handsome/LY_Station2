@@ -18,6 +18,7 @@
 |-------|------|
 | 了解删减范围与当前骨架 | [station2/第二工位骨架删减说明.md](./station2/第二工位骨架删减说明.md) |
 | 第二工位续接开发 | [station2/双工位改造进度与续接指南.md](./station2/双工位改造进度与续接指南.md) |
+| 扫描路径 JSON 与 Res 码 | [station2/扫描路径配置说明.md](./station2/扫描路径配置说明.md) |
 | 理解三模式流程 | [station2/工作流程-AI-Agent参考.md](./station2/工作流程-AI-Agent参考.md) |
 | PLC Modbus 联调 | [protocols/封头检测工位PLC-IPC Modbus通信协议_v0.1.md](./protocols/封头检测工位PLC-IPC%20Modbus通信协议_v0.1.md) |
 | HMI TCP 对接 | [hmi/HMI开发交接说明.md](./hmi/HMI开发交接说明.md) |
