@@ -7,16 +7,14 @@
 #include <QtCore/QtGlobal>
 
 #include <atomic>
-#include <array>
 #include <functional>
 #include <memory>
 
-#include "scan_tracking/common/config_manager.h"
+#include "scan_tracking/flow_control/inspection_types.h"
+#include "scan_tracking/flow_control/plc_task_host.h"
 #include "scan_tracking/flow_control/plc_protocol.h"
 #include "scan_tracking/flow_control/scan_segment_cache.h"
 #include "scan_tracking/flow_control/task_handler_context.h"
-#include "scan_tracking/flow_control/inspection_types.h"
-#include "scan_tracking/flow_control/scan_segment_cache.h"
 #include "scan_tracking/mech_eye/mech_eye_types.h"
 #include "scan_tracking/modbus/modbus_service.h"
 #include "scan_tracking/vision/vision_types.h"
@@ -39,7 +37,7 @@ enum class AppState {
     Error,
 };
 
-class StateMachine : public QObject {
+class StateMachine : public QObject, public PlcTaskHost {
     Q_OBJECT
 
 public:
@@ -74,10 +72,60 @@ public:
     using InspectionResultPublisher = std::function<void(const InspectionResult&)>;
     void setInspectionResultPublisher(InspectionResultPublisher publisher);
 
-    /// 从段缓存评估检测结果（不写 PLC）；供 HMI cmd.debug_trigger_inspection 使用。
     InspectionResult evaluateCachedInspection(quint32 taskId = 0) const;
 
     const ScanSegmentCache& scanSegmentCache() const { return m_scanSegmentCache; }
+
+    // --- PlcTaskHost（供 Handler 调用）---
+    modbus::ModbusService* modbusService() const override;
+    mech_eye::MechEyeService* mechEyeService() const override;
+    vision::VisionPipelineService* visionPipelineService() const override;
+    bool isModbusConnected() const override;
+
+    bool completeActiveTask(
+        quint16 resultCode,
+        protocol::AckState finalAckState = protocol::AckState::Completed,
+        bool dataValid = true) override;
+
+    void publishIpcStatus() override;
+    void setTaskProgress(quint16 progress) override;
+
+    PoseSourceResult resolveLoadGraspPoseSource() const override;
+    PoseSourceResult resolveUnloadCalcPoseSource() const override;
+    void writeLoadGraspResult(const PoseSourceResult& pose) override;
+    void writeUnloadCalcResult(const PoseSourceResult& pose) override;
+    void writeFloatPlaceholder(int startOffset, float value) override;
+    void writeAsciiPlaceholder(int startOffset, int registerCount, const QString& text) override;
+    void clearInspectionResultRegisters() override;
+    bool writeSelfCheckFailWords(const QVector<quint16>& failWords) override;
+    bool clearScanSegmentDoneRegisters() override;
+    bool clearIpcSafetyActionWord() override;
+
+    void completeScanSegmentCapture(
+        quint16 resultCode,
+        int imageCount,
+        int cloudFrameCount,
+        protocol::AckState finalAckState,
+        bool dataValid) override;
+    void notifyScanStarted(int segmentIndex, quint32 taskId) override;
+
+    InspectionResult evaluateInspectionForActiveTask() const override;
+    void finishInspection(const InspectionResult& result) override;
+
+    void resetScanSegmentCache() override;
+    void resetSafetyInterlockState() override;
+
+    void notifyLoadGraspFinished(quint16 resultCode, const PoseSourceResult& pose) override;
+    void notifyUnloadCalcFinished(quint16 resultCode, const PoseSourceResult& pose) override;
+    void notifyPoseCheckFinished(
+        bool success,
+        quint16 resultCode,
+        double poseDeviationMm,
+        const QVector<double>& rt,
+        const QString& message) override;
+    void notifySelfCheckFinished(quint16 resultCode, quint16 failWord0) override;
+    void notifyCodeReadFinished(quint16 resultCode, const QString& codeValue) override;
+    void notifyResultResetFinished(quint16 resultCode) override;
 
 signals:
     void stateChanged(AppState newState);
@@ -112,31 +160,6 @@ private slots:
     void onProcessTimeout();
 
 private:
-    friend class CodeReadHandler;
-    friend class InspectionHandler;
-    friend class LoadGraspHandler;
-    friend class PoseCheckHandler;
-    friend class ResultResetHandler;
-    friend class ScanSegmentHandler;
-    friend class SelfCheckHandler;
-    friend class StationMaterialCheckHandler;
-    friend class UnloadCalcHandler;
-
-public:
-    struct PoseSourceResult {
-        bool available = false;
-        bool success = false;
-        QString sourceName;
-        QString message;
-        float x = 0.0f;
-        float y = 0.0f;
-        float z = 0.0f;
-        float rx = 0.0f;
-        float ry = 0.0f;
-        float rz = 0.0f;
-    };
-
-private:
     struct InspectionSummary {
         quint16 resultCode = 1;
         quint16 ngReasonWord0 = 0;
@@ -148,28 +171,13 @@ private:
     void processTrigger(const protocol::TriggerDefinition& trigger, const QVector<quint16>& commandBlock);
     void rejectDisabledTrigger(const protocol::TriggerDefinition& trigger);
     void executeActiveTask();
-    void executeLoadGraspTask();
-    void executeStationMaterialCheckTask();
-    void executeUnloadCalcTask();
-    void executeScanSegmentTask();
-    void executeInspectionTask();
-    void executePoseCheckTask();
-    void executeSelfCheckTask();
-    void executeCodeReadTask();
-    void executeResultResetTask();
 
     void sendAck(const protocol::TriggerDefinition& definition, protocol::AckState ackState);
     void sendRes(const protocol::TriggerDefinition& definition, quint16 resultCode);
-    void publishIpcStatus();
     void resetPlcOutputRegisters();
     void publishHeartbeat();
-    bool completeActiveTask(
-        quint16 resultCode,
-        protocol::AckState finalAckState = protocol::AckState::Completed,
-        bool dataValid = true);
     void finalizeCompletedTaskIfTriggerReleased(const QVector<quint16>& commandBlock);
     void clearActiveTask();
-    void resetScanSegmentCache();
 
     const protocol::TriggerDefinition* selectPendingTrigger(const QVector<quint16>& commandBlock) const;
 
@@ -179,21 +187,8 @@ private:
     void abortActiveTaskForFault(quint16 resultCode);
     bool writeIpcSafetyActionWord();
 
-    void writeFloatPlaceholder(int startOffset, float value);
-    PoseSourceResult resolveLoadGraspPoseSource() const;
-    PoseSourceResult resolveUnloadCalcPoseSource() const;
-    void writeAsciiPlaceholder(int startOffset, int registerCount, const QString& text);
-    void writeLoadGraspResult();
-    void writeUnloadCalcResult();
     void writeScanSegmentResult(int segmentIndex, int imageCount, int cloudFrameCount);
     void writeInspectionResult(const InspectionSummary& summary);
-    void completeScanSegmentCapture(
-        quint16 resultCode,
-        int imageCount,
-        int cloudFrameCount,
-        protocol::AckState finalAckState,
-        bool dataValid);
-    void finishInspection(const InspectionResult& result);
     int resolveExpectedScanSegmentCount() const;
 
     quint32 readTaskId(const QVector<quint16>& commandBlock) const;
@@ -228,8 +223,6 @@ private:
     ScanSegmentCache m_scanSegmentCache;
     InspectionResultPublisher m_inspectionResultPublisher;
     std::atomic_bool m_stopped{false};
-
-    static constexpr int kMaxConsecutiveModbusFailures = 3;
 };
 
 }  // namespace flow_control

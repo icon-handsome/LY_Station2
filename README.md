@@ -8,6 +8,7 @@
 - **已移除**：Po_Kou / LB / LBN / Hole / Thickness 等 `third_party` 算法、`modules/tracking`、第一工位配置与文档
 - **已实现**：`Trig_ScanSegment` 按 `scan_paths` 执行真实组合采集，段缓存 + `output/run_*` 落盘
 - **已实现**：`Trig_Inspection` 从段缓存校验并写 PLC + 推送 HMI（**占位**：未接入缺陷/编号/3D 算法，`qualityCode=1` 表示缓存校验通过）
+- **架构**：`StateMachine` + `PlcTaskHost` + 9 个 Handler（业务在 `handlers/`，详见 [`docs/guides/flow_control架构说明.md`](docs/guides/flow_control架构说明.md)）
 
 ## 默认配置
 
@@ -38,8 +39,9 @@ CMake 预设：`win-msvc2019-qtcore-ninja-debug` / `release`
 | 主题 | 文档 |
 |------|------|
 | 文档总索引 | [`docs/README.md`](docs/README.md) |
-| 第二工位流程与续接 | [`docs/station2/双工位改造进度与续接指南.md`](docs/station2/双工位改造进度与续接指南.md) |
-| 扫描路径 JSON | [`docs/station2/扫描路径配置说明.md`](docs/station2/扫描路径配置说明.md) |
+| 第二工位流程与续接 | [`docs/guides/双工位改造进度与续接指南.md`](docs/guides/双工位改造进度与续接指南.md) |
+| flow_control 架构 | [`docs/guides/flow_control架构说明.md`](docs/guides/flow_control架构说明.md) |
+| 扫描路径 JSON | [`docs/guides/扫描路径配置说明.md`](docs/guides/扫描路径配置说明.md) |
 | 时序图（2.x） | [`docs/sequence_diagrams/README.md`](docs/sequence_diagrams/README.md) |
 | Modbus 协议 | [`docs/protocols/封头检测工位PLC-IPC Modbus通信协议_v0.1.md`](docs/protocols/封头检测工位PLC-IPC%20Modbus通信协议_v0.1.md) |
 | HMI 交接 | [`docs/hmi/HMI开发交接说明.md`](docs/hmi/HMI开发交接说明.md) |

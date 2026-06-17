@@ -1,5 +1,7 @@
 set(CMAKE_AUTOMOC ON)
 add_library(scan_tracking_flow_control STATIC
+    include/scan_tracking/flow_control/detail/state_machine_internal.h
+    include/scan_tracking/flow_control/plc_task_host.h
     include/scan_tracking/flow_control/state_machine.h
     include/scan_tracking/flow_control/station_trigger_policy.h
     include/scan_tracking/flow_control/task_handler_context.h
@@ -19,7 +21,12 @@ add_library(scan_tracking_flow_control STATIC
     src/inspection_types.cpp
     src/scan_segment_cache.cpp
     src/station2_inspection.cpp
+    src/state_machine_helpers.cpp
     src/state_machine.cpp
+    src/state_machine_modbus.cpp
+    src/state_machine_scan.cpp
+    src/state_machine_inspection.cpp
+    src/state_machine_plc_io.cpp
     src/handlers/code_read_handler.cpp
     src/handlers/inspection_handler.cpp
     src/handlers/load_grasp_handler.cpp

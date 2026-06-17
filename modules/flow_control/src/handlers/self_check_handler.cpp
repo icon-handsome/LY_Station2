@@ -1,24 +1,23 @@
 #include "scan_tracking/flow_control/handlers/self_check_handler.h"
 
-#include "scan_tracking/flow_control/state_machine.h"
+#include "scan_tracking/flow_control/detail/state_machine_internal.h"
+#include "scan_tracking/flow_control/plc_protocol.h"
 #include "scan_tracking/mech_eye/mech_eye_service.h"
 #include "scan_tracking/vision/vision_pipeline_service.h"
 
-#include <QtCore/QLoggingCategory>
-
 namespace scan_tracking::flow_control {
-
-Q_DECLARE_LOGGING_CATEGORY(LOG_FLOW)
 
 const char* SelfCheckHandler::triggerName() const { return "Trig_SelfCheck"; }
 int SelfCheckHandler::trigOffset() const { return 26; }
-void SelfCheckHandler::execute(TaskHandlerContext& ctx) { ctx.machine.executeSelfCheckTask(); }
 
-void StateMachine::executeSelfCheckTask()
+void SelfCheckHandler::execute(TaskHandlerContext& ctx)
 {
-    const bool modbusReady = m_modbus != nullptr && m_modbus->isConnected();
-    const bool mechEyeReady = m_mechEye != nullptr && m_mechEye->state() != mech_eye::CameraRuntimeState::Error;
-    const bool visionReady = m_visionPipeline != nullptr && m_visionPipeline->isStarted();
+    auto* mechEye = ctx.host.mechEyeService();
+    auto* vision = ctx.host.visionPipelineService();
+
+    const bool modbusReady = ctx.host.isModbusConnected();
+    const bool mechEyeReady = mechEye != nullptr && mechEye->state() != mech_eye::CameraRuntimeState::Error;
+    const bool visionReady = vision != nullptr && vision->isStarted();
 
     QVector<quint16> failWords = {
         static_cast<quint16>(modbusReady ? 0 : (1u << 1)),
@@ -35,13 +34,14 @@ void StateMachine::executeSelfCheckTask()
     }
 
     const quint16 resultCode = (modbusReady && mechEyeReady && visionReady) ? 1 : 0;
-    if (m_modbus && m_modbus->isConnected()) {
-        m_modbus->writeRegisters(protocol::registers::kSelfCheckFailWord0, failWords);
-        m_modbus->writeRegisters(protocol::registers::kSelfCheckFailWord1, {0});
+    if (modbusReady) {
+        ctx.host.writeSelfCheckFailWords(failWords);
     }
-    completeActiveTask(resultCode, resultCode == 1 ? protocol::AckState::Completed : protocol::AckState::Failed, resultCode == 1);
-    emit selfCheckFinished(resultCode, failWords.value(0));
+    ctx.host.completeActiveTask(
+        resultCode,
+        resultCode == 1 ? protocol::AckState::Completed : protocol::AckState::Failed,
+        resultCode == 1);
+    ctx.host.notifySelfCheckFinished(resultCode, failWords.value(0));
 }
-
 
 }  // namespace scan_tracking::flow_control
