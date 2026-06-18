@@ -1,8 +1,9 @@
-# Cursor / clangd：与 VS 共用 Ninja 构建目录中的 compile_commands.json
-# 路径相对仓库根目录，换机器时只需保持同一 preset 的 build 目录即可。
-
+# 已禁用：本项目使用 CLion 内置 C++ 引擎，不再启用 clangd。
+# 若需恢复，重命名为 .clangd 并在 IDE 中重新开启 clangd。
+#
+# 原配置：与 Ninja 构建目录中的 compile_commands.json 配合使用。
 CompileFlags:
-  CompilationDatabase: build/win-msvc2019-qtcore-ninja-release
+  CompilationDatabase: build/win-msvc2019-qtcore-ninja-debug
   Add:
     - --driver-mode=cl
   Remove:
@@ -49,3 +50,12 @@ Diagnostics:
   UnusedIncludes: None
   Suppress:
     - "*-unused-includes"
+
+---
+
+# 双工位解耦：禁止 clangd/CLion 索引第一工位源码（避免 Ctrl+点击 跳到 IPC-192...）
+If:
+  PathMatch: .*/IPC-192\.168\.110\.173_track-main(/|$).*
+
+Index:
+  Background: Skip

@@ -35,6 +35,7 @@ struct CameraConfig {
 };
 
 struct VisionCameraEndpointConfig {
+
     QString logicalName;
     QString cameraKey;
     QString ipAddress;
