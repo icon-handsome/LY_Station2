@@ -1,3 +1,14 @@
+/**
+ * @file config_manager.cpp
+ * @brief ConfigManager 实现：加载 config.ini、工位 profile 与 scan_paths JSON
+ *
+ * 配置文件查找顺序（projectRootConfigPath）：
+ * 1. 可执行文件同目录下的 config.ini
+ * 2. 自 exe 向上三级目录（开发态 CMake 构建树中的项目根）
+ *
+ * 相对路径解析（resolveConfigRelativePath）：config.ini 所在目录 → exe 目录。
+ */
+
 #include "scan_tracking/common/config_manager.h"
 
 #include <QCoreApplication>
@@ -21,6 +32,12 @@ ConfigManager* ConfigManager::s_instance = nullptr;
 
 namespace {
 
+/**
+ * @brief 定位主配置文件 config.ini 的路径
+ *
+ * 优先使用与可执行文件同目录的 config.ini（部署场景）；
+ * 若不存在则尝试 CMake 开发构建树中的项目根目录。
+ */
 QString projectRootConfigPath()
 {
     const QString exeDirConfig =
@@ -36,6 +53,15 @@ QString projectRootConfigPath()
     return exeDirConfig;
 }
 
+/**
+ * @brief 将配置中的相对路径解析为绝对路径
+ *
+ * 解析顺序：已是绝对路径则直接规范化；否则依次尝试
+ * config.ini 所在目录、可执行文件目录。均不存在时仍返回 config 目录下的拼接结果。
+ *
+ * @param rawPath         配置项中的原始路径字符串
+ * @param configFilePath  主 config.ini 的绝对路径（用作相对路径基准）
+ */
 QString resolveConfigRelativePath(const QString& rawPath, const QString& configFilePath)
 {
     const QString trimmed = rawPath.trimmed();
@@ -62,11 +88,14 @@ QString resolveConfigRelativePath(const QString& rawPath, const QString& configF
 }
 
 /**
- * @brief 获取扫描路径配置文件的路径
- * 
- * Stage 1: 工位 profile 显式配置优先；未配置时保持旧 scan_paths_config.json fallback。
- * 
- * @return 扫描路径配置文件的完整路径
+ * @brief 确定 scan_paths JSON 文件的完整路径
+ *
+ * 优先级：
+ * 1. StationProfile::scanPathsConfigPath（来自 [Station] 或 profileIni 覆盖）
+ * 2. 默认 fallback：config/scan_paths/station2_placeholder.json
+ *
+ * @param stationProfile  已合并的工位 profile
+ * @param configFilePath  主 config.ini 路径，用于相对路径解析
  */
 QString scanPathsConfigPath(const StationProfile& stationProfile, const QString& configFilePath)
 {
@@ -83,6 +112,16 @@ QString scanPathsConfigPath(const StationProfile& stationProfile, const QString&
     return fallbackPath;
 }
 
+/**
+ * @brief 从 QSettings 的 [Station] 节读取字段并写入 profile
+ *
+ * 仅当键存在时才覆盖 profile 中对应字段，便于多层配置合并。
+ * 若 profileIni 非空且 settings 含 profileIni 键，则将其路径写入 *profileIni。
+ *
+ * @param settings    已定位到 [Station] 组内或即将 beginGroup 的 QSettings
+ * @param profile     读入目标，就地修改
+ * @param profileIni  可选输出；非 nullptr 时读取 profileIni 键
+ */
 void applyStationSettings(QSettings& settings, StationProfile& profile, QString* profileIni)
 {
     if (settings.contains(QStringLiteral("stationId"))) {
@@ -134,6 +173,7 @@ void applyStationSettings(QSettings& settings, StationProfile& profile, QString*
 
 void ConfigManager::initialize()
 {
+    // 幂等：多次调用仅首次分配单例；构造函数内完成 load + loadScanPathsConfig
     if (!s_instance) {
         s_instance = new ConfigManager();
         qInfo(LOG_CONFIG) << "ConfigManager 已初始化。";
@@ -161,8 +201,8 @@ ConfigManager::ConfigManager()
 {
     const QString configPath = projectRootConfigPath();
     load(configPath);
-    
-    // 加载扫描路径配置
+
+    // load() 已解析 StationProfile，据此定位 scan_paths JSON 并加载
     const QString scanPathsPath = scanPathsConfigPath(m_stationProfile, configPath);
     loadScanPathsConfig(scanPathsPath);
 }
@@ -186,6 +226,7 @@ const StationProfile& ConfigManager::stationProfile() const { return m_stationPr
 
 const ScanPointConfig* ConfigManager::findScanPointByIndex(int segmentIndex) const
 {
+    // 仅搜索 enabled 路径；返回指向内部 vector 元素的指针，生命周期与 ConfigManager 相同
     for (const auto& path : m_scanPathsConfig.scanPaths) {
         if (!path.enabled) {
             continue;
@@ -201,6 +242,7 @@ const ScanPointConfig* ConfigManager::findScanPointByIndex(int segmentIndex) con
 
 int ConfigManager::enabledScanPointCount() const
 {
+    // 累加所有已启用路径的 points 数量；JSON 未加载或全禁用时为 0
     int total = 0;
     for (const auto& path : m_scanPathsConfig.scanPaths) {
         if (path.enabled) {
@@ -210,6 +252,12 @@ int ConfigManager::enabledScanPointCount() const
     return total;
 }
 
+/**
+ * @brief 写入 config.ini 各节的出厂默认值
+ *
+ * 在 config.ini 不存在或为空时由 load() 调用；写入后立即 sync() 落盘。
+ * 默认值与 load() 中的 fallback 值保持一致，便于首次部署直接运行。
+ */
 void ConfigManager::writeDefaults(QSettings& settings)
 {
     settings.beginGroup("App");
@@ -333,6 +381,14 @@ void ConfigManager::writeDefaults(QSettings& settings)
     qInfo(LOG_CONFIG) << "已在" << settings.fileName() << "生成默认 config.ini";
 }
 
+/**
+ * @brief 加载并合并工位 profile
+ *
+ * 合并优先级（Stage 1）：
+ * 1. config.ini [Station] 作为基础
+ * 2. profileIni 指向的外部 INI 中 [Station] 同名字段覆盖基础值
+ * 3. 结果写入 m_stationProfile，本阶段为只读配置
+ */
 void ConfigManager::loadStationProfile(QSettings& settings, const QString& configFilePath)
 {
     StationProfile profile;
@@ -342,10 +398,6 @@ void ConfigManager::loadStationProfile(QSettings& settings, const QString& confi
     applyStationSettings(settings, profile, &profileIni);
     settings.endGroup();
 
-    // Stage 1 merge priority:
-    // 1. config.ini [Station] is the base.
-    // 2. profileIni, when present and existing, overrides same-name fields.
-    // 3. The merged StationProfile is read-only for this stage.
     const QString resolvedProfileIni = resolveConfigRelativePath(profileIni, configFilePath);
     if (!resolvedProfileIni.isEmpty() && QFileInfo::exists(resolvedProfileIni)) {
         QSettings profileSettings(resolvedProfileIni, QSettings::IniFormat);
@@ -370,6 +422,13 @@ void ConfigManager::loadStationProfile(QSettings& settings, const QString& confi
         << QStringLiteral(" workMode=") << workModeIdToString(m_stationProfile.defaultWorkMode);
 }
 
+/**
+ * @brief 从 config.ini 加载全部 INI 配置到成员结构体
+ *
+ * 按节顺序读取：App → Logger → Modbus → Camera → Station（profile）→
+ * Vision → FlowControl → Tracking → OrbbecGemini → LivoxMid360 → TfminiPlus → Hmi。
+ * 读取 Logger.level 后同步设置 Logger 单例的最低输出级别。
+ */
 void ConfigManager::load(const QString& filePath)
 {
     const QFileInfo fileInfo(filePath);
@@ -382,16 +441,19 @@ void ConfigManager::load(const QString& filePath)
         writeDefaults(settings);
     }
 
+    // --- [App] ---
     settings.beginGroup("App");
     m_appConfig.version = settings.value("version", "0.1.0").toString();
     m_appConfig.environment = settings.value("environment", "production").toString();
     settings.endGroup();
 
+    // --- [Logger] ---
     settings.beginGroup("Logger");
     m_loggerConfig.level = settings.value("level", 0).toInt();
     m_loggerConfig.rotateDays = settings.value("rotateDays", 7).toInt();
     settings.endGroup();
 
+    // --- [Modbus] ---
     settings.beginGroup("Modbus");
     m_modbusConfig.host = settings.value("host", "127.0.0.1").toString();
     m_modbusConfig.port = settings.value("port", 502).toInt();
@@ -400,13 +462,16 @@ void ConfigManager::load(const QString& filePath)
     m_modbusConfig.reconnectIntervalMs = settings.value("reconnectIntervalMs", 2000).toInt();
     settings.endGroup();
 
+    // --- [Camera] ---
     settings.beginGroup("Camera");
     m_cameraConfig.defaultCamera = settings.value("defaultCamera", "Mech-Eye Nano").toString();
     m_cameraConfig.scanTimeoutMs = settings.value("scanTimeoutMs", 5000).toInt();
     settings.endGroup();
 
+    // --- [Station] + profileIni 合并 ---
     loadStationProfile(settings, filePath);
 
+    // --- [Vision] ---
     settings.beginGroup("Vision");
     m_visionConfig.mechEyeCameraKey = settings.value("mechEyeCameraKey", m_cameraConfig.defaultCamera).toString();
     m_visionConfig.mechCaptureTimeoutMs = settings.value("mechCaptureTimeoutMs", m_cameraConfig.scanTimeoutMs).toInt();
@@ -455,16 +520,19 @@ void ConfigManager::load(const QString& filePath)
         settings.value("hikCxpCameraBSerial", "DA9122998").toString();
     settings.endGroup();
 
+    // --- [FlowControl] ---
     settings.beginGroup("FlowControl");
     m_flowControlConfig.pollIntervalMs = settings.value("pollIntervalMs", 100).toInt();
     m_flowControlConfig.heartbeatIntervalMs = settings.value("heartbeatIntervalMs", 1000).toInt();
     m_flowControlConfig.simulatedProcessingMs = settings.value("simulatedProcessingMs", 300).toInt();
     settings.endGroup();
 
+    // --- [Tracking] ---
     settings.beginGroup("Tracking");
     m_trackingConfig.scanSegmentTotal = settings.value("scanSegmentTotal", 3).toInt();
     settings.endGroup();
 
+    // --- [OrbbecGemini] ---
     settings.beginGroup("OrbbecGemini");
     m_orbbecGeminiConfig.enabled = settings.value("orbbecGeminiEnabled", false).toBool();
     m_orbbecGeminiConfig.sdkRoot = settings.value(
@@ -489,6 +557,7 @@ void ConfigManager::load(const QString& filePath)
         settings.value("orbbecGeminiCaptureOnStart", false).toBool();
     settings.endGroup();
 
+    // --- [LivoxMid360] ---
     settings.beginGroup("LivoxMid360");
     m_livoxMid360Config.enabled = settings.value("livoxMid360Enabled", false).toBool();
     m_livoxMid360Config.sdkRoot = settings.value(
@@ -502,6 +571,7 @@ void ConfigManager::load(const QString& filePath)
         settings.value("livoxMid360DiscoveryTimeoutMs", 10000).toInt();
     settings.endGroup();
 
+    // --- [TfminiPlus] ---
     settings.beginGroup("TfminiPlus");
     m_tfminiPlusConfig.enabled = settings.value("tfminiPlusEnabled", false).toBool();
     m_tfminiPlusConfig.portName = settings.value("tfminiPlusPort", QString()).toString().trimmed();
@@ -512,6 +582,7 @@ void ConfigManager::load(const QString& filePath)
         settings.value("tfminiPlusLogFrames", false).toBool();
     settings.endGroup();
 
+    // --- [Hmi] ---
     settings.beginGroup("Hmi");
     {
         const int port = settings.value("tcpPort", 9900).toInt();
@@ -520,6 +591,7 @@ void ConfigManager::load(const QString& filePath)
     }
     settings.endGroup();
 
+    // 将 Logger.level 映射为 Qt 消息级别并应用到 Logger 单例
     QtMsgType minType = QtDebugMsg;
     switch (m_loggerConfig.level) {
         case 0: minType = QtDebugMsg; break;
@@ -545,25 +617,26 @@ void ConfigManager::load(const QString& filePath)
 
 /**
  * @brief 加载扫描路径配置（JSON 格式）
- * 
- * 从 scan_paths_config.json 文件加载多路径扫描配置，包括：
- * - 标定矩阵 T0
- * - 所有扫描路径定义
- * - 执行策略
- * - 转盘配置
- * 
- * @param jsonFilePath JSON 配置文件路径
+ *
+ * 期望的根对象字段：
+ * - version, lastModified：元数据
+ * - scanPaths[]：每条含 pathId, enabled, segmentKind, description,
+ *   totalPoints, points[]（pointIndex, needRotation）
+ *
+ * 解析完成后调用 validateScanPathsConfig；校验失败仅警告，不阻止加载。
+ * 文件缺失或解析失败时保留空的 m_scanPathsConfig。
+ *
+ * @param jsonFilePath 由 scanPathsConfigPath() 解析得到的 JSON 绝对路径
  */
 void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
 {
-    // 检查文件是否存在
     if (!QFileInfo::exists(jsonFilePath)) {
         qWarning(LOG_CONFIG) << "扫描路径配置文件不存在：" << jsonFilePath;
         qWarning(LOG_CONFIG) << "将使用空配置，多路径扫描功能不可用。";
         return;
     }
-    
-    // 读取 JSON 文件
+
+    // 读取并解析 JSON 文档
     QFile file(jsonFilePath);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         qCritical(LOG_CONFIG) << "无法打开扫描路径配置文件：" << jsonFilePath;
@@ -572,8 +645,7 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
     
     const QByteArray jsonData = file.readAll();
     file.close();
-    
-    // 解析 JSON
+
     QJsonParseError parseError;
     const QJsonDocument doc = QJsonDocument::fromJson(jsonData, &parseError);
     
@@ -590,8 +662,7 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
     }
     
     const QJsonObject root = doc.object();
-    
-    // 1. 读取配置文件元数据
+
     m_scanPathsConfig.version = root.value("version").toString("1.0");
     m_scanPathsConfig.lastModified = root.value("lastModified").toString();
 
@@ -636,8 +707,7 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
         << "扫描路径配置："
         << "版本=" << m_scanPathsConfig.version
         << "路径数=" << m_scanPathsConfig.scanPaths.size();
-    
-    // 输出每条路径的详细信息
+
     for (const auto& path : m_scanPathsConfig.scanPaths) {
         qInfo(LOG_CONFIG).noquote()
             << "  路径" << path.pathId
@@ -649,21 +719,20 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
 
 /**
  * @brief 验证扫描路径配置的合法性
- * 
- * 检查配置是否符合以下规则：
- * - 路径 ID 唯一
- * - 点位索引连续（从 1 开始）
- * - 点位数量与 totalPoints 一致
- * - 选中的路径 ID 存在
- * 
- * @param errorMessage 输出参数，验证失败时包含错误信息
- * @return 验证是否通过
+ *
+ * 规则：
+ * - 所有路径的 pathId 互不重复
+ * - 每条路径 points.size() 必须等于 totalPoints
+ * - 已启用路径内：pointIndex > 0，且全局段号在启用路径间不重复
+ *
+ * @param errorMessage 可选；失败时写入中文错误描述
+ * @return true 表示通过全部检查
  */
 bool ConfigManager::validateScanPathsConfig(QString* errorMessage) const
 {
     std::vector<int> globalPointIndices;
 
-    // 1. 检查路径 ID 唯一性
+    // 遍历所有路径，检查 ID 唯一性与点位数量
     std::vector<int> pathIds;
     pathIds.reserve(m_scanPathsConfig.scanPaths.size());
     
@@ -675,8 +744,7 @@ bool ConfigManager::validateScanPathsConfig(QString* errorMessage) const
             return false;
         }
         pathIds.push_back(path.pathId);
-        
-        // 2. 检查点位数量
+
         if (static_cast<int>(path.points.size()) != path.totalPoints) {
             if (errorMessage) {
                 *errorMessage = QStringLiteral("路径 %1 的点位数量不匹配：配置 %2，实际 %3")
@@ -687,6 +755,7 @@ bool ConfigManager::validateScanPathsConfig(QString* errorMessage) const
             return false;
         }
 
+        // 仅对已启用路径校验全局段号唯一性与正整数约束
         if (path.enabled) {
             for (const auto& point : path.points) {
                 if (point.pointIndex <= 0) {
