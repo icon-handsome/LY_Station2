@@ -21,6 +21,9 @@ bool isTriggerEnabledForProfile(const common::StationProfile& profile, const cha
     if (std::strcmp(triggerName, "Trig_PoseCheck") == 0) {
         return profile.enablePoseCheck;
     }
+    if (std::strcmp(triggerName, "Trig_TelescopicScan") == 0) {
+        return profile.enableTelescopicScan;
+    }
 
     // Stage 2 only gates the three first-station-only triggers above.
     // enableTelescopicScan / enableHoistAssist / enableCollisionMonitor are stage3+ switches.

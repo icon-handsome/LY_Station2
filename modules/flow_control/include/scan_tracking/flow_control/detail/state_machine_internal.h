@@ -1,5 +1,6 @@
 #pragma once
 
+#include "scan_tracking/flow_control/plc_protocol.h"
 #include "scan_tracking/flow_control/plc_task_host.h"
 #include "scan_tracking/vision/vision_types.h"
 
@@ -24,6 +25,12 @@ constexpr quint16 kInspectionResTimeoutNg = 6;
 
 QString formatPlcRegisterValueForLog(int modbusIndex, quint16 rawValue);
 QString formatPlcRegisterChangeForLog(int modbusIndex, quint16 oldValue, quint16 newValue);
+QString formatCommandBlockSnapshotForLog(
+    const QVector<quint16>& commandBlock,
+    int startIndex,
+    int endIndexInclusive,
+    const char* const* registerNames,
+    int registerNameCount);
 QVector<quint16> floatToCdabRegisters(float value);
 
 PoseSourceResult parsePoseSource(
@@ -33,6 +40,11 @@ PoseSourceResult parsePoseSource(
     bool treatMissingAsSimulated);
 
 void countBundleFrames(const vision::MultiCameraCaptureBundle& bundle, int* imageCount, int* cloudFrameCount);
+
+inline bool isScanCaptureStage(protocol::Stage stage)
+{
+    return stage == protocol::Stage::ScanSegment || stage == protocol::Stage::TelescopicScan;
+}
 
 }  // namespace state_machine_internal
 }  // namespace scan_tracking::flow_control

@@ -4,6 +4,7 @@
 #include "scan_tracking/mech_eye/point_cloud_io.h"
 #include "scan_tracking/vision/hik_mono_io.h"
 
+#include <QtCore/QFile>
 #include <QtCore/QLoggingCategory>
 
 #include <algorithm>
@@ -164,6 +165,27 @@ bool persistScanSegmentBundle(
             !scan_tracking::mech_eye::saveGrayTextureFrameToPng(
                 bundle.mechEyeResult.texture2D, pngPath)) {
             recordFailure(QStringLiteral("Mech-Eye 2D 落盘失败：段 %1").arg(segmentIndex));
+        }
+    }
+
+    if (bundle.hikCameraCCaptureOk()) {
+        const QString destPath = scan_tracking::vision::buildSegmentHikMonoPath(
+            runRoot,
+            segmentIndex,
+            taskId,
+            QStringLiteral("hikC"),
+            timestamp);
+        if (destPath.isEmpty()) {
+            recordFailure(QStringLiteral("海康 C 落盘路径无效：段 %1").arg(segmentIndex));
+        } else if (!QFile::exists(bundle.hikCameraCImagePath)) {
+            recordFailure(QStringLiteral("海康 C 源图不存在：段 %1").arg(segmentIndex));
+        } else {
+            if (QFile::exists(destPath)) {
+                QFile::remove(destPath);
+            }
+            if (!QFile::copy(bundle.hikCameraCImagePath, destPath)) {
+                recordFailure(QStringLiteral("海康 C 落盘失败：段 %1").arg(segmentIndex));
+            }
         }
     }
 

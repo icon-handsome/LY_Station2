@@ -203,6 +203,9 @@ public:
     /// 按全局段号（pointIndex）在已启用路径中查找点位；未找到返回 nullptr。
     const ScanPointConfig* findScanPointByIndex(int segmentIndex) const;
 
+    /// 段号所属路径的 segmentKind；未找到时返回 "external"。
+    QString segmentKindForPointIndex(int segmentIndex) const;
+
     /// 已启用路径中的扫描点位总数（供 scanSegmentTotal / HMI 展示）。
     int enabledScanPointCount() const;
 

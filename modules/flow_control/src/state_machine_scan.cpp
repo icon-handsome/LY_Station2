@@ -18,13 +18,15 @@ void StateMachine::notifyScanStarted(int segmentIndex, quint32 taskId)
 void StateMachine::onBundleCaptureFinished(vision::MultiCameraCaptureBundle bundle)
 {
     if (m_activeTask.definition == nullptr ||
-        m_activeTask.definition->stage != protocol::Stage::ScanSegment ||
+        !isScanCaptureStage(m_activeTask.definition->stage) ||
         m_activeTask.completionAnnounced) {
         return;
     }
     if (bundle.request.requestId != m_activeTask.captureRequestId) {
         return;
     }
+
+    const QString triggerLabel = protocol::triggerName(*m_activeTask.definition);
 
     int imageCount = 0;
     int cloudFrameCount = 0;
@@ -38,12 +40,13 @@ void StateMachine::onBundleCaptureFinished(vision::MultiCameraCaptureBundle bund
         QString persistError;
         if (!m_scanSegmentCache.persistSegment(bundle.request.segmentIndex, &persistError)) {
             qWarning(LOG_FLOW).noquote()
-                << QStringLiteral("Trig_ScanSegment：段落盘失败（采集仍成功）")
+                << triggerLabel
+                << QStringLiteral("：段落盘失败（采集仍成功）")
                 << persistError;
         }
 
         qInfo(LOG_FLOW).noquote()
-            << QStringLiteral("Trig_ScanSegment：采集成功") << bundle.summary()
+            << triggerLabel << QStringLiteral("：采集成功") << bundle.summary()
             << QStringLiteral(" imageCount=") << imageCount
             << QStringLiteral(" cloudFrameCount=") << cloudFrameCount
             << QStringLiteral(" runRoot=") << m_scanSegmentCache.runCaptureRoot();
@@ -52,7 +55,7 @@ void StateMachine::onBundleCaptureFinished(vision::MultiCameraCaptureBundle bund
     }
 
     qWarning(LOG_FLOW).noquote()
-        << QStringLiteral("Trig_ScanSegment：采集失败") << bundle.summary();
+        << triggerLabel << QStringLiteral("：采集失败") << bundle.summary();
     completeScanSegmentCapture(7, 0, 0, protocol::AckState::Failed, false);
 }
 
@@ -64,7 +67,7 @@ void StateMachine::onVisionPipelineFatalError(vision::VisionErrorCode code, QStr
         << message;
 
     if (m_activeTask.definition == nullptr ||
-        m_activeTask.definition->stage != protocol::Stage::ScanSegment ||
+        !isScanCaptureStage(m_activeTask.definition->stage) ||
         m_activeTask.completionAnnounced) {
         return;
     }
@@ -81,7 +84,12 @@ void StateMachine::completeScanSegmentCapture(
     bool dataValid)
 {
     const int segmentIndex = m_activeTask.scanSegmentIndex;
-    writeScanSegmentResult(segmentIndex, imageCount, cloudFrameCount);
+    if (m_activeTask.definition != nullptr &&
+        m_activeTask.definition->stage == protocol::Stage::TelescopicScan) {
+        writeTelescopicScanResult(segmentIndex, imageCount, cloudFrameCount);
+    } else {
+        writeScanSegmentResult(segmentIndex, imageCount, cloudFrameCount);
+    }
     completeActiveTask(resultCode, finalAckState, dataValid);
     emit scanFinished(segmentIndex, resultCode, imageCount, cloudFrameCount);
 }
@@ -93,7 +101,7 @@ void StateMachine::onMechEyeFatalError(mech_eye::CaptureErrorCode code, QString 
     emit protocolEvent(QStringLiteral("Mech-Eye: %1").arg(message));
 
     if (m_activeTask.definition == nullptr ||
-        m_activeTask.definition->stage != protocol::Stage::ScanSegment ||
+        !isScanCaptureStage(m_activeTask.definition->stage) ||
         m_activeTask.completionAnnounced) {
         return;
     }

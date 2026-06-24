@@ -1,10 +1,13 @@
 #include "scan_tracking/vision/vision_pipeline_service.h"
 
+#include <QtCore/QDateTime>
+#include <QtCore/QFile>
 #include <QtCore/QMetaType>
 #include <QtCore/QPointer>
 #include <QtCore/QTimer>
 
 #include "scan_tracking/common/config_manager.h"
+#include "scan_tracking/vision/hik_camera_c_controller.h"
 #include "scan_tracking/vision/hik_cxp_camera_service.h"
 
 namespace scan_tracking {
@@ -12,15 +15,20 @@ namespace vision {
 
 namespace {
 
-bool mechCapturePayloadReady(const scan_tracking::mech_eye::CaptureResult& result)
+constexpr int kMechToHikCaptureDelayMs = 1000;
+
+QString captureTypeLabel(CaptureType type)
 {
-    if (!result.success()) {
-        return false;
+    switch (type) {
+    case CaptureType::SurfaceDefect:
+        return QStringLiteral("SurfaceDefect");
+    case CaptureType::WeldDefect:
+        return QStringLiteral("WeldDefect");
+    case CaptureType::NumberRecognition:
+        return QStringLiteral("NumberRecognition");
+    default:
+        return QStringLiteral("Unknown");
     }
-    if (result.mode == scan_tracking::mech_eye::CaptureMode::Capture2DOnly) {
-        return result.texture2D.isValid();
-    }
-    return result.pointCloud.isValid();
 }
 
 }  // namespace
@@ -36,6 +44,7 @@ void VisionPipelineService::registerMetaTypes()
         "scan_tracking::vision::VisionPipelineState");
     qRegisterMetaType<scan_tracking::vision::MultiCameraCaptureBundle>(
         "scan_tracking::vision::MultiCameraCaptureBundle");
+    qRegisterMetaType<scan_tracking::vision::CaptureType>("scan_tracking::vision::CaptureType");
     registered = true;
 }
 
@@ -43,11 +52,13 @@ VisionPipelineService::VisionPipelineService(
     scan_tracking::mech_eye::MechEyeService* mechEyeService,
     HikCxpCameraService* hikCameraAService,
     HikCxpCameraService* hikCameraBService,
+    HikCameraCController* hikCameraCController,
     QObject* parent)
     : QObject(parent)
     , m_mechEyeService(mechEyeService)
     , m_hikCameraAService(hikCameraAService)
     , m_hikCameraBService(hikCameraBService)
+    , m_hikCameraCController(hikCameraCController)
 {
     registerMetaTypes();
 
@@ -75,6 +86,20 @@ VisionPipelineService::VisionPipelineService(
             &VisionPipelineService::onHikPoseCaptureFinished,
             Qt::QueuedConnection);
     }
+    if (m_hikCameraCController != nullptr) {
+        connect(
+            m_hikCameraCController,
+            &HikCameraCController::imageReceived,
+            this,
+            &VisionPipelineService::onHikCameraCImageReceived,
+            Qt::QueuedConnection);
+        connect(
+            m_hikCameraCController,
+            &HikCameraCController::captureCompleted,
+            this,
+            &VisionPipelineService::onHikCameraCCaptureCompleted,
+            Qt::QueuedConnection);
+    }
 }
 
 void VisionPipelineService::start(const scan_tracking::common::VisionConfig& config)
@@ -98,12 +123,6 @@ void VisionPipelineService::stop()
     setState(VisionPipelineState::Stopped, QStringLiteral("视觉流水线已停止。"));
 }
 
-namespace {
-
-constexpr int kMechToHikCaptureDelayMs = 2000;
-
-}  // namespace
-
 quint64 VisionPipelineService::requestCaptureBundle(
     int segmentIndex,
     quint32 taskId,
@@ -117,8 +136,20 @@ quint64 VisionPipelineService::requestCaptureBundle(
         emit fatalError(VisionErrorCode::Busy, QStringLiteral("视觉采集请求正在进行中。"));
         return 0;
     }
-    if (m_mechEyeService == nullptr || m_hikCameraAService == nullptr || m_hikCameraBService == nullptr) {
-        emit fatalError(VisionErrorCode::InvalidConfig, QStringLiteral("视觉服务不完整。"));
+    if (m_mechEyeService == nullptr) {
+        emit fatalError(VisionErrorCode::InvalidConfig, QStringLiteral("梅卡相机服务不可用。"));
+        return 0;
+    }
+
+    const bool useCxp =
+        m_config.hikCxpEnabled && m_hikCameraAService != nullptr &&
+        m_hikCameraBService != nullptr;
+    const bool useHikCameraC = m_hikCameraCController != nullptr && !useCxp;
+
+    if (!useHikCameraC && !useCxp) {
+        emit fatalError(
+            VisionErrorCode::InvalidConfig,
+            QStringLiteral("视觉服务不完整：需要 CXP 双目或海康智能 C。"));
         return 0;
     }
 
@@ -130,14 +161,18 @@ quint64 VisionPipelineService::requestCaptureBundle(
     request.needMechEye2D =
         mechCaptureMode == scan_tracking::mech_eye::CaptureMode::Capture2DAnd3D;
     request.mechEyeCameraKey = m_config.mechEyeCameraKey;
-    request.mechEyeTimeoutMs = m_config.mechCaptureTimeoutMs > 0 ? m_config.mechCaptureTimeoutMs : 5000;
-    request.hikCameraAKey = m_config.hikCxpCameraA.cameraKey;
-    request.hikCameraBKey = m_config.hikCxpCameraB.cameraKey;
-    request.hikTimeoutMs =
-        m_config.hikCxpCaptureTimeoutMs > 0 ? m_config.hikCxpCaptureTimeoutMs : 5000;
+    request.mechEyeTimeoutMs =
+        m_config.mechCaptureTimeoutMs > 0 ? m_config.mechCaptureTimeoutMs : 5000;
+    if (useCxp) {
+        request.hikCameraAKey = m_config.hikCxpCameraA.cameraKey;
+        request.hikCameraBKey = m_config.hikCxpCameraB.cameraKey;
+        request.hikTimeoutMs =
+            m_config.hikCxpCaptureTimeoutMs > 0 ? m_config.hikCxpCaptureTimeoutMs : 5000;
+    }
 
     PendingCaptureContext pending;
     pending.active = true;
+    pending.useHikCameraC = useHikCameraC;
     pending.bundle.request = request;
 
     pending.mechRequestId = m_mechEyeService->requestCapture(
@@ -150,9 +185,17 @@ quint64 VisionPipelineService::requestCaptureBundle(
     }
 
     m_pending = pending;
-    setState(
-        VisionPipelineState::Capturing,
-        QStringLiteral("梅卡采集已启动（CXP 将在梅卡完成后延迟 %1ms）").arg(kMechToHikCaptureDelayMs));
+    if (useHikCameraC) {
+        setState(
+            VisionPipelineState::Capturing,
+            QStringLiteral("梅卡采集已启动（海康 C 将在梅卡完成后延迟 %1ms）")
+                .arg(kMechToHikCaptureDelayMs));
+    } else {
+        setState(
+            VisionPipelineState::Capturing,
+            QStringLiteral("梅卡采集已启动（CXP 将在梅卡完成后延迟 %1ms）")
+                .arg(kMechToHikCaptureDelayMs));
+    }
     return request.requestId;
 }
 
@@ -168,18 +211,82 @@ void VisionPipelineService::startPendingHikCapture()
     m_pending.hikBRequestId = m_hikCameraBService->requestPoseCapture(
         request.hikCameraBKey, request.hikTimeoutMs);
 
-    if (m_pending.hikARequestId == 0 || m_pending.hikBRequestId == 0) {
-        m_pending.active = false;
-        emit fatalError(
-            VisionErrorCode::CaptureRejected,
-            QStringLiteral("梅卡完成后启动 CXP 双目采集失败。"));
-        setState(VisionPipelineState::Error, QStringLiteral("CXP 双目采集启动失败。"));
+    if (m_pending.hikARequestId == 0) {
+        m_pending.bundle.hikCameraAResult.logicalName = m_config.hikCxpCameraA.logicalName;
+        m_pending.bundle.hikCameraAResult.errorCode = VisionErrorCode::CaptureRejected;
+        m_pending.bundle.hikCameraAResult.errorMessage =
+            QStringLiteral("CXP 左目采集启动失败。");
+        m_pending.hikADone = true;
+    }
+    if (m_pending.hikBRequestId == 0) {
+        m_pending.bundle.hikCameraBResult.logicalName = m_config.hikCxpCameraB.logicalName;
+        m_pending.bundle.hikCameraBResult.errorCode = VisionErrorCode::CaptureRejected;
+        m_pending.bundle.hikCameraBResult.errorMessage =
+            QStringLiteral("CXP 右目采集启动失败。");
+        m_pending.hikBDone = true;
+    }
+    if (m_pending.hikADone && m_pending.hikBDone) {
+        finishBundleIfReady();
         return;
     }
 
     setState(
         VisionPipelineState::Capturing,
         QStringLiteral("CXP 双目采集已启动：requestId=%1").arg(request.requestId));
+}
+
+void VisionPipelineService::startPendingHikCameraCCapture()
+{
+    if (!m_pending.active || !m_pending.useHikCameraC || m_pending.hikCDone) {
+        return;
+    }
+
+    if (m_hikCameraCController == nullptr ||
+        !m_hikCameraCController->requestCapture(CaptureType::SurfaceDefect)) {
+        m_pending.hikCDone = true;
+        m_pending.bundle.hikCameraCImagePath.clear();
+        finishBundleIfReady();
+        return;
+    }
+
+    const int timeoutMs =
+        m_config.hikCaptureTimeoutMs > 0 ? m_config.hikCaptureTimeoutMs : 5000;
+    QPointer<VisionPipelineService> self(this);
+    QTimer::singleShot(timeoutMs, this, [self]() {
+        if (self != nullptr) {
+            self->onHikCameraCCaptureTimeout();
+        }
+    });
+
+    setState(
+        VisionPipelineState::Capturing,
+        QStringLiteral("海康 C 采集已触发：requestId=%1").arg(m_pending.bundle.request.requestId));
+}
+
+void VisionPipelineService::completeHikCameraCCapture(const QString& imagePath)
+{
+    if (!m_pending.active || !m_pending.useHikCameraC || m_pending.hikCDone) {
+        return;
+    }
+
+    if (imagePath.trimmed().isEmpty() || !QFile::exists(imagePath)) {
+        return;
+    }
+
+    m_pending.bundle.hikCameraCImagePath = imagePath;
+    m_pending.hikCDone = true;
+    finishBundleIfReady();
+}
+
+void VisionPipelineService::onHikCameraCCaptureTimeout()
+{
+    if (!m_pending.active || !m_pending.useHikCameraC || m_pending.hikCDone) {
+        return;
+    }
+
+    m_pending.hikCDone = true;
+    m_pending.bundle.hikCameraCImagePath.clear();
+    finishBundleIfReady();
 }
 
 void VisionPipelineService::onMechEyeCaptureFinished(scan_tracking::mech_eye::CaptureResult result)
@@ -191,14 +298,22 @@ void VisionPipelineService::onMechEyeCaptureFinished(scan_tracking::mech_eye::Ca
     m_pending.bundle.mechEyeResult = result;
     m_pending.mechDone = true;
 
-    QTimer::singleShot(kMechToHikCaptureDelayMs, this, [this]() {
-        startPendingHikCapture();
+    QPointer<VisionPipelineService> self(this);
+    QTimer::singleShot(kMechToHikCaptureDelayMs, this, [self]() {
+        if (self == nullptr || !self->m_pending.active) {
+            return;
+        }
+        if (self->m_pending.useHikCameraC) {
+            self->startPendingHikCameraCCapture();
+        } else {
+            self->startPendingHikCapture();
+        }
     });
 }
 
 void VisionPipelineService::onHikPoseCaptureFinished(scan_tracking::vision::HikPoseCaptureResult result)
 {
-    if (!m_pending.active) {
+    if (!m_pending.active || m_pending.useHikCameraC) {
         return;
     }
 
@@ -215,6 +330,45 @@ void VisionPipelineService::onHikPoseCaptureFinished(scan_tracking::vision::HikP
     finishBundleIfReady();
 }
 
+void VisionPipelineService::onHikCameraCImageReceived(
+    scan_tracking::vision::CaptureType type,
+    QString filePath,
+    qint64 fileSize)
+{
+    Q_UNUSED(type);
+    Q_UNUSED(fileSize);
+    completeHikCameraCCapture(filePath);
+}
+
+void VisionPipelineService::onHikCameraCCaptureCompleted(
+    scan_tracking::vision::CaptureType type,
+    QByteArray imageData)
+{
+    if (!m_pending.active || !m_pending.useHikCameraC || m_pending.hikCDone) {
+        return;
+    }
+
+    if (imageData.isEmpty()) {
+        return;
+    }
+
+    const QString saveDir = QStringLiteral("./smart_camera_images");
+    const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
+    const QString filePath =
+        QStringLiteral("%1/pipeline_%2_%3.jpg").arg(saveDir, captureTypeLabel(type), timestamp);
+
+    QFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly)) {
+        return;
+    }
+    if (file.write(imageData) != imageData.size()) {
+        return;
+    }
+    file.close();
+
+    completeHikCameraCCapture(filePath);
+}
+
 void VisionPipelineService::setState(VisionPipelineState state, const QString& description)
 {
     m_state = state;
@@ -223,19 +377,27 @@ void VisionPipelineService::setState(VisionPipelineState state, const QString& d
 
 void VisionPipelineService::finishBundleIfReady()
 {
-    if (!m_pending.active || !m_pending.mechDone || !m_pending.hikADone || !m_pending.hikBDone) {
+    if (!m_pending.active || !m_pending.mechDone) {
+        return;
+    }
+
+    if (m_pending.useHikCameraC) {
+        if (!m_pending.hikCDone) {
+            return;
+        }
+    } else if (!m_pending.hikADone || !m_pending.hikBDone) {
         return;
     }
 
     auto completedBundle = m_pending.bundle;
     m_pending = PendingCaptureContext{};
 
-    const bool ok = mechCapturePayloadReady(completedBundle.mechEyeResult) &&
-                    completedBundle.hikCameraAResult.success() &&
-                    completedBundle.hikCameraBResult.success();
+    const bool ok = completedBundle.success();
+    const bool partialOk = ok && !completedBundle.allCamerasOk();
     setState(
         ok ? VisionPipelineState::Ready : VisionPipelineState::Error,
-        ok ? QStringLiteral("视觉组合采集成功完成。")
+        ok ? (partialOk ? QStringLiteral("视觉组合采集完成（部分相机成功）。")
+                        : QStringLiteral("视觉组合采集成功完成。"))
            : QStringLiteral("视觉组合采集完成但有错误。"));
     emit bundleCaptureFinished(completedBundle);
 }

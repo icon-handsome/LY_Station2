@@ -188,6 +188,7 @@ private:
     bool writeIpcSafetyActionWord();
 
     void writeScanSegmentResult(int segmentIndex, int imageCount, int cloudFrameCount);
+    void writeTelescopicScanResult(int segmentIndex, int imageCount, int cloudFrameCount);
     void writeInspectionResult(const InspectionSummary& summary);
     int resolveExpectedScanSegmentCount() const;
 

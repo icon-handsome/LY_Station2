@@ -3,6 +3,7 @@
 #include <QtCore/QDateTime>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QLoggingCategory>
+#include <QtCore/QRegularExpression>
 
 #include <algorithm>
 #include <cmath>
@@ -28,6 +29,13 @@ namespace scan_tracking {
 namespace mech_eye {
 
 namespace {
+
+bool isIpv4Address(const QString& text)
+{
+    static const QRegularExpression pattern(
+        QStringLiteral(R"(^((25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(25[0-5]|2[0-4]\d|1?\d?\d)$)"));
+    return pattern.match(text.trimmed()).hasMatch();
+}
 
 bool matchesCameraKey(const QString& key, const mmind::eye::CameraInfo& cameraInfo)
 {
@@ -460,6 +468,62 @@ bool MechEyeWorker::ensureConnected(const QString& cameraKey, int timeoutMs, QSt
 
 bool MechEyeWorker::connectCamera(const QString& cameraKey, int timeoutMs, QString* errorMessage)
 {
+    const QString normalizedKey = cameraKey.trimmed();
+    const unsigned int timeout =
+        static_cast<unsigned int>(timeoutMs > 0 ? timeoutMs : 5000);
+
+    // 多网卡同网段时 discover+CameraInfo 连接会失败；按 IP 直连可绕过 SDK 网口选择问题。
+    if (isIpv4Address(normalizedKey)) {
+        setRuntimeState(
+            CameraRuntimeState::Connecting,
+            QStringLiteral("正在通过 IP 连接相机 %1").arg(normalizedKey));
+
+        mmind::eye::ErrorStatus status;
+        try {
+            status = m_impl->camera.connect(normalizedKey.toStdString(), timeout);
+        } catch (const std::exception& exception) {
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral("连接相机异常: %1")
+                    .arg(QString::fromLocal8Bit(exception.what()));
+            }
+            m_connected = false;
+            m_cameraInfo = {};
+            return false;
+        } catch (...) {
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral("连接相机异常: 未知错误");
+            }
+            m_connected = false;
+            m_cameraInfo = {};
+            return false;
+        }
+
+        if (!status.isOK()) {
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral("连接相机失败: %1")
+                    .arg(QString::fromStdString(status.errorDescription));
+            }
+            m_connected = false;
+            m_cameraInfo = {};
+            return false;
+        }
+
+        mmind::eye::CameraInfo info;
+        if (const mmind::eye::ErrorStatus infoStatus = m_impl->camera.getCameraInfo(info);
+            infoStatus.isOK()) {
+            m_cameraInfo = makeSnapshot(info, true);
+        } else {
+            m_cameraInfo = {};
+            m_cameraInfo.ipAddress = normalizedKey;
+            m_cameraInfo.connected = true;
+        }
+
+        m_connected = true;
+        m_impl->camera.setHeartbeatInterval(5000);
+        printCameraParameters();
+        return true;
+    }
+
     setRuntimeState(CameraRuntimeState::Discovering, QStringLiteral("正在搜索相机"));
 
     try {
@@ -494,13 +558,13 @@ bool MechEyeWorker::connectCamera(const QString& cameraKey, int timeoutMs, QStri
     const auto selectedIt = std::find_if(
         m_impl->discoveredCameras.begin(),
         m_impl->discoveredCameras.end(),
-        [&cameraKey](const mmind::eye::CameraInfo& info) {
-            return cameraKey.trimmed().isEmpty() || matchesCameraKey(cameraKey, info);
+        [&normalizedKey](const mmind::eye::CameraInfo& info) {
+            return normalizedKey.isEmpty() || matchesCameraKey(normalizedKey, info);
         });
 
     if (selectedIt == m_impl->discoveredCameras.end()) {
         if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral("未找到匹配的相机: %1").arg(cameraKey);
+            *errorMessage = QStringLiteral("未找到匹配的相机: %1").arg(normalizedKey);
         }
         return false;
     }

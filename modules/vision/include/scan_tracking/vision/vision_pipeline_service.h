@@ -1,6 +1,6 @@
 #pragma once
 
-// 多相机视觉流水线：Mech-Eye + 海康 CXP 双目组合采集。
+// 多相机视觉流水线：Mech-Eye + 海康 CXP 双目，或临时 Mech-Eye + 海康智能 C。
 
 #include <QtCore/QObject>
 
@@ -12,6 +12,7 @@ namespace scan_tracking {
 namespace vision {
 
 class HikCxpCameraService;
+class HikCameraCController;
 
 class VisionPipelineService : public QObject {
     Q_OBJECT
@@ -21,6 +22,7 @@ public:
         scan_tracking::mech_eye::MechEyeService* mechEyeService,
         HikCxpCameraService* hikCameraAService,
         HikCxpCameraService* hikCameraBService,
+        HikCameraCController* hikCameraCController = nullptr,
         QObject* parent = nullptr);
     ~VisionPipelineService() override = default;
 
@@ -44,6 +46,8 @@ signals:
 private slots:
     void onMechEyeCaptureFinished(scan_tracking::mech_eye::CaptureResult result);
     void onHikPoseCaptureFinished(scan_tracking::vision::HikPoseCaptureResult result);
+    void onHikCameraCImageReceived(scan_tracking::vision::CaptureType type, QString filePath, qint64 fileSize);
+    void onHikCameraCCaptureCompleted(scan_tracking::vision::CaptureType type, QByteArray imageData);
 
 private:
     struct PendingCaptureContext {
@@ -51,6 +55,8 @@ private:
         bool mechDone = false;
         bool hikADone = false;
         bool hikBDone = false;
+        bool hikCDone = false;
+        bool useHikCameraC = false;
         quint64 mechRequestId = 0;
         quint64 hikARequestId = 0;
         quint64 hikBRequestId = 0;
@@ -60,11 +66,15 @@ private:
     static void registerMetaTypes();
     void setState(VisionPipelineState state, const QString& description);
     void startPendingHikCapture();
+    void startPendingHikCameraCCapture();
+    void completeHikCameraCCapture(const QString& imagePath);
+    void onHikCameraCCaptureTimeout();
     void finishBundleIfReady();
 
     scan_tracking::mech_eye::MechEyeService* m_mechEyeService = nullptr;
     HikCxpCameraService* m_hikCameraAService = nullptr;
     HikCxpCameraService* m_hikCameraBService = nullptr;
+    HikCameraCController* m_hikCameraCController = nullptr;
     scan_tracking::common::VisionConfig m_config;
     PendingCaptureContext m_pending;
     quint64 m_nextRequestId = 1;

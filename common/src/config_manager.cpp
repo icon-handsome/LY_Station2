@@ -240,6 +240,21 @@ const ScanPointConfig* ConfigManager::findScanPointByIndex(int segmentIndex) con
     return nullptr;
 }
 
+QString ConfigManager::segmentKindForPointIndex(int segmentIndex) const
+{
+    for (const auto& path : m_scanPathsConfig.scanPaths) {
+        if (!path.enabled) {
+            continue;
+        }
+        for (const auto& point : path.points) {
+            if (point.pointIndex == segmentIndex) {
+                return path.segmentKind;
+            }
+        }
+    }
+    return QStringLiteral("external");
+}
+
 int ConfigManager::enabledScanPointCount() const
 {
     // 累加所有已启用路径的 points 数量；JSON 未加载或全禁用时为 0

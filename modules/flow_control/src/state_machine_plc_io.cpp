@@ -157,12 +157,17 @@ bool StateMachine::clearScanSegmentDoneRegisters()
         return false;
     }
 
-    const bool cleared =
+    const bool clearedSegment =
         m_modbus->writeRegisters(protocol::registers::kScanSegmentDoneIndex, {0, 0, 0});
-    if (!cleared) {
+    const bool clearedTelescopic =
+        m_modbus->writeRegisters(protocol::registers::kTelescopicScanDoneIndex, {0, 0, 0});
+    if (!clearedSegment) {
         qWarning(LOG_FLOW).noquote() << QStringLiteral("清除扫描分段完成索引失败");
     }
-    return cleared;
+    if (!clearedTelescopic) {
+        qWarning(LOG_FLOW).noquote() << QStringLiteral("清除伸缩杆扫描完成索引失败");
+    }
+    return clearedSegment && clearedTelescopic;
 }
 
 bool StateMachine::clearIpcSafetyActionWord()
@@ -190,6 +195,21 @@ void StateMachine::writeScanSegmentResult(int segmentIndex, int imageCount, int 
             static_cast<quint16>(cloudFrameCount),
         })) {
         qWarning(LOG_FLOW).noquote() << QStringLiteral("写入扫描分段进度失败");
+    }
+}
+
+void StateMachine::writeTelescopicScanResult(int segmentIndex, int imageCount, int cloudFrameCount)
+{
+    if (!m_modbus) {
+        return;
+    }
+
+    if (!m_modbus->writeRegisters(protocol::registers::kTelescopicScanDoneIndex, {
+            static_cast<quint16>(segmentIndex),
+            static_cast<quint16>(imageCount),
+            static_cast<quint16>(cloudFrameCount),
+        })) {
+        qWarning(LOG_FLOW).noquote() << QStringLiteral("写入伸缩杆扫描分段进度失败");
     }
 }
 

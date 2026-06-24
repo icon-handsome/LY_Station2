@@ -101,6 +101,7 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
             << "Flow_Enable=" << values.value(regs::kFlowEnable)
             << "ScanSegmentIndex=" << protocol::registers::resolveScanSegmentIndexFromBlock(values)
             << "Trig_ScanSegment=" << values.value(regs::modbusIndexFromPlcAddress(40023))
+            << "Trig_TelescopicScan=" << values.value(regs::kTrigTelescopicScan)
             << "Trig_Inspection=" << values.value(regs::modbusIndexFromPlcAddress(40024))
             << "TaskIdHigh=" << values.value(regs::kTaskIdHigh)
             << "TaskIdLow=" << values.value(regs::kTaskIdLow);
@@ -112,20 +113,30 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
             "Safety_Status_Word", "Cmd_StartAuto", "Cmd_Pause", "Cmd_Stop", "Cmd_Reset",
             "Cmd_ClearAlarms", "TaskId_H", "TaskId_L", "ProductType", "RecipeId",
             "ScanSegmentIndex", "ScanSegmentIndex_Robot", "RequestTimeout_s", "Robot_Status_Word",
-            "Reserved_19", "Trig_LoadGrasp", "Trig_StationMaterialCheck", "Trig_PoseCheck",
+            "Reserved_CmdExt_19", "Trig_LoadGrasp", "Trig_StationMaterialCheck", "Trig_PoseCheck",
             "Trig_ScanSegment", "Trig_Inspection", "Trig_UnloadCalc", "Trig_SelfCheck",
             "Trig_CodeRead", "Trig_ResultReset",
+            "RobotTcpX_w0", "RobotTcpX_w1", "RobotTcpY_w0", "RobotTcpY_w1", "RobotTcpZ_w0",
+            "RobotTcpZ_w1", "RobotTcpRx_w0", "RobotTcpRx_w1", "RobotTcpRy_w0", "RobotTcpRy_w1",
+            "RobotTcpRz_w0", "RobotTcpRz_w1",
+            "TelescopicRodStatus", "RollerSetFreqHz", "RollerRunFreqHz", "ElectromagnetStatus",
+            "EstopButtonStatus", "Trig_TelescopicScan", "Reserved_CmdExt_47", "Reserved_CmdExt_48",
+            "Reserved_CmdExt_49", "Reserved_CmdExt_50",
         };
         constexpr int kNameCount = sizeof(kRegisterNames) / sizeof(kRegisterNames[0]);
         const int compareCount = qMin(previousCommandBlock.size(),
                                       qMin(values.size(), protocol::registers::kCommandBlockSize));
 
         QStringList changedFields;
+        bool changedInLogDumpRange = false;
         for (int index = 0; index < compareCount; ++index) {
             const quint16 oldValue = previousCommandBlock.value(index);
             const quint16 newValue = values.value(index);
             if (oldValue == newValue) {
                 continue;
+            }
+            if (index <= protocol::registers::kCommandBlockLogDumpMaxIndex) {
+                changedInLogDumpRange = true;
             }
             const char* name = (index < kNameCount) ? kRegisterNames[index] : "?";
             changedFields << QStringLiteral("  [%1] %2: %3")
@@ -136,6 +147,16 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
         if (!changedFields.isEmpty()) {
             qInfo(LOG_FLOW).noquote()
                 << QStringLiteral("=== PLC 寄存器变化 ===") << "\n" << changedFields.join(QStringLiteral("\n"));
+            if (changedInLogDumpRange) {
+                qInfo(LOG_FLOW).noquote()
+                    << QStringLiteral("=== 命令块全量 [40000-40050] ===") << "\n"
+                    << formatCommandBlockSnapshotForLog(
+                           values,
+                           protocol::registers::kCommandBlockStart,
+                           protocol::registers::kCommandBlockLogDumpMaxIndex,
+                           kRegisterNames,
+                           kNameCount);
+            }
         }
     }
 
@@ -345,7 +366,7 @@ void StateMachine::onProcessTimeout()
     setAlarm(2, 610, QStringLiteral("任务超时"));
     m_activeTask.captureRequestId = 0;
 
-    if (m_activeTask.definition->stage == protocol::Stage::ScanSegment) {
+    if (isScanCaptureStage(m_activeTask.definition->stage)) {
         completeScanSegmentCapture(6, 0, 0, protocol::AckState::Failed, false);
         return;
     }
@@ -422,6 +443,8 @@ void StateMachine::finalizeCompletedTaskIfTriggerReleased(const QVector<quint16>
     const protocol::TriggerDefinition& definition = *m_activeTask.definition;
     if (definition.stage == protocol::Stage::ScanSegment) {
         writeScanSegmentResult(0, 0, 0);
+    } else if (definition.stage == protocol::Stage::TelescopicScan) {
+        writeTelescopicScanResult(0, 0, 0);
     }
 
     if (m_modbus) {
@@ -513,6 +536,8 @@ void StateMachine::abortActiveTaskForFault(quint16 resultCode)
 
     if (m_activeTask.definition->stage == protocol::Stage::ScanSegment) {
         writeScanSegmentResult(m_activeTask.scanSegmentIndex, 0, 0);
+    } else if (m_activeTask.definition->stage == protocol::Stage::TelescopicScan) {
+        writeTelescopicScanResult(m_activeTask.scanSegmentIndex, 0, 0);
     }
 
     if (m_modbus && m_modbus->isConnected()) {

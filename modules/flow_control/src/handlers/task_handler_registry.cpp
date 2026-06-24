@@ -6,6 +6,7 @@
 #include "scan_tracking/flow_control/handlers/pose_check_handler.h"
 #include "scan_tracking/flow_control/handlers/result_reset_handler.h"
 #include "scan_tracking/flow_control/handlers/scan_segment_handler.h"
+#include "scan_tracking/flow_control/handlers/telescopic_scan_handler.h"
 #include "scan_tracking/flow_control/handlers/self_check_handler.h"
 #include "scan_tracking/flow_control/handlers/station_material_check_handler.h"
 #include "scan_tracking/flow_control/handlers/unload_calc_handler.h"
@@ -18,6 +19,7 @@ TaskHandlerRegistry::TaskHandlerRegistry()
     registerHandler(std::make_unique<LoadGraspHandler>());
     registerHandler(std::make_unique<StationMaterialCheckHandler>());
     registerHandler(std::make_unique<PoseCheckHandler>());
+    registerHandler(std::make_unique<TelescopicScanHandler>());
     registerHandler(std::make_unique<ScanSegmentHandler>());
     registerHandler(std::make_unique<InspectionHandler>());
     registerHandler(std::make_unique<UnloadCalcHandler>());

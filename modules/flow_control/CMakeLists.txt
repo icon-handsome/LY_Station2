@@ -13,7 +13,9 @@ add_library(scan_tracking_flow_control STATIC
     include/scan_tracking/flow_control/handlers/load_grasp_handler.h
     include/scan_tracking/flow_control/handlers/pose_check_handler.h
     include/scan_tracking/flow_control/handlers/result_reset_handler.h
+    include/scan_tracking/flow_control/handlers/scan_capture_common.h
     include/scan_tracking/flow_control/handlers/scan_segment_handler.h
+    include/scan_tracking/flow_control/handlers/telescopic_scan_handler.h
     include/scan_tracking/flow_control/handlers/self_check_handler.h
     include/scan_tracking/flow_control/handlers/station_material_check_handler.h
     include/scan_tracking/flow_control/handlers/unload_calc_handler.h
@@ -32,7 +34,9 @@ add_library(scan_tracking_flow_control STATIC
     src/handlers/load_grasp_handler.cpp
     src/handlers/pose_check_handler.cpp
     src/handlers/result_reset_handler.cpp
+    src/handlers/scan_capture_common.cpp
     src/handlers/scan_segment_handler.cpp
+    src/handlers/telescopic_scan_handler.cpp
     src/handlers/self_check_handler.cpp
     src/handlers/station_material_check_handler.cpp
     src/handlers/task_handler_registry.cpp

@@ -311,7 +311,7 @@ void ConsoleRuntime::initModules()
         : scan_tracking::common::VisionConfig{};
 
     if (!visionConfig.hikCxpEnabled) {
-        qCritical(appLog) << QStringLiteral("hikCxpEnabled=false，CXP 双目未启动；请在 config.ini [Vision] 中启用。");
+        qInfo(appLog) << QStringLiteral("CXP 双目已跳过（hikCxpEnabled=false），组合采集使用梅卡 + 海康智能 C。");
     } else {
         // CXP 左/右目各一个 HikCxpCameraService 实例，roleName 区分 ch250_a / ch250_b
         hikCxpCameraAService_ = std::make_unique<scan_tracking::vision::HikCxpCameraService>(
@@ -392,7 +392,8 @@ void ConsoleRuntime::initModules()
     visionPipelineService_ = std::make_unique<scan_tracking::vision::VisionPipelineService>(
         mechEyeService_.get(),
         hikCxpCameraAService_.get(),
-        hikCxpCameraBService_.get());
+        hikCxpCameraBService_.get(),
+        hikCameraCController_.get());
 
     QObject::connect(
         visionPipelineService_.get(),
