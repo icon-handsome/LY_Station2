@@ -1,9 +1,9 @@
 #include "scan_tracking/flow_control/scan_segment_cache.h"
 
 #include "scan_tracking/common/capture_cache_paths.h"
-#include "scan_tracking/orbbec_gemini/orbbec_capture_io.h"
+#include "scan_tracking/mech_eye/point_cloud_io.h"
+#include "scan_tracking/vision/hik_mono_io.h"
 
-#include <QtCore/QFile>
 #include <QtCore/QLoggingCategory>
 
 #include <algorithm>
@@ -11,32 +11,6 @@
 Q_LOGGING_CATEGORY(LOG_SCAN_CACHE, "flow_control.scan_cache")
 
 namespace scan_tracking::flow_control {
-
-namespace {
-
-bool copyCaptureFile(const QString& sourcePath, const QString& destPath, QString* errorMessage)
-{
-    if (sourcePath.trimmed().isEmpty() || destPath.trimmed().isEmpty()) {
-        return false;
-    }
-    if (QFile::exists(destPath)) {
-        if (!QFile::remove(destPath)) {
-            if (errorMessage != nullptr) {
-                *errorMessage = QStringLiteral("无法覆盖已有文件：%1").arg(destPath);
-            }
-            return false;
-        }
-    }
-    if (!QFile::copy(sourcePath, destPath)) {
-        if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral("复制失败 %1 -> %2").arg(sourcePath, destPath);
-        }
-        return false;
-    }
-    return true;
-}
-
-}  // namespace
 
 void ScanSegmentCache::reset()
 {
@@ -163,14 +137,6 @@ bool persistScanSegmentBundle(
         return false;
     }
 
-    const auto& orbbec = bundle.orbbecResult;
-    if (!vision::orbbecCapturePayloadReady(orbbec)) {
-        if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral("Orbbec 采集结果无效：段 %1").arg(segmentIndex);
-        }
-        return false;
-    }
-
     bool ok = true;
     QString firstError;
 
@@ -181,28 +147,43 @@ bool persistScanSegmentBundle(
         }
     };
 
-    const QString destPly = scan_tracking::orbbec_gemini::buildSegmentOrbbecPlyPath(
-        runRoot, segmentIndex, taskId, timestamp);
-    if (destPly.isEmpty() ||
-        !copyCaptureFile(orbbec.pointCloudPlyPath, destPly, &firstError)) {
-        recordFailure(QStringLiteral("Orbbec 点云落盘失败：段 %1").arg(segmentIndex));
-    }
-
-    if (!orbbec.depthRawPngPath.trimmed().isEmpty()) {
-        const QString destRaw = scan_tracking::orbbec_gemini::buildSegmentOrbbecDepthRawPath(
+    if (bundle.mechEyeResult.pointCloud.isValid()) {
+        const QString plyPath = scan_tracking::mech_eye::buildSegmentPlyPath(
             runRoot, segmentIndex, taskId, timestamp);
-        if (destRaw.isEmpty() ||
-            !copyCaptureFile(orbbec.depthRawPngPath, destRaw, &firstError)) {
-            recordFailure(QStringLiteral("Orbbec 深度图落盘失败：段 %1").arg(segmentIndex));
+        if (plyPath.isEmpty() ||
+            !scan_tracking::mech_eye::savePointCloudFrameToPly(
+                bundle.mechEyeResult.pointCloud, plyPath)) {
+            recordFailure(QStringLiteral("Mech-Eye 点云落盘失败：段 %1").arg(segmentIndex));
         }
     }
 
-    if (!orbbec.depthPreviewPngPath.trimmed().isEmpty()) {
-        const QString destPreview = scan_tracking::orbbec_gemini::buildSegmentOrbbecDepthPreviewPath(
+    if (bundle.mechEyeResult.texture2D.isValid()) {
+        const QString pngPath = scan_tracking::mech_eye::buildSegmentMech2DPngPath(
             runRoot, segmentIndex, taskId, timestamp);
-        if (destPreview.isEmpty() ||
-            !copyCaptureFile(orbbec.depthPreviewPngPath, destPreview, &firstError)) {
-            recordFailure(QStringLiteral("Orbbec 深度预览落盘失败：段 %1").arg(segmentIndex));
+        if (pngPath.isEmpty() ||
+            !scan_tracking::mech_eye::saveGrayTextureFrameToPng(
+                bundle.mechEyeResult.texture2D, pngPath)) {
+            recordFailure(QStringLiteral("Mech-Eye 2D 落盘失败：段 %1").arg(segmentIndex));
+        }
+    }
+
+    if (bundle.hikCameraAResult.success()) {
+        const QString bmpPath = scan_tracking::vision::buildSegmentHikMonoPath(
+            runRoot, segmentIndex, taskId, QStringLiteral("hikA"), timestamp);
+        if (bmpPath.isEmpty() ||
+            !scan_tracking::vision::saveHikMonoFrameToBmp(
+                bundle.hikCameraAResult.frame, bmpPath)) {
+            recordFailure(QStringLiteral("海康 A 落盘失败：段 %1").arg(segmentIndex));
+        }
+    }
+
+    if (bundle.hikCameraBResult.success()) {
+        const QString bmpPath = scan_tracking::vision::buildSegmentHikMonoPath(
+            runRoot, segmentIndex, taskId, QStringLiteral("hikB"), timestamp);
+        if (bmpPath.isEmpty() ||
+            !scan_tracking::vision::saveHikMonoFrameToBmp(
+                bundle.hikCameraBResult.frame, bmpPath)) {
+            recordFailure(QStringLiteral("海康 B 落盘失败：段 %1").arg(segmentIndex));
         }
     }
 
@@ -216,7 +197,7 @@ bool persistScanSegmentBundle(
     }
 
     qInfo(LOG_SCAN_CACHE).noquote()
-        << QStringLiteral("段 %1 已落盘至 %2/orbbec").arg(segmentIndex).arg(runRoot);
+        << QStringLiteral("段 %1 已落盘至 %2").arg(segmentIndex).arg(runRoot);
     return true;
 }
 

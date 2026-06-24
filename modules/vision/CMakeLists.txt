@@ -37,7 +37,7 @@ target_link_libraries(scan_tracking_vision
         Qt5::Core
         Qt5::Network
         scan_tracking_common
-        scan_tracking_orbbec_gemini
+        scan_tracking_mech_eye
     PRIVATE
         HikMvsSdk::MvCameraControl
 )

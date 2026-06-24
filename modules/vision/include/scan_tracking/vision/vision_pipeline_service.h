@@ -1,26 +1,30 @@
 #pragma once
 
-// 第二工位视觉流水线：Orbbec Gemini 深度/点云分段采集。
+// 多相机视觉流水线：Mech-Eye + 海康 CXP 双目组合采集。
 
 #include <QtCore/QObject>
 
 #include "scan_tracking/common/config_manager.h"
-#include "scan_tracking/orbbec_gemini/orbbec_gemini_service.h"
+#include "scan_tracking/mech_eye/mech_eye_service.h"
 #include "scan_tracking/vision/vision_types.h"
 
 namespace scan_tracking {
 namespace vision {
 
+class HikCxpCameraService;
+
 class VisionPipelineService : public QObject {
     Q_OBJECT
 
 public:
-    explicit VisionPipelineService(
-        orbbec_gemini::OrbbecGeminiService* orbbecService,
+    VisionPipelineService(
+        scan_tracking::mech_eye::MechEyeService* mechEyeService,
+        HikCxpCameraService* hikCameraAService,
+        HikCxpCameraService* hikCameraBService,
         QObject* parent = nullptr);
     ~VisionPipelineService() override = default;
 
-    void start(const scan_tracking::common::OrbbecGeminiConfig& config);
+    void start(const scan_tracking::common::VisionConfig& config);
     void stop();
 
     bool isStarted() const { return m_started; }
@@ -29,7 +33,8 @@ public:
     quint64 requestCaptureBundle(
         int segmentIndex,
         quint32 taskId,
-        bool needColorCapture = false);
+        scan_tracking::mech_eye::CaptureMode mechCaptureMode =
+            scan_tracking::mech_eye::CaptureMode::Capture3DOnly);
 
 signals:
     void bundleCaptureFinished(scan_tracking::vision::MultiCameraCaptureBundle bundle);
@@ -37,21 +42,30 @@ signals:
     void fatalError(scan_tracking::vision::VisionErrorCode code, QString message);
 
 private slots:
-    void onOrbbecCaptureFinished(scan_tracking::orbbec_gemini::OrbbecCaptureResult result);
+    void onMechEyeCaptureFinished(scan_tracking::mech_eye::CaptureResult result);
+    void onHikPoseCaptureFinished(scan_tracking::vision::HikPoseCaptureResult result);
 
 private:
     struct PendingCaptureContext {
         bool active = false;
-        quint64 orbbecRequestId = 0;
+        bool mechDone = false;
+        bool hikADone = false;
+        bool hikBDone = false;
+        quint64 mechRequestId = 0;
+        quint64 hikARequestId = 0;
+        quint64 hikBRequestId = 0;
         scan_tracking::vision::MultiCameraCaptureBundle bundle;
     };
 
     static void registerMetaTypes();
     void setState(VisionPipelineState state, const QString& description);
-    void finishCapture(const scan_tracking::orbbec_gemini::OrbbecCaptureResult& result);
+    void startPendingHikCapture();
+    void finishBundleIfReady();
 
-    orbbec_gemini::OrbbecGeminiService* m_orbbecService = nullptr;
-    scan_tracking::common::OrbbecGeminiConfig m_config;
+    scan_tracking::mech_eye::MechEyeService* m_mechEyeService = nullptr;
+    HikCxpCameraService* m_hikCameraAService = nullptr;
+    HikCxpCameraService* m_hikCameraBService = nullptr;
+    scan_tracking::common::VisionConfig m_config;
     PendingCaptureContext m_pending;
     quint64 m_nextRequestId = 1;
     bool m_started = false;

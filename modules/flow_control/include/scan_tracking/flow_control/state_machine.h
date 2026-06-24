@@ -15,12 +15,13 @@
 #include "scan_tracking/flow_control/plc_protocol.h"
 #include "scan_tracking/flow_control/scan_segment_cache.h"
 #include "scan_tracking/flow_control/task_handler_context.h"
+#include "scan_tracking/mech_eye/mech_eye_types.h"
 #include "scan_tracking/modbus/modbus_service.h"
 #include "scan_tracking/vision/vision_types.h"
 
 namespace scan_tracking {
-namespace orbbec_gemini {
-class OrbbecGeminiService;
+namespace mech_eye {
+class MechEyeService;
 }
 namespace vision {
 class VisionPipelineService;
@@ -42,7 +43,7 @@ class StateMachine : public QObject, public PlcTaskHost {
 public:
     explicit StateMachine(
         modbus::ModbusService* modbusService,
-        orbbec_gemini::OrbbecGeminiService* orbbecGeminiService = nullptr,
+        mech_eye::MechEyeService* mechEyeService = nullptr,
         vision::VisionPipelineService* visionPipelineService = nullptr,
         QObject* parent = nullptr);
     ~StateMachine();
@@ -77,7 +78,7 @@ public:
 
     // --- PlcTaskHost（供 Handler 调用）---
     modbus::ModbusService* modbusService() const override;
-    orbbec_gemini::OrbbecGeminiService* orbbecGeminiService() const override;
+    mech_eye::MechEyeService* mechEyeService() const override;
     vision::VisionPipelineService* visionPipelineService() const override;
     bool isModbusConnected() const override;
 
@@ -153,6 +154,7 @@ private slots:
     void onModbusConnected();
     void onModbusDisconnected();
     void onModbusError(const QString& errorString);
+    void onMechEyeFatalError(mech_eye::CaptureErrorCode code, QString message);
     void onVisionPipelineFatalError(vision::VisionErrorCode code, QString message);
     void onBundleCaptureFinished(vision::MultiCameraCaptureBundle bundle);
     void onProcessTimeout();
@@ -193,7 +195,7 @@ private:
     quint16 resolveScanSegmentIndex(const QVector<quint16>& commandBlock) const;
 
     modbus::ModbusService* m_modbus = nullptr;
-    orbbec_gemini::OrbbecGeminiService* m_orbbecGemini = nullptr;
+    mech_eye::MechEyeService* m_mechEye = nullptr;
     vision::VisionPipelineService* m_visionPipeline = nullptr;
     QTimer* m_pollTimer = nullptr;
     QTimer* m_heartbeatTimer = nullptr;

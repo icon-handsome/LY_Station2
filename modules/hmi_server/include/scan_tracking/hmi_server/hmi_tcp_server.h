@@ -28,7 +28,7 @@ QT_END_NAMESPACE
 
 namespace scan_tracking {
 namespace modbus { class ModbusService; }
-namespace orbbec_gemini { class OrbbecGeminiService; }
+namespace mech_eye { class MechEyeService; }
 namespace flow_control { class StateMachine; }
 namespace vision {
 class HikCxpCameraService;
@@ -86,7 +86,7 @@ public:
     // --- 设置服务依赖（在 start() 之前调用） ---
     void setStateMachine(flow_control::StateMachine* sm);
     void setModbusService(modbus::ModbusService* svc);
-    void setOrbbecGeminiService(orbbec_gemini::OrbbecGeminiService* svc);
+    void setMechEyeService(mech_eye::MechEyeService* svc);
     void setVisionPipelineService(vision::VisionPipelineService* svc);
     void setHikCameraServices(vision::HikCxpCameraService* hikA, vision::HikCxpCameraService* hikB,
                               vision::HikCameraService* hikC = nullptr);
@@ -204,7 +204,7 @@ private:
     QJsonObject buildCameraStatusPayload() const;
 
     /// 梅卡 connected 语义（与 buildCameraStatusPayload 一致，采图过程仍视为已连接）
-    bool orbbecGeminiConnected() const;
+    bool mechEyeConnected() const;
 
     /// 海康 C：SDK 已连接或智能相机 TCP 已接入视为在线（与 A/B 的 isConnected 语义对齐显控）
     bool hikCameraCConnected() const;
@@ -255,8 +255,8 @@ private:
     /// 绑定 Modbus 底层通信抛出的断连、超时等信号，组装 JSON 转发到 Qt 端
     void connectModbusSignals();
     
-    /// 绑定 Orbbec Gemini 相机采集与状态信号
-    void connectOrbbecGeminiSignals();
+    /// 绑定 MechEye 3D 相机抛出的采集完成或故障信号
+    void connectMechEyeSignals();
     
     /// 绑定视觉流水线抛出的多相机 Bundle 采集完成信号
     void connectVisionPipelineSignals();
@@ -308,7 +308,7 @@ private:
 
     /// 相机 connected 边沿缓存（与 status.camera 判定一致，用于连/断 alarm）
     struct CameraConnectivityCache {
-        bool orbbecGemini = false;
+        bool mechEye = false;
         bool hikA = false;
         bool hikB = false;
         bool hikC = false;
@@ -332,7 +332,7 @@ private:
     // --- 服务依赖指针 ---
     flow_control::StateMachine* m_stateMachine = nullptr;
     modbus::ModbusService* m_modbusService = nullptr;
-    orbbec_gemini::OrbbecGeminiService* m_orbbecGeminiService = nullptr;
+    mech_eye::MechEyeService* m_mechEyeService = nullptr;
     vision::VisionPipelineService* m_visionPipeline = nullptr;
     vision::HikCxpCameraService* m_hikCameraA = nullptr;
     vision::HikCxpCameraService* m_hikCameraB = nullptr;

@@ -26,6 +26,7 @@ target_link_libraries(scan_tracking
         Qt5::Network
         scan_tracking_common
         Qt5::Gui
+        scan_tracking_mech_eye
         scan_tracking_orbbec_gemini
         scan_tracking_livox_mid360
         scan_tracking_tfmini_plus
@@ -53,8 +54,10 @@ if(EXISTS "${CMAKE_PREFIX_PATH}/bin/windeployqt.exe")
     )
 endif()
 
+scan_tracking_deploy_mech_eye_runtime(scan_tracking)
 scan_tracking_deploy_orbbec_runtime(scan_tracking)
 scan_tracking_deploy_livox_runtime(scan_tracking)
+scan_tracking_deploy_hik_mvs_runtime(scan_tracking)
 
 if(QT_VERSION_MAJOR EQUAL 6)
     qt_finalize_executable(scan_tracking)

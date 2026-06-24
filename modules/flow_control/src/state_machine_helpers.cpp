@@ -113,15 +113,18 @@ PoseSourceResult parsePoseSource(
 void countBundleFrames(const vision::MultiCameraCaptureBundle& bundle, int* imageCount, int* cloudFrameCount)
 {
     int images = 0;
-    if (!bundle.orbbecResult.depthPreviewPngPath.trimmed().isEmpty()) {
+    if (bundle.hikCameraAResult.success()) {
         ++images;
     }
-    if (!bundle.orbbecResult.depthRawPngPath.trimmed().isEmpty()) {
+    if (bundle.hikCameraBResult.success()) {
+        ++images;
+    }
+    if (bundle.mechEyeResult.texture2D.isValid()) {
         ++images;
     }
 
     int clouds = 0;
-    if (vision::orbbecCapturePayloadReady(bundle.orbbecResult)) {
+    if (bundle.mechEyeResult.pointCloud.isValid()) {
         clouds = 1;
     }
 

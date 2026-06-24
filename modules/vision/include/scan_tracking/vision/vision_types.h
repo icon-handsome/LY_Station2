@@ -1,6 +1,6 @@
 #pragma once
 
-// 视觉域共享类型：第二工位 Orbbec Gemini 分段采集。
+// 视觉域共享类型：Mech-Eye + 海康 CXP 双目组合采集。
 
 #include <array>
 #include <cstdint>
@@ -11,7 +11,7 @@
 #include <QtCore/QString>
 #include <QtCore/QtGlobal>
 
-#include "scan_tracking/orbbec_gemini/orbbec_gemini_types.h"
+#include "scan_tracking/mech_eye/mech_eye_types.h"
 
 namespace scan_tracking {
 namespace vision {
@@ -122,30 +122,31 @@ enum class CaptureType {
     NumberRecognition = 2,
 };
 
-inline bool orbbecCapturePayloadReady(const orbbec_gemini::OrbbecCaptureResult& result)
-{
-    return result.errorCode == orbbec_gemini::OrbbecCaptureErrorCode::Success
-           && result.pointCloudPointCount > 0
-           && !result.pointCloudPlyPath.trimmed().isEmpty();
-}
-
 struct MultiCameraCaptureRequest {
     quint64 requestId = 0;
     quint32 taskId = 0;
     int segmentIndex = 0;
-    /// 对应 scan_paths needRotation：预留彩色/2D 扩展，当前 Orbbec 主流程采集深度+点云。
-    bool needColorCapture = false;
-    int orbbecTimeoutMs = 5000;
-    bool saveToDisk = true;
+    bool needMechEye2D = false;
+    scan_tracking::mech_eye::CaptureMode mechCaptureMode =
+        scan_tracking::mech_eye::CaptureMode::Capture3DOnly;
+    QString mechEyeCameraKey;
+    int mechEyeTimeoutMs = 5000;
+    QString hikCameraAKey;
+    QString hikCameraBKey;
+    int hikTimeoutMs = 1000;
 };
 
 struct MultiCameraCaptureBundle {
     MultiCameraCaptureRequest request;
-    orbbec_gemini::OrbbecCaptureResult orbbecResult;
+    scan_tracking::mech_eye::CaptureResult mechEyeResult;
+    HikPoseCaptureResult hikCameraAResult;
+    HikPoseCaptureResult hikCameraBResult;
 
     bool success() const
     {
-        return orbbecCapturePayloadReady(orbbecResult);
+        return mechEyeResult.success() &&
+               hikCameraAResult.success() &&
+               hikCameraBResult.success();
     }
 
     QString summary() const
@@ -154,12 +155,13 @@ struct MultiCameraCaptureBundle {
             return ok ? QStringLiteral("成功") : QStringLiteral("失败");
         };
         return QStringLiteral(
-                   "Orbbec 采集 requestId=%1 taskId=%2 段号=%3 Orbbec=%4 点数=%5")
+                   "组合采集 requestId=%1 taskId=%2 段号=%3 梅卡=%4 海康A=%5 海康B=%6")
             .arg(request.requestId)
             .arg(request.taskId)
             .arg(request.segmentIndex)
-            .arg(flag(success()))
-            .arg(orbbecResult.pointCloudPointCount);
+            .arg(flag(mechEyeResult.success()))
+            .arg(flag(hikCameraAResult.success()))
+            .arg(flag(hikCameraBResult.success()));
     }
 };
 

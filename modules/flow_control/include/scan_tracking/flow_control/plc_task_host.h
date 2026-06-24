@@ -10,8 +10,8 @@ namespace scan_tracking {
 namespace modbus {
 class ModbusService;
 }
-namespace orbbec_gemini {
-class OrbbecGeminiService;
+namespace mech_eye {
+class MechEyeService;
 }
 namespace vision {
 class VisionPipelineService;
@@ -38,7 +38,7 @@ public:
     virtual ~PlcTaskHost() = default;
 
     virtual modbus::ModbusService* modbusService() const = 0;
-    virtual orbbec_gemini::OrbbecGeminiService* orbbecGeminiService() const = 0;
+    virtual mech_eye::MechEyeService* mechEyeService() const = 0;
     virtual vision::VisionPipelineService* visionPipelineService() const = 0;
     virtual bool isModbusConnected() const = 0;
 
