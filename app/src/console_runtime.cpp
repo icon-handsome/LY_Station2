@@ -23,13 +23,9 @@
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/common/logger.h"
 #include "scan_tracking/flow_control/state_machine.h"
-#include "scan_tracking/mech_eye/mech_eye_service.h"
-#include "scan_tracking/mech_eye/mech_eye_types.h"
 #include "scan_tracking/modbus/modbus_service.h"
 #include "scan_tracking/flow_control/inspection_types.h"
-#include "scan_tracking/vision/hik_cxp_camera_service.h"
 #include "scan_tracking/vision/vision_pipeline_service.h"
-#include "scan_tracking/vision/hik_camera_c_controller.h"
 #include "scan_tracking/vision/vision_types.h"
 #include "scan_tracking/hmi_server/hmi_tcp_server.h"
 
@@ -104,7 +100,7 @@ void ConsoleRuntime::initModules()
         }
     }
     qInfo(appLog) << QStringLiteral("启动阶段 =") << startupStage
-                  << QStringLiteral(" (0=Modbus, 1=+MechEye, 2=+Hik, 3=+VisionPipeline, 4=+Tracking, 5=+StateMachine)");
+                  << QStringLiteral(" (0=Modbus, 1=+Orbbec, 2=+VisionPipeline, 3=+AuxDevices, 5=+StateMachine)");
 
     modbusService_ = std::make_unique<scan_tracking::modbus::ModbusService>(&application_);
     qInfo(appLog) << "Modbus 服务已创建。";
@@ -118,7 +114,6 @@ void ConsoleRuntime::initModules()
         qInfo(appLog) << "所有模块已初始化。";
         return;
     }
-    // MechEye 服务先启动，保证后续状态机和视觉集成层都能复用同一份点云采集入口。
     const auto* configManager = scan_tracking::common::ConfigManager::instance();
     if (configManager != nullptr) {
         const auto& profile = configManager->stationProfile();
@@ -139,98 +134,124 @@ void ConsoleRuntime::initModules()
             << QStringLiteral(" (reserved, not enforced in stage1)");
     }
 
-    mechEyeService_ = std::make_unique<scan_tracking::mech_eye::MechEyeService>();
+    const auto orbbecConfig = configManager != nullptr
+        ? configManager->orbbecGeminiConfig()
+        : scan_tracking::common::OrbbecGeminiConfig{};
+
+    if (!orbbecConfig.enabled) {
+        qCritical(appLog) << QStringLiteral(
+            "orbbecGeminiEnabled=false，第二工位扫描主相机未启动；请在 config.ini [OrbbecGemini] 中启用。");
+    } else {
+        orbbecGeminiService_ = std::make_unique<scan_tracking::orbbec_gemini::OrbbecGeminiService>();
+        QObject::connect(
+            orbbecGeminiService_.get(),
+            &scan_tracking::orbbec_gemini::OrbbecGeminiService::logMessage,
+            [](const QString& message) {
+                qInfo(appLog).noquote() << message;
+            });
+        QObject::connect(
+            orbbecGeminiService_.get(),
+            &scan_tracking::orbbec_gemini::OrbbecGeminiService::stateChanged,
+            [](scan_tracking::orbbec_gemini::OrbbecGeminiRuntimeState state,
+               const QString& description) {
+                qInfo(appLog).noquote()
+                    << QStringLiteral("[OrbbecGemini] state=")
+                    << static_cast<int>(state)
+                    << description;
+            });
+        QObject::connect(
+            orbbecGeminiService_.get(),
+            &scan_tracking::orbbec_gemini::OrbbecGeminiService::captureFinished,
+            [](const scan_tracking::orbbec_gemini::OrbbecCaptureResult& result) {
+                if (result.errorCode
+                    != scan_tracking::orbbec_gemini::OrbbecCaptureErrorCode::Success) {
+                    qWarning(appLog).noquote()
+                        << QStringLiteral("[OrbbecGemini] Capture failed:")
+                        << result.errorMessage;
+                    return;
+                }
+                qInfo(appLog).noquote()
+                    << QStringLiteral("[OrbbecGemini] Capture saved req=") << result.requestId
+                    << QStringLiteral(" depthRaw=") << result.depthRawPngPath
+                    << QStringLiteral(" depthPreview=") << result.depthPreviewPngPath
+                    << QStringLiteral(" pointCloud=") << result.pointCloudPlyPath;
+            });
+        QObject::connect(
+            orbbecGeminiService_.get(),
+            &scan_tracking::orbbec_gemini::OrbbecGeminiService::openFinished,
+            [this, orbbecConfig](bool success,
+               scan_tracking::orbbec_gemini::OrbbecGeminiDeviceSummary,
+               const QString& errorMessage) {
+                if (!success && !errorMessage.isEmpty()) {
+                    qWarning(appLog).noquote()
+                        << QStringLiteral("[OrbbecGemini] Open failed:")
+                        << errorMessage;
+                    return;
+                }
+                if (!success || !orbbecConfig.captureOnStart || !orbbecConfig.saveCaptureToDisk) {
+                    return;
+                }
+                if (orbbecGeminiService_ == nullptr) {
+                    return;
+                }
+                const quint64 requestId = orbbecGeminiService_->requestCapture(
+                    orbbecConfig.captureTimeoutMs,
+                    true);
+                if (requestId == 0) {
+                    qWarning(appLog).noquote()
+                        << QStringLiteral("[OrbbecGemini] Startup capture request rejected");
+                } else {
+                    qInfo(appLog).noquote()
+                        << QStringLiteral("[OrbbecGemini] Startup capture requested req=")
+                        << requestId;
+                }
+            });
+        orbbecGeminiService_->start();
+        qInfo(appLog) << QStringLiteral("[OrbbecGemini] service started.");
+    }
+
+    if (startupStage < 2) {
+        qInfo(appLog) << QStringLiteral("启动阶段仅到 Orbbec。");
+        if (!modbusService_->connectDevice()) {
+            qWarning(appLog) << "Modbus 连接初始化失败。";
+        }
+        qInfo(appLog) << "所有模块已初始化。";
+        return;
+    }
+
+    visionPipelineService_ = std::make_unique<scan_tracking::vision::VisionPipelineService>(
+        orbbecGeminiService_.get());
 
     QObject::connect(
-        mechEyeService_.get(),
-        &scan_tracking::mech_eye::MechEyeService::stateChanged,
-        [](scan_tracking::mech_eye::CameraRuntimeState state, const QString& description) {
-            qInfo(appLog) << QStringLiteral("[梅卡] 状态 =") << static_cast<int>(state) << description;
-        });
-
+        visionPipelineService_.get(),
+        &scan_tracking::vision::VisionPipelineService::stateChanged,
+        &application_,
+        [](scan_tracking::vision::VisionPipelineState state, const QString& description) {
+            qInfo(appLog) << QStringLiteral("[视觉流水线] 状态 =") << static_cast<int>(state) << description;
+        },
+        Qt::QueuedConnection);
     QObject::connect(
-        mechEyeService_.get(),
-        &scan_tracking::mech_eye::MechEyeService::fatalError,
-        [](scan_tracking::mech_eye::CaptureErrorCode code, const QString& message) {
-            qCritical(appLog) << QStringLiteral("[梅卡] 致命错误：") << static_cast<int>(code) << message;
-        });
+        visionPipelineService_.get(),
+        &scan_tracking::vision::VisionPipelineService::bundleCaptureFinished,
+        &application_,
+        [](const scan_tracking::vision::MultiCameraCaptureBundle& bundle) {
+            qInfo(appLog) << QStringLiteral("[视觉流水线]") << bundle.summary();
+        },
+        Qt::QueuedConnection);
 
-    mechEyeService_->start();
-    qInfo(appLog) << QStringLiteral("梅卡相机服务已启动。");
+    visionPipelineService_->start(orbbecConfig);
+    qInfo(appLog) << QStringLiteral("Orbbec 视觉流水线已启动。");
+
+    if (startupStage < 3) {
+        qInfo(appLog) << QStringLiteral("启动阶段仅到视觉流水线。");
+        if (!modbusService_->connectDevice()) {
+            qWarning(appLog) << "Modbus 连接初始化失败。";
+        }
+        qInfo(appLog) << "所有模块已初始化。";
+        return;
+    }
 
     if (configManager != nullptr) {
-        const auto& orbbecConfig = configManager->orbbecGeminiConfig();
-        if (!orbbecConfig.enabled) {
-            qInfo(appLog) << QStringLiteral("[OrbbecGemini] disabled (orbbecGeminiEnabled=false)");
-        } else {
-            orbbecGeminiService_ = std::make_unique<scan_tracking::orbbec_gemini::OrbbecGeminiService>();
-            QObject::connect(
-                orbbecGeminiService_.get(),
-                &scan_tracking::orbbec_gemini::OrbbecGeminiService::logMessage,
-                [](const QString& message) {
-                    qInfo(appLog).noquote() << message;
-                });
-            QObject::connect(
-                orbbecGeminiService_.get(),
-                &scan_tracking::orbbec_gemini::OrbbecGeminiService::stateChanged,
-                [](scan_tracking::orbbec_gemini::OrbbecGeminiRuntimeState state,
-                   const QString& description) {
-                    qInfo(appLog).noquote()
-                        << QStringLiteral("[OrbbecGemini] state=")
-                        << static_cast<int>(state)
-                        << description;
-                });
-            QObject::connect(
-                orbbecGeminiService_.get(),
-                &scan_tracking::orbbec_gemini::OrbbecGeminiService::captureFinished,
-                [](const scan_tracking::orbbec_gemini::OrbbecCaptureResult& result) {
-                    if (result.errorCode
-                        != scan_tracking::orbbec_gemini::OrbbecCaptureErrorCode::Success) {
-                        qWarning(appLog).noquote()
-                            << QStringLiteral("[OrbbecGemini] Capture failed:")
-                            << result.errorMessage;
-                        return;
-                    }
-                    qInfo(appLog).noquote()
-                        << QStringLiteral("[OrbbecGemini] Capture saved req=") << result.requestId
-                        << QStringLiteral(" depthRaw=") << result.depthRawPngPath
-                        << QStringLiteral(" depthPreview=") << result.depthPreviewPngPath
-                        << QStringLiteral(" pointCloud=") << result.pointCloudPlyPath;
-                });
-            QObject::connect(
-                orbbecGeminiService_.get(),
-                &scan_tracking::orbbec_gemini::OrbbecGeminiService::openFinished,
-                [this, orbbecConfig](bool success,
-                   scan_tracking::orbbec_gemini::OrbbecGeminiDeviceSummary,
-                   const QString& errorMessage) {
-                    if (!success && !errorMessage.isEmpty()) {
-                        qWarning(appLog).noquote()
-                            << QStringLiteral("[OrbbecGemini] Open failed:")
-                            << errorMessage;
-                        return;
-                    }
-                    if (!success || !orbbecConfig.captureOnStart || !orbbecConfig.saveCaptureToDisk) {
-                        return;
-                    }
-                    if (orbbecGeminiService_ == nullptr) {
-                        return;
-                    }
-                    const quint64 requestId = orbbecGeminiService_->requestCapture(
-                        orbbecConfig.captureTimeoutMs,
-                        true);
-                    if (requestId == 0) {
-                        qWarning(appLog).noquote()
-                            << QStringLiteral("[OrbbecGemini] Startup capture request rejected");
-                    } else {
-                        qInfo(appLog).noquote()
-                            << QStringLiteral("[OrbbecGemini] Startup capture requested req=")
-                            << requestId;
-                    }
-                });
-            orbbecGeminiService_->start();
-            qInfo(appLog) << QStringLiteral("[OrbbecGemini] service started.");
-        }
-
         const auto& livoxConfig = configManager->livoxMid360Config();
         if (!livoxConfig.enabled) {
             qInfo(appLog) << QStringLiteral("[LivoxMid360] disabled (livoxMid360Enabled=false)");
@@ -306,133 +327,29 @@ void ConsoleRuntime::initModules()
         }
     }
 
-    const auto visionConfig = configManager != nullptr
-        ? configManager->visionConfig()
-        : scan_tracking::common::VisionConfig{};
-
-    if (!visionConfig.hikCxpEnabled) {
-        qCritical(appLog) << QStringLiteral("hikCxpEnabled=false，CXP 双目未启动；请在 config.ini [Vision] 中启用。");
-    } else {
-        // CXP 左/右目各一个 HikCxpCameraService 实例，roleName 区分 ch250_a / ch250_b
-        hikCxpCameraAService_ = std::make_unique<scan_tracking::vision::HikCxpCameraService>(
-            QStringLiteral("ch250_a"));
-        hikCxpCameraBService_ = std::make_unique<scan_tracking::vision::HikCxpCameraService>(
-            QStringLiteral("ch250_b"));
-
-        QObject::connect(
-            hikCxpCameraAService_.get(),
-            &scan_tracking::vision::HikCxpCameraService::stateChanged,
-            [](const QString& roleName, const QString& stateText, const QString& description) {
-                qInfo(appLog) << QStringLiteral("[CXP]") << roleName << stateText << description;
-            });
-        QObject::connect(
-            hikCxpCameraBService_.get(),
-            &scan_tracking::vision::HikCxpCameraService::stateChanged,
-            [](const QString& roleName, const QString& stateText, const QString& description) {
-                qInfo(appLog) << QStringLiteral("[CXP]") << roleName << stateText << description;
-            });
-
-        hikCxpCameraAService_->start(
-            visionConfig.hikCxpCameraA,
-            visionConfig.hikCxpCaptureTimeoutMs,
-            visionConfig.hikCxpExposureTimeUs,
-            visionConfig.hikCxpGain);
-        hikCxpCameraBService_->start(
-            visionConfig.hikCxpCameraB,
-            visionConfig.hikCxpCaptureTimeoutMs,
-            visionConfig.hikCxpExposureTimeUs,
-            visionConfig.hikCxpGain);
-        qInfo(appLog) << QStringLiteral("CXP 双目相机服务已启动。");
+    if (startupStage < 5) {
+        qInfo(appLog) << QStringLiteral("启动阶段未到 StateMachine。");
+        if (!modbusService_->connectDevice()) {
+            qWarning(appLog) << "Modbus 连接初始化失败。";
+        }
+        qInfo(appLog) << "所有模块已初始化。";
+        return;
     }
 
-    // 海康相机 C（智能相机）：纯 TCP 控制，不通过 MVS SDK 打开设备，避免与 SCMVS 冲突
-    hikCameraCController_ = std::make_unique<scan_tracking::vision::HikCameraCController>();
-
-    QObject::connect(
-        hikCameraCController_.get(),
-        &scan_tracking::vision::HikCameraCController::stateChanged,
-        [](scan_tracking::vision::HikCameraCState state, const QString& description) {
-            qInfo(appLog) << QStringLiteral("[海康C控制器] 状态 =") << static_cast<int>(state) << description;
-        });
-    QObject::connect(
-        hikCameraCController_.get(),
-        &scan_tracking::vision::HikCameraCController::fatalError,
-        [](scan_tracking::vision::VisionErrorCode code, const QString& message) {
-            qCritical(appLog) << QStringLiteral("[海康C控制器] 致命错误：")
-                              << static_cast<int>(code) << message;
-        });
-    QObject::connect(
-        hikCameraCController_.get(),
-        &scan_tracking::vision::HikCameraCController::captureCompleted,
-        [](scan_tracking::vision::CaptureType type, const QByteArray& imageData) {
-            QString typeStr;
-            switch (type) {
-                case scan_tracking::vision::CaptureType::SurfaceDefect:
-                    typeStr = QStringLiteral("表面缺陷");
-                    break;
-                case scan_tracking::vision::CaptureType::WeldDefect:
-                    typeStr = QStringLiteral("焊缝缺陷");
-                    break;
-                case scan_tracking::vision::CaptureType::NumberRecognition:
-                    typeStr = QStringLiteral("编号识别");
-                    break;
-                default:
-                    typeStr = QStringLiteral("未知");
-                    break;
-            }
-            qInfo(appLog) << QStringLiteral("[海康C控制器] 采集完成：") << typeStr
-                          << imageData.size() << QStringLiteral("字节");
-        });
-
-    hikCameraCController_->start(visionConfig);
-    qInfo(appLog) << QStringLiteral("海康 C 相机控制器已启动（TCP 通信模式）。");
-
-
-    // 统一视觉编排层负责把“1 份点云 + 2 份矩阵”收口为一个算法输入包。
-    visionPipelineService_ = std::make_unique<scan_tracking::vision::VisionPipelineService>(
-        mechEyeService_.get(),
-        hikCxpCameraAService_.get(),
-        hikCxpCameraBService_.get());
-
-    QObject::connect(
-        visionPipelineService_.get(),
-        &scan_tracking::vision::VisionPipelineService::stateChanged,
-        &application_,
-        [](scan_tracking::vision::VisionPipelineState state, const QString& description) {
-            qInfo(appLog) << QStringLiteral("[视觉流水线] 状态 =") << static_cast<int>(state) << description;
-        },
-        Qt::QueuedConnection);
-    QObject::connect(
-        visionPipelineService_.get(),
-        &scan_tracking::vision::VisionPipelineService::bundleCaptureFinished,
-        &application_,
-        [](const scan_tracking::vision::MultiCameraCaptureBundle& bundle) {
-            qInfo(appLog) << QStringLiteral("[视觉流水线]") << bundle.summary();
-        },
-        Qt::QueuedConnection);
-
-    visionPipelineService_->start(visionConfig);
-    qInfo(appLog) << QStringLiteral("视觉集成框架已启动。");
-
-    // StateMachine 是主流程编排核心，注入 Modbus / 视觉等依赖
     stateMachine_ = std::make_unique<scan_tracking::flow_control::StateMachine>(
         modbusService_.get(),
-        mechEyeService_.get(),
+        orbbecGeminiService_.get(),
         visionPipelineService_.get(),
         &application_);
 
-    // HMI：先注入依赖并绑定信号，再 listen / 启动状态机，避免 start() 内重复 connect 或漏接早期事件
     const auto& hmiConfig = scan_tracking::common::ConfigManager::instance()->hmiConfig();
     if (hmiConfig.enabled) {
         hmiTcpServer_ = std::make_unique<scan_tracking::hmi_server::HmiTcpServer>(
             static_cast<int>(hmiConfig.tcpPort), &application_);
         hmiTcpServer_->setStateMachine(stateMachine_.get());
         hmiTcpServer_->setModbusService(modbusService_.get());
-        hmiTcpServer_->setMechEyeService(mechEyeService_.get());
+        hmiTcpServer_->setOrbbecGeminiService(orbbecGeminiService_.get());
         hmiTcpServer_->setVisionPipelineService(visionPipelineService_.get());
-        hmiTcpServer_->setHikCameraServices(
-            hikCxpCameraAService_.get(), hikCxpCameraBService_.get(), nullptr);
-        hmiTcpServer_->setHikCameraCController(hikCameraCController_.get());
         hmiTcpServer_->bindServiceSignals();
 
         stateMachine_->setInspectionResultPublisher(
@@ -454,7 +371,6 @@ void ConsoleRuntime::initModules()
 
     stateMachine_->start();
 
-    // 等状态机接好信号后再建 Modbus 链路，避免启动期漏掉 connected 事件。
     if (!modbusService_->connectDevice()) {
         qWarning(appLog) << "Modbus 连接初始化失败。";
     }
@@ -487,15 +403,6 @@ void ConsoleRuntime::printShutdownStatus()
     if (visionPipelineService_) {
         visionPipelineService_->stop();
     }
-    if (hikCameraCController_) {
-        hikCameraCController_->stop();
-    }
-    if (hikCxpCameraAService_) {
-        hikCxpCameraAService_->stop();
-    }
-    if (hikCxpCameraBService_) {
-        hikCxpCameraBService_->stop();
-    }
     if (orbbecGeminiService_) {
         orbbecGeminiService_->stop();
     }
@@ -504,9 +411,6 @@ void ConsoleRuntime::printShutdownStatus()
     }
     if (tfminiPlusService_) {
         tfminiPlusService_->stop();
-    }
-    if (mechEyeService_) {
-        mechEyeService_->stop();
     }
     if (modbusService_) {
         modbusService_->disconnectDevice();

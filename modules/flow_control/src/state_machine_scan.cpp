@@ -3,7 +3,6 @@
 #include "scan_tracking/flow_control/detail/state_machine_internal.h"
 
 #include "scan_tracking/common/config_manager.h"
-#include "scan_tracking/mech_eye/mech_eye_service.h"
 #include "scan_tracking/vision/vision_pipeline_service.h"
 
 namespace scan_tracking::flow_control {
@@ -84,22 +83,6 @@ void StateMachine::completeScanSegmentCapture(
     writeScanSegmentResult(segmentIndex, imageCount, cloudFrameCount);
     completeActiveTask(resultCode, finalAckState, dataValid);
     emit scanFinished(segmentIndex, resultCode, imageCount, cloudFrameCount);
-}
-
-void StateMachine::onMechEyeFatalError(mech_eye::CaptureErrorCode code, QString message)
-{
-    Q_UNUSED(code);
-    qCritical(LOG_FLOW) << "[MechEye] 致命错误:" << message;
-    emit protocolEvent(QStringLiteral("Mech-Eye: %1").arg(message));
-
-    if (m_activeTask.definition == nullptr ||
-        m_activeTask.definition->stage != protocol::Stage::ScanSegment ||
-        m_activeTask.completionAnnounced) {
-        return;
-    }
-
-    setAlarm(3, 723, message);
-    completeScanSegmentCapture(7, 0, 0, protocol::AckState::Failed, false);
 }
 
 void StateMachine::resetScanSegmentCache()

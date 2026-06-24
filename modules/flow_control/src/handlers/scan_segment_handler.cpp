@@ -3,7 +3,6 @@
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/flow_control/detail/state_machine_internal.h"
 #include "scan_tracking/flow_control/plc_protocol.h"
-#include "scan_tracking/mech_eye/mech_eye_types.h"
 #include "scan_tracking/vision/vision_pipeline_service.h"
 
 namespace scan_tracking::flow_control {
@@ -35,13 +34,10 @@ void ScanSegmentHandler::execute(TaskHandlerContext& ctx)
         return;
     }
 
-    const auto mechCaptureMode = point->needRotation
-        ? mech_eye::CaptureMode::Capture2DAnd3D
-        : mech_eye::CaptureMode::Capture3DOnly;
-
-    const quint64 requestId = vision->requestCaptureBundle(segmentIndex, taskId, mechCaptureMode);
+    const bool needColorCapture = point->needRotation;
+    const quint64 requestId = vision->requestCaptureBundle(segmentIndex, taskId, needColorCapture);
     if (requestId == 0) {
-        qWarning(LOG_FLOW).noquote() << QStringLiteral("Trig_ScanSegment：发起组合采集失败。");
+        qWarning(LOG_FLOW).noquote() << QStringLiteral("Trig_ScanSegment：发起 Orbbec 采集失败。");
         ctx.host.completeScanSegmentCapture(7, 0, 0, protocol::AckState::Failed, false);
         return;
     }
@@ -51,10 +47,9 @@ void ScanSegmentHandler::execute(TaskHandlerContext& ctx)
     ctx.host.publishIpcStatus();
     ctx.host.notifyScanStarted(segmentIndex, taskId);
     qInfo(LOG_FLOW).noquote()
-        << QStringLiteral("Trig_ScanSegment：已发起组合采集 段号=") << segmentIndex
+        << QStringLiteral("Trig_ScanSegment：已发起 Orbbec 采集 段号=") << segmentIndex
         << QStringLiteral(" requestId=") << requestId
-        << QStringLiteral(" mechMode=")
-        << (point->needRotation ? QStringLiteral("2D+3D") : QStringLiteral("3D"));
+        << QStringLiteral(" needColor=") << needColorCapture;
 }
 
 }  // namespace scan_tracking::flow_control

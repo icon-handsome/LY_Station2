@@ -130,7 +130,7 @@ struct HmiConfig {
 /// 扫描路径中的单个点位定义（来自 scan_paths JSON）。
 struct ScanPointConfig {
     int pointIndex = 0;           ///< 全局段号，跨路径唯一，供 Modbus / 状态机引用
-    bool needRotation = false;    ///< true → Mech-Eye Capture2DAnd3D；false → Capture3DOnly
+    bool needRotation = false;    ///< true → 预留彩色/2D 扩展；Orbbec 主流程采集深度+点云
 };
 
 /// 一条扫描路径的定义（来自 scan_paths JSON 的 scanPaths[] 元素）。

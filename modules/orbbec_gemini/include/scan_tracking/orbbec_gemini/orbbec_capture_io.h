@@ -97,5 +97,24 @@ QString buildOrbbecCapturePaths(
     QString* depthPreviewPngPath,
     QString* pointCloudPlyPath);
 
+/// 分段落盘路径（run 根目录下 orbbec 子目录）
+QString buildSegmentOrbbecDepthRawPath(
+    const QString& runRoot,
+    int segmentIndex,
+    quint32 taskId,
+    const QString& timestamp = QString());
+
+QString buildSegmentOrbbecDepthPreviewPath(
+    const QString& runRoot,
+    int segmentIndex,
+    quint32 taskId,
+    const QString& timestamp = QString());
+
+QString buildSegmentOrbbecPlyPath(
+    const QString& runRoot,
+    int segmentIndex,
+    quint32 taskId,
+    const QString& timestamp = QString());
+
 }  // namespace orbbec_gemini
 }  // namespace scan_tracking

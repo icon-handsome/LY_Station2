@@ -63,6 +63,63 @@ QString buildOrbbecCapturePaths(
     return baseDir;
 }
 
+QString buildSegmentOrbbecDepthRawPath(
+    const QString& runRoot,
+    int segmentIndex,
+    quint32 taskId,
+    const QString& timestamp)
+{
+    const QString baseDir = scan_tracking::common::captureCacheOrbbecDir(runRoot);
+    if (baseDir.isEmpty()) {
+        return QString();
+    }
+    const QString ts = timestamp.trimmed().isEmpty()
+                           ? scan_tracking::common::buildCaptureTimestamp()
+                           : timestamp;
+    return QDir(baseDir).absoluteFilePath(
+        QStringLiteral("segment_%1_task%2_%3_depth16.png")
+            .arg(segmentIndex)
+            .arg(taskId)
+            .arg(ts));
+}
+
+QString buildSegmentOrbbecDepthPreviewPath(
+    const QString& runRoot,
+    int segmentIndex,
+    quint32 taskId,
+    const QString& timestamp)
+{
+    const QString baseDir = scan_tracking::common::captureCacheOrbbecDir(runRoot);
+    if (baseDir.isEmpty()) {
+        return QString();
+    }
+    const QString ts = timestamp.trimmed().isEmpty()
+                           ? scan_tracking::common::buildCaptureTimestamp()
+                           : timestamp;
+    return QDir(baseDir).absoluteFilePath(
+        QStringLiteral("segment_%1_task%2_%3_depth_preview.png")
+            .arg(segmentIndex)
+            .arg(taskId)
+            .arg(ts));
+}
+
+QString buildSegmentOrbbecPlyPath(
+    const QString& runRoot,
+    int segmentIndex,
+    quint32 taskId,
+    const QString& timestamp)
+{
+    const QString baseDir = scan_tracking::common::captureCacheOrbbecDir(runRoot);
+    if (baseDir.isEmpty()) {
+        return QString();
+    }
+    const QString ts = timestamp.trimmed().isEmpty()
+                           ? scan_tracking::common::buildCaptureTimestamp()
+                           : timestamp;
+    return QDir(baseDir).absoluteFilePath(
+        QStringLiteral("segment_%1_task%2_%3.ply").arg(segmentIndex).arg(taskId).arg(ts));
+}
+
 bool saveDepthFramePngs(
     const OrbbecDepthFrameView& frame,
     const QString& rawPngPath,

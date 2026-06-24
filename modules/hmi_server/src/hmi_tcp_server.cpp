@@ -11,7 +11,7 @@
 #include "scan_tracking/flow_control/plc_protocol.h"
 #include "scan_tracking/flow_control/station_trigger_policy.h"
 #include "scan_tracking/modbus/modbus_service.h"
-#include "scan_tracking/mech_eye/mech_eye_service.h"
+#include "scan_tracking/orbbec_gemini/orbbec_gemini_service.h"
 #include "scan_tracking/vision/vision_pipeline_service.h"
 #include "scan_tracking/vision/hik_cxp_camera_service.h"
 #include "scan_tracking/vision/hik_camera_service.h"
@@ -79,8 +79,8 @@ void logStatusPushTx(const QString& type, const QString& msgId, const QJsonObjec
 constexpr bool kForwardQtLogsToHmi = false;
 
 // 相机连/断 event.alarm 专用 code（与 Modbus 900 段区分）
-constexpr int kAlarmCodeMechEyeConnect = 910;
-constexpr int kAlarmCodeMechEyeDisconnect = 911;
+constexpr int kAlarmCodeOrbbecConnect = 910;
+constexpr int kAlarmCodeOrbbecDisconnect = 911;
 constexpr int kAlarmCodeHikConnect = 912;
 constexpr int kAlarmCodeHikDisconnect = 913;
 constexpr int kAlarmCodeTelescopicRodFault = 920;
@@ -191,7 +191,7 @@ void HmiTcpServer::bindServiceSignals()
     }
     connectStateMachineSignals();
     connectModbusSignals();
-    connectMechEyeSignals();
+    connectOrbbecGeminiSignals();
     connectVisionPipelineSignals();
     connectStatusRefreshSignals();
     m_serviceSignalsBound = true;
@@ -208,15 +208,18 @@ void HmiTcpServer::disconnectServiceSignals()
     if (m_modbusService) {
         disconnect(m_modbusService, nullptr, this, nullptr);
     }
-    if (m_mechEyeService) {
-        disconnect(m_mechEyeService, nullptr, this, nullptr);
+    if (m_orbbecGeminiService) {
+        disconnect(m_orbbecGeminiService, nullptr, this, nullptr);
     }
     if (m_visionPipeline) {
         disconnect(m_visionPipeline, nullptr, this, nullptr);
     }
     m_serviceSignalsBound = false;
 }
-void HmiTcpServer::setMechEyeService(mech_eye::MechEyeService* svc) { m_mechEyeService = svc; }
+void HmiTcpServer::setOrbbecGeminiService(orbbec_gemini::OrbbecGeminiService* svc)
+{
+    m_orbbecGeminiService = svc;
+}
 void HmiTcpServer::setVisionPipelineService(vision::VisionPipelineService* svc) { m_visionPipeline = svc; }
 void HmiTcpServer::setHikCameraServices(vision::HikCxpCameraService* hikA, vision::HikCxpCameraService* hikB,
                                         vision::HikCameraService* hikC) {
@@ -538,6 +541,14 @@ void HmiTcpServer::handleCmdGetConfig(const QJsonObject& message)
     visionObj[QLatin1String("hikCameraC")] = hikCObj;
     
     configPayload[QLatin1String("vision")] = visionObj;
+
+    const auto& orbbecCfg = cfgMgr->orbbecGeminiConfig();
+    QJsonObject orbbecObj;
+    orbbecObj[QLatin1String("enabled")] = orbbecCfg.enabled;
+    orbbecObj[QLatin1String("serial")] = orbbecCfg.serial;
+    orbbecObj[QLatin1String("captureTimeoutMs")] = orbbecCfg.captureTimeoutMs;
+    orbbecObj[QLatin1String("enableColorStream")] = orbbecCfg.enableColorStream;
+    configPayload[QLatin1String("orbbecGemini")] = orbbecObj;
     
     // 6. FlowControl 配置
     QJsonObject flowControlObj;
@@ -598,14 +609,13 @@ void HmiTcpServer::handleCmdModbusDisconnect(const QJsonObject& message)
 void HmiTcpServer::handleCmdRefreshCamera(const QJsonObject& message)
 {
     const QString msgId = message.value(QLatin1String("msgId")).toString();
-    
-    // 刷新 MechEye 3D 相机连接状态
-    if (m_mechEyeService) {
-        qInfo(LOG_HMI_SERVER) << "[TCPIP] 收到相机刷新请求，正在刷新 MechEye 相机状态...";
-        m_mechEyeService->requestRefreshStatus();
-        sendResponse(QLatin1String(msg_type::kCmdRefreshCamera), msgId, true, QStringLiteral("相机刷新请求已发送"));
+
+    if (m_orbbecGeminiService) {
+        qInfo(LOG_HMI_SERVER) << "[TCPIP] 收到相机刷新请求，Orbbec 状态由服务自动维护。";
+        pushCameraStatus();
+        sendResponse(QLatin1String(msg_type::kCmdRefreshCamera), msgId, true, QStringLiteral("Orbbec 状态已刷新"));
     } else {
-        qWarning(LOG_HMI_SERVER) << "[TCPIP] 相机刷新失败：MechEye 服务不可用";
+        qWarning(LOG_HMI_SERVER) << "[TCPIP] 相机刷新失败：Orbbec 服务不可用";
         sendResponse(QLatin1String(msg_type::kCmdRefreshCamera), msgId, false, QStringLiteral("相机服务不可用"));
     }
 }
@@ -723,18 +733,22 @@ void HmiTcpServer::handleCmdReportPersonZoneAlarm(const QJsonObject& message)
 void HmiTcpServer::handleCmdCaptureMechEye(const QJsonObject& message)
 {
     const QString msgId = message.value(QLatin1String("msgId")).toString();
-    const QString cameraKey = message.value(QLatin1String("payload")).toObject().value(QLatin1String("cameraKey")).toString();
-    if (m_mechEyeService) {
-        quint64 reqId = m_mechEyeService->requestCapture(cameraKey, mech_eye::CaptureMode::Capture3DOnly);
-        QJsonObject payload = buildResponsePayload(true, QStringLiteral("采集请求已发送"));
+    if (m_orbbecGeminiService) {
+        const int timeoutMs = message.value(QLatin1String("payload")).toObject()
+                                  .value(QLatin1String("timeoutMs"))
+                                  .toInt(0);
+        quint64 reqId = m_orbbecGeminiService->requestCapture(timeoutMs, true);
+        QJsonObject payload = buildResponsePayload(
+            reqId != 0,
+            reqId != 0 ? QStringLiteral("Orbbec 采集请求已发送") : QStringLiteral("Orbbec 采集请求被拒绝"));
         payload[QLatin1String("requestId")] = static_cast<qint64>(reqId);
-        
+
         QJsonObject envelope;
-        envelope[QStringLiteral("version")]   = QLatin1String(kProtocolVersion);
-        envelope[QStringLiteral("msgId")]     = msgId;
-        envelope[QStringLiteral("type")]      = QLatin1String(msg_type::kCmdCaptureMechEye);
+        envelope[QStringLiteral("version")] = QLatin1String(kProtocolVersion);
+        envelope[QStringLiteral("msgId")] = msgId;
+        envelope[QStringLiteral("type")] = QLatin1String(msg_type::kCmdCaptureMechEye);
         envelope[QStringLiteral("timestamp")] = QDateTime::currentMSecsSinceEpoch();
-        envelope[QStringLiteral("payload")]   = payload;
+        envelope[QStringLiteral("payload")] = payload;
         sendToClient(envelope);
     } else {
         sendResponse(QLatin1String(msg_type::kCmdCaptureMechEye), msgId, false, QStringLiteral("相机服务不可用"));
@@ -748,20 +762,20 @@ void HmiTcpServer::handleCmdCaptureBundle(const QJsonObject& message)
         const QJsonObject payloadObj = message.value(QLatin1String("payload")).toObject();
         const int segmentIndex = payloadObj.value(QLatin1String("segmentIndex")).toInt(1);
         const quint32 taskId = static_cast<quint32>(payloadObj.value(QLatin1String("taskId")).toInt(0));
-        bool needMechEye2D = payloadObj.value(QLatin1String("needMechEye2D")).toBool(false);
-        if (!payloadObj.contains(QLatin1String("needMechEye2D"))) {
-            const auto* configMgr = scan_tracking::common::ConfigManager::instance();
-            if (configMgr != nullptr) {
-                const auto* point = configMgr->findScanPointByIndex(segmentIndex);
-                if (point != nullptr) {
-                    needMechEye2D = point->needRotation;
+        bool needColorCapture = payloadObj.value(QLatin1String("needColorCapture")).toBool(false);
+        if (!payloadObj.contains(QLatin1String("needColorCapture"))) {
+            needColorCapture = payloadObj.value(QLatin1String("needMechEye2D")).toBool(false);
+            if (!payloadObj.contains(QLatin1String("needMechEye2D"))) {
+                const auto* configMgr = scan_tracking::common::ConfigManager::instance();
+                if (configMgr != nullptr) {
+                    const auto* point = configMgr->findScanPointByIndex(segmentIndex);
+                    if (point != nullptr) {
+                        needColorCapture = point->needRotation;
+                    }
                 }
             }
         }
-        const auto mechCaptureMode = needMechEye2D
-            ? scan_tracking::mech_eye::CaptureMode::Capture2DAnd3D
-            : scan_tracking::mech_eye::CaptureMode::Capture3DOnly;
-        quint64 reqId = m_visionPipeline->requestCaptureBundle(segmentIndex, taskId, mechCaptureMode);
+        quint64 reqId = m_visionPipeline->requestCaptureBundle(segmentIndex, taskId, needColorCapture);
         
         QJsonObject payload = buildResponsePayload(true, QStringLiteral("组合采集请求已发送"));
         payload[QLatin1String("requestId")] = static_cast<qint64>(reqId);
@@ -1048,20 +1062,18 @@ void HmiTcpServer::pushCameraStatus()
     checkCameraConnectivityEdges();
 }
 
-bool HmiTcpServer::mechEyeConnected() const
+bool HmiTcpServer::orbbecGeminiConnected() const
 {
-    if (!m_mechEyeService) {
+    if (!m_orbbecGeminiService) {
         return false;
     }
-    const auto state = m_mechEyeService->state();
-    return state != mech_eye::CameraRuntimeState::Idle
-        && state != mech_eye::CameraRuntimeState::Error;
+    return m_orbbecGeminiService->state() == orbbec_gemini::OrbbecGeminiRuntimeState::Ready;
 }
 
 void HmiTcpServer::syncCameraConnectivityCache()
 {
-    if (m_mechEyeService) {
-        m_cameraConnectivityCache.mechEye = mechEyeConnected();
+    if (m_orbbecGeminiService) {
+        m_cameraConnectivityCache.orbbecGemini = orbbecGeminiConnected();
     }
     if (m_hikCameraA) {
         m_cameraConnectivityCache.hikA = m_hikCameraA->isConnected();
@@ -1100,14 +1112,14 @@ void HmiTcpServer::checkCameraConnectivityEdges()
         return;
     }
 
-    if (m_mechEyeService) {
-        const bool nowConnected = mechEyeConnected();
-        if (nowConnected != m_cameraConnectivityCache.mechEye) {
+    if (m_orbbecGeminiService) {
+        const bool nowConnected = orbbecGeminiConnected();
+        if (nowConnected != m_cameraConnectivityCache.orbbecGemini) {
             emitCameraConnectivityAlarm(
-                QStringLiteral("梅卡相机"),
+                QStringLiteral("Orbbec 相机"),
                 nowConnected,
-                nowConnected ? kAlarmCodeMechEyeConnect : kAlarmCodeMechEyeDisconnect);
-            m_cameraConnectivityCache.mechEye = nowConnected;
+                nowConnected ? kAlarmCodeOrbbecConnect : kAlarmCodeOrbbecDisconnect);
+            m_cameraConnectivityCache.orbbecGemini = nowConnected;
         }
     }
 
@@ -1156,14 +1168,14 @@ QJsonObject HmiTcpServer::buildCameraStatusPayload() const
 {
     QJsonObject payload;
     
-    if (m_mechEyeService) {
-        QJsonObject mechEyeObj;
-        mechEyeObj[QLatin1String("state")] = static_cast<int>(m_mechEyeService->state());
-        mechEyeObj[QLatin1String("connected")] = (m_mechEyeService->state() != mech_eye::CameraRuntimeState::Idle
-                                                   && m_mechEyeService->state() != mech_eye::CameraRuntimeState::Error);
-        payload[QLatin1String("mechEye")] = mechEyeObj;
+    if (m_orbbecGeminiService) {
+        QJsonObject orbbecObj;
+        orbbecObj[QLatin1String("state")] = static_cast<int>(m_orbbecGeminiService->state());
+        orbbecObj[QLatin1String("connected")] = orbbecGeminiConnected();
+        orbbecObj[QLatin1String("busy")] = m_orbbecGeminiService->isBusy();
+        payload[QLatin1String("orbbecGemini")] = orbbecObj;
     }
-    
+
     if (m_hikCameraA) {
         QJsonObject hikAObj;
         hikAObj[QLatin1String("roleName")] = m_hikCameraA->roleName();
@@ -1214,7 +1226,7 @@ QJsonObject HmiTcpServer::buildDeviceStatusPayload() const
     // onlineWord0 / faultWord0 位定义与 docs/protocols/封头检测工位_TCP_IP显控通信协议_v1.0.md §2.4 一致
     constexpr int kBitIpcCore = 0;
     constexpr int kBitHmiClient = 1;
-    constexpr int kBitMechEye = 2;
+    constexpr int kBitScanCamera = 2;
     constexpr int kBitVisionPipeline = 3;
     constexpr int kBitHik2d = 4;
     constexpr int kBitTracking = 5;
@@ -1230,14 +1242,13 @@ QJsonObject HmiTcpServer::buildDeviceStatusPayload() const
         onlineWord0 |= (1u << kBitHmiClient);
     }
 
-    const bool mechEyeOnline = m_mechEyeService
-        && m_mechEyeService->state() != mech_eye::CameraRuntimeState::Idle
-        && m_mechEyeService->state() != mech_eye::CameraRuntimeState::Error;
-    if (mechEyeOnline) {
-        onlineWord0 |= (1u << kBitMechEye);
+    const bool orbbecOnline = orbbecGeminiConnected();
+    if (orbbecOnline) {
+        onlineWord0 |= (1u << kBitScanCamera);
     }
-    if (m_mechEyeService && m_mechEyeService->state() == mech_eye::CameraRuntimeState::Error) {
-        faultWord0 |= (1u << kBitMechEye);
+    if (m_orbbecGeminiService
+        && m_orbbecGeminiService->state() == orbbec_gemini::OrbbecGeminiRuntimeState::Failed) {
+        faultWord0 |= (1u << kBitScanCamera);
     }
 
     if (m_visionPipeline && m_visionPipeline->state() == vision::VisionPipelineState::Ready) {
@@ -1439,34 +1450,28 @@ void HmiTcpServer::connectModbusSignals()
     });
 }
 
-void HmiTcpServer::connectMechEyeSignals()
+void HmiTcpServer::connectOrbbecGeminiSignals()
 {
-    if (!m_mechEyeService) return;
+    if (!m_orbbecGeminiService) {
+        return;
+    }
 
-    connect(m_mechEyeService, &mech_eye::MechEyeService::captureFinished, this,
-        [this](scan_tracking::mech_eye::CaptureResult result) {
-        QJsonObject payload;
-        payload[QLatin1String("requestId")] = static_cast<qint64>(result.requestId);
-        payload[QLatin1String("cameraKey")] = result.cameraKey;
-        payload[QLatin1String("pointCount")] = static_cast<int>(result.pointCloud.pointCount);
-        payload[QLatin1String("width")] = result.pointCloud.width;
-        payload[QLatin1String("height")] = result.pointCloud.height;
-        payload[QLatin1String("elapsedMs")] = static_cast<int>(result.elapsedMs);
-        payload[QLatin1String("errorCode")] = static_cast<int>(result.errorCode);
-        sendToClient(buildEnvelope(QLatin1String(msg_type::kEventImageCaptured), nextEventId(), payload));
-    });
-
-    connect(m_mechEyeService, &mech_eye::MechEyeService::fatalError, this,
-        [this](scan_tracking::mech_eye::CaptureErrorCode code, QString message) {
-        QJsonObject payload;
-        payload[QLatin1String("message")] = message;
-        payload[QLatin1String("level")] = 3;
-        payload[QLatin1String("code")] = static_cast<int>(code);
-        sendToClient(buildEnvelope(QLatin1String(msg_type::kEventAlarm), nextEventId(), payload));
-        if (hasClient()) {
-            pushDeviceStatus();
-        }
-    });
+    connect(
+        m_orbbecGeminiService,
+        &orbbec_gemini::OrbbecGeminiService::captureFinished,
+        this,
+        [this](scan_tracking::orbbec_gemini::OrbbecCaptureResult result) {
+            QJsonObject payload;
+            payload[QLatin1String("requestId")] = static_cast<qint64>(result.requestId);
+            payload[QLatin1String("pointCount")] = result.pointCloudPointCount;
+            payload[QLatin1String("depthWidth")] = result.depthWidth;
+            payload[QLatin1String("depthHeight")] = result.depthHeight;
+            payload[QLatin1String("elapsedMs")] = static_cast<int>(result.captureDurationMs);
+            payload[QLatin1String("errorCode")] = static_cast<int>(result.errorCode);
+            payload[QLatin1String("depthRawPath")] = result.depthRawPngPath;
+            payload[QLatin1String("pointCloudPath")] = result.pointCloudPlyPath;
+            sendToClient(buildEnvelope(QLatin1String(msg_type::kEventImageCaptured), nextEventId(), payload));
+        });
 }
 
 void HmiTcpServer::connectStatusRefreshSignals()
@@ -1499,14 +1504,18 @@ void HmiTcpServer::connectStatusRefreshSignals()
         }, Qt::UniqueConnection);
     }
 
-    if (m_mechEyeService) {
-        connect(m_mechEyeService, &mech_eye::MechEyeService::stateChanged, this,
-                [this](mech_eye::CameraRuntimeState, QString) {
-            if (hasClient()) {
-                pushCameraStatus();
-                pushDeviceStatus();
-            }
-        }, Qt::UniqueConnection);
+    if (m_orbbecGeminiService) {
+        connect(
+            m_orbbecGeminiService,
+            &orbbec_gemini::OrbbecGeminiService::stateChanged,
+            this,
+            [this](orbbec_gemini::OrbbecGeminiRuntimeState, QString) {
+                if (hasClient()) {
+                    pushCameraStatus();
+                    pushDeviceStatus();
+                }
+            },
+            Qt::UniqueConnection);
     }
 
     if (m_visionPipeline) {
@@ -1555,9 +1564,8 @@ void HmiTcpServer::connectVisionPipelineSignals()
         QJsonObject payload;
         payload[QLatin1String("segmentIndex")] = bundle.request.segmentIndex;
         payload[QLatin1String("taskId")] = static_cast<int>(bundle.request.taskId);
-        payload[QLatin1String("mechOk")] = bundle.mechEyeResult.success();
-        payload[QLatin1String("hikAOk")] = bundle.hikCameraAResult.success();
-        payload[QLatin1String("hikBOk")] = bundle.hikCameraBResult.success();
+        payload[QLatin1String("orbbecOk")] = bundle.success();
+        payload[QLatin1String("pointCount")] = bundle.orbbecResult.pointCloudPointCount;
         sendToClient(buildEnvelope(QLatin1String(msg_type::kEventBundleCaptured), nextEventId(), payload));
     });
 }

@@ -2,25 +2,23 @@
 
 #include "scan_tracking/flow_control/detail/state_machine_internal.h"
 
-#include "scan_tracking/mech_eye/mech_eye_service.h"
+#include "scan_tracking/orbbec_gemini/orbbec_gemini_service.h"
 #include "scan_tracking/vision/vision_pipeline_service.h"
 
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/flow_control/station_trigger_policy.h"
 #include "scan_tracking/flow_control/task_handler_registry.h"
-#include "scan_tracking/mech_eye/mech_eye_service.h"
-#include "scan_tracking/vision/vision_pipeline_service.h"
 
 namespace scan_tracking::flow_control {
 
 StateMachine::StateMachine(
     modbus::ModbusService* modbusService,
-    mech_eye::MechEyeService* mechEyeService,
+    orbbec_gemini::OrbbecGeminiService* orbbecGeminiService,
     vision::VisionPipelineService* visionPipelineService,
     QObject* parent)
     : QObject(parent)
     , m_modbus(modbusService)
-    , m_mechEye(mechEyeService)
+    , m_orbbecGemini(orbbecGeminiService)
     , m_visionPipeline(visionPipelineService)
     , m_pollTimer(new QTimer(this))
     , m_heartbeatTimer(new QTimer(this))
@@ -62,20 +60,14 @@ StateMachine::StateMachine(
         connect(m_modbus, &modbus::ModbusService::registerWriteFailed, this, &StateMachine::onRegisterWriteFailed);
     }
 
-    if (m_mechEye) {
+    if (m_orbbecGemini) {
         connect(
-            m_mechEye,
-            &mech_eye::MechEyeService::stateChanged,
+            m_orbbecGemini,
+            &orbbec_gemini::OrbbecGeminiService::stateChanged,
             this,
-            [](mech_eye::CameraRuntimeState state, QString desc) {
-                qInfo(LOG_FLOW) << "[MechEye] 相机状态变更:" << static_cast<int>(state) << desc;
+            [](orbbec_gemini::OrbbecGeminiRuntimeState state, QString desc) {
+                qInfo(LOG_FLOW) << "[Orbbec] 相机状态变更:" << static_cast<int>(state) << desc;
             });
-        connect(
-            m_mechEye,
-            &mech_eye::MechEyeService::fatalError,
-            this,
-            &StateMachine::onMechEyeFatalError,
-            Qt::QueuedConnection);
     }
 
     if (m_visionPipeline) {
@@ -136,8 +128,8 @@ void StateMachine::stop()
     if (m_modbus != nullptr) {
         disconnect(m_modbus, nullptr, this, nullptr);
     }
-    if (m_mechEye != nullptr) {
-        disconnect(m_mechEye, nullptr, this, nullptr);
+    if (m_orbbecGemini != nullptr) {
+        disconnect(m_orbbecGemini, nullptr, this, nullptr);
     }
     if (m_visionPipeline != nullptr) {
         disconnect(m_visionPipeline, nullptr, this, nullptr);
@@ -217,9 +209,9 @@ bool StateMachine::isModbusConnected() const
     return m_modbus != nullptr && m_modbus->isConnected();
 }
 
-mech_eye::MechEyeService* StateMachine::mechEyeService() const
+orbbec_gemini::OrbbecGeminiService* StateMachine::orbbecGeminiService() const
 {
-    return m_mechEye;
+    return m_orbbecGemini;
 }
 
 vision::VisionPipelineService* StateMachine::visionPipelineService() const
