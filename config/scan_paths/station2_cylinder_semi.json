@@ -1,17 +1,26 @@
 {
   "version": "1.0",
-  "lastModified": "2026-06-16",
+  "lastModified": "2026-06-29",
   "scanPaths": [
     {
       "pathId": 1,
       "enabled": true,
       "segmentKind": "external",
-      "description": "圆筒半成品-扫描机械臂外部多点位（转台协同；现场按实际点位扩展）",
-      "totalPoints": 3,
+      "description": "圆筒半成品-扫描机械臂外部多点位（转台协同；段号 1-12）",
+      "totalPoints": 12,
       "points": [
         { "pointIndex": 1, "needRotation": false },
         { "pointIndex": 2, "needRotation": false },
-        { "pointIndex": 3, "needRotation": true }
+        { "pointIndex": 3, "needRotation": false },
+        { "pointIndex": 4, "needRotation": false },
+        { "pointIndex": 5, "needRotation": false },
+        { "pointIndex": 6, "needRotation": false },
+        { "pointIndex": 7, "needRotation": false },
+        { "pointIndex": 8, "needRotation": false },
+        { "pointIndex": 9, "needRotation": false },
+        { "pointIndex": 10, "needRotation": false },
+        { "pointIndex": 11, "needRotation": false },
+        { "pointIndex": 12, "needRotation": true }
       ]
     }
   ]

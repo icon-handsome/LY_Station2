@@ -72,22 +72,7 @@ bool HikSmartCameraSession::sendCommand(const QString& command)
 
 bool HikSmartCameraSession::sendStartCapture()
 {
-    if (!isConnected()) {
-        qWarning(hikTcpLog) << QStringLiteral("无法发送 start：未连接") << m_cameraIp;
-        return false;
-    }
-
-    // 现场协议：TCP 调试助手发 ASCII/5 的纯 "start"（无 \r\n）才能触发拍照
-    static const QByteArray kStartTrigger("start");
-    const qint64 written = m_socket->write(kStartTrigger);
-    if (written != kStartTrigger.size()) {
-        qWarning(hikTcpLog) << QStringLiteral("发送 start 失败") << m_cameraIp;
-        return false;
-    }
-
-    m_socket->flush();
-    qInfo(hikTcpLog) << "发送 start 到" << m_cameraIp;
-    return true;
+    return sendCommand(QStringLiteral("start"));
 }
 
 void HikSmartCameraSession::drainReceiveBuffer()
@@ -149,8 +134,9 @@ void HikSmartCameraSession::processReceivedData(const QByteArray& data)
 
     qInfo(hikTcpLog) << "从" << m_cameraIp << "接收到：" << message;
 
-    // 处理心跳包
-    if (message == "hello") {
+    // 处理心跳包（相机配置 heartbeat\r\n 或 hello）
+    if (message.compare(QStringLiteral("hello"), Qt::CaseInsensitive) == 0 ||
+        message.compare(QStringLiteral("heartbeat"), Qt::CaseInsensitive) == 0) {
         updateHeartbeat();
         emit heartbeatReceived(m_cameraIp);
         return;

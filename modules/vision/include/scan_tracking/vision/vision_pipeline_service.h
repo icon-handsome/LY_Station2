@@ -35,8 +35,14 @@ public:
     quint64 requestCaptureBundle(
         int segmentIndex,
         quint32 taskId,
-        scan_tracking::mech_eye::CaptureMode mechCaptureMode =
-            scan_tracking::mech_eye::CaptureMode::Capture3DOnly);
+        scan_tracking::mech_eye::CaptureMode mechCaptureMode);
+
+    /// @param telescopicConcurrentHikC 伸缩杆触发：梅卡与海康智能 C 同时发拍照指令，不等待 C 回图
+    quint64 requestCaptureBundle(
+        int segmentIndex,
+        quint32 taskId,
+        scan_tracking::mech_eye::CaptureMode mechCaptureMode,
+        bool telescopicConcurrentHikC);
 
 signals:
     void bundleCaptureFinished(scan_tracking::vision::MultiCameraCaptureBundle bundle);
@@ -57,6 +63,7 @@ private:
         bool hikBDone = false;
         bool hikCDone = false;
         bool useHikCameraC = false;
+        bool hikCTriggerOnly = false;
         quint64 mechRequestId = 0;
         quint64 hikARequestId = 0;
         quint64 hikBRequestId = 0;
@@ -67,6 +74,7 @@ private:
     void setState(VisionPipelineState state, const QString& description);
     void startPendingHikCapture();
     void startPendingHikCameraCCapture();
+    void triggerHikCameraCConcurrent(bool triggerOnly);
     void completeHikCameraCCapture(const QString& imagePath);
     void onHikCameraCCaptureTimeout();
     void finishBundleIfReady();

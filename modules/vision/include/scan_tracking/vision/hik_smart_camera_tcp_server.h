@@ -97,7 +97,7 @@ private:
     QTcpServer* m_tcpServer = nullptr;
     QMap<QString, HikSmartCameraSession*> m_sessions;  // IP -> Session
     QTimer* m_heartbeatTimer = nullptr;
-    int m_heartbeatTimeoutMs = 15000;  // 15秒超时（相机10秒发一次）
+    int m_heartbeatTimeoutMs = 25000;  // 相机心跳间隔 10s，留足余量
 };
 
 }  // namespace vision

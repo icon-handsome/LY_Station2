@@ -356,12 +356,10 @@ void HikCameraCController::onTcpCameraConnected(QString cameraIp, quint16 camera
     if (cameraIp == m_smartCameraIp) {
         setState(HikCameraCState::Ready, QStringLiteral("智能相机已通过 TCP 连接并就绪"));
 
-        // 连接后立即触发一次编号识别
-        requestCapture(CaptureType::NumberRecognition);
-
-        // 后续每 10 秒自动触发（编号识别）
-        enableTestMode(true, 10000);
-        qInfo(hikCControllerLog) << "自动采集已启用：连接后立即触发，之后每 10 秒一次";
+        if (m_testCaptureTimer && m_testCaptureTimer->isActive()) {
+            m_testCaptureTimer->stop();
+        }
+        qInfo(hikCControllerLog) << QStringLiteral("等待 PLC 伸缩杆触发（Trig_TelescopicScan）后再发送 start");
     } else {
         qWarning(hikCControllerLog) << QStringLiteral("意外相机 IP 已连接：") << cameraIp
                                     << QStringLiteral("（期望：") << m_smartCameraIp << QStringLiteral("）");

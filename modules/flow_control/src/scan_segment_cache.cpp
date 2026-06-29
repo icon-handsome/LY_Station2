@@ -148,6 +148,9 @@ bool persistScanSegmentBundle(
         }
     };
 
+    const bool cxpParticipated =
+        !bundle.request.hikCameraAKey.isEmpty() || !bundle.request.hikCameraBKey.isEmpty();
+
     if (bundle.mechEyeResult.pointCloud.isValid()) {
         const QString plyPath = scan_tracking::mech_eye::buildSegmentPlyPath(
             runRoot, segmentIndex, taskId, timestamp);
@@ -158,10 +161,11 @@ bool persistScanSegmentBundle(
         }
     }
 
-    if (bundle.mechEyeResult.texture2D.isValid()) {
+    if (bundle.mechEyeResult.success()) {
         const QString pngPath = scan_tracking::mech_eye::buildSegmentMech2DPngPath(
             runRoot, segmentIndex, taskId, timestamp);
         if (pngPath.isEmpty() ||
+            !bundle.mechEyeResult.texture2D.isValid() ||
             !scan_tracking::mech_eye::saveGrayTextureFrameToPng(
                 bundle.mechEyeResult.texture2D, pngPath)) {
             recordFailure(QStringLiteral("Mech-Eye 2D 落盘失败：段 %1").arg(segmentIndex));
@@ -187,25 +191,33 @@ bool persistScanSegmentBundle(
                 recordFailure(QStringLiteral("海康 C 落盘失败：段 %1").arg(segmentIndex));
             }
         }
+    } else if (!cxpParticipated) {
+        recordFailure(QStringLiteral("海康 C 无有效帧：段 %1").arg(segmentIndex));
     }
 
-    if (bundle.hikCameraAResult.success()) {
-        const QString bmpPath = scan_tracking::vision::buildSegmentHikMonoPath(
-            runRoot, segmentIndex, taskId, QStringLiteral("hikA"), timestamp);
-        if (bmpPath.isEmpty() ||
-            !scan_tracking::vision::saveHikMonoFrameToBmp(
-                bundle.hikCameraAResult.frame, bmpPath)) {
-            recordFailure(QStringLiteral("海康 A 落盘失败：段 %1").arg(segmentIndex));
+    if (cxpParticipated) {
+        if (bundle.hikCameraAResult.frame.isValid()) {
+            const QString bmpPath = scan_tracking::vision::buildSegmentHikMonoPath(
+                runRoot, segmentIndex, taskId, QStringLiteral("hikA"), timestamp);
+            if (bmpPath.isEmpty() ||
+                !scan_tracking::vision::saveHikMonoFrameToBmp(
+                    bundle.hikCameraAResult.frame, bmpPath)) {
+                recordFailure(QStringLiteral("海康 A 落盘失败：段 %1").arg(segmentIndex));
+            }
+        } else {
+            recordFailure(QStringLiteral("海康 A 无有效帧：段 %1").arg(segmentIndex));
         }
-    }
 
-    if (bundle.hikCameraBResult.success()) {
-        const QString bmpPath = scan_tracking::vision::buildSegmentHikMonoPath(
-            runRoot, segmentIndex, taskId, QStringLiteral("hikB"), timestamp);
-        if (bmpPath.isEmpty() ||
-            !scan_tracking::vision::saveHikMonoFrameToBmp(
-                bundle.hikCameraBResult.frame, bmpPath)) {
-            recordFailure(QStringLiteral("海康 B 落盘失败：段 %1").arg(segmentIndex));
+        if (bundle.hikCameraBResult.frame.isValid()) {
+            const QString bmpPath = scan_tracking::vision::buildSegmentHikMonoPath(
+                runRoot, segmentIndex, taskId, QStringLiteral("hikB"), timestamp);
+            if (bmpPath.isEmpty() ||
+                !scan_tracking::vision::saveHikMonoFrameToBmp(
+                    bundle.hikCameraBResult.frame, bmpPath)) {
+                recordFailure(QStringLiteral("海康 B 落盘失败：段 %1").arg(segmentIndex));
+            }
+        } else {
+            recordFailure(QStringLiteral("海康 B 无有效帧：段 %1").arg(segmentIndex));
         }
     }
 

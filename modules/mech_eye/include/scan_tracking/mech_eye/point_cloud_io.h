@@ -18,10 +18,10 @@ QString buildSegmentPlyPath(
     quint32 taskId,
     const QString& timestamp = QString());
 
-/// 将 PointCloudFrame 保存为 ASCII PLY（x,y,z,nx,ny,nz）
+/// 将 PointCloudFrame 保存为 binary_little_endian PLY（仅 x,y,z；保留全部点含 NaN）
 bool savePointCloudFrameToPly(const PointCloudFrame& frame, const QString& absolutePath);
 
-/// 从 ASCII PLY 加载点云；支持 x,y,z 与 x,y,z,nx,ny,nz
+/// 从 PLY 加载点云；写入仅 xyz，读取兼容带法向的旧文件
 bool loadPointCloudFrameFromPly(const QString& absolutePath, PointCloudFrame* outFrame);
 
 /// 释放 PointCloudFrame 中的大数组，保留 pointCount/width/height 等元数据

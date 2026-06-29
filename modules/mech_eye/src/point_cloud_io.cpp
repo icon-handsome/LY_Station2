@@ -7,11 +7,12 @@
 #include <QFileInfo>
 #include <QImage>
 #include <QLoggingCategory>
-#include <QTextStream>
 
 #include <cmath>
+#include <cstring>
 #include <fstream>
 #include <limits>
+#include <vector>
 
 Q_LOGGING_CATEGORY(LOG_POINT_CLOUD_IO, "mech_eye.point_cloud_io")
 
@@ -19,9 +20,73 @@ namespace scan_tracking::mech_eye {
 
 namespace {
 
+enum class PlyFormat {
+    Unknown,
+    Ascii,
+    BinaryLittleEndian,
+};
+
+struct PlyHeader {
+    PlyFormat format = PlyFormat::Unknown;
+    int vertexCount = 0;
+    bool hasNormals = false;
+    int headerEndOffset = 0;
+};
+
 bool isFinitePoint(float x, float y, float z)
 {
     return std::isfinite(x) && std::isfinite(y) && std::isfinite(z);
+}
+
+bool parsePlyHeader(QIODevice* device, PlyHeader* header, QString* errorMessage)
+{
+    if (header == nullptr || device == nullptr) {
+        return false;
+    }
+
+    const QByteArray firstLine = device->readLine();
+    if (firstLine.trimmed() != "ply") {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("缺少 PLY 头");
+        }
+        return false;
+    }
+
+    PlyHeader parsed;
+    bool inHeader = true;
+    while (inHeader && !device->atEnd()) {
+        const QByteArray rawLine = device->readLine();
+        const QString line = QString::fromUtf8(rawLine).trimmed();
+        if (line.startsWith(QStringLiteral("format "))) {
+            if (line.contains(QStringLiteral("ascii"))) {
+                parsed.format = PlyFormat::Ascii;
+            } else if (line.contains(QStringLiteral("binary_little_endian"))) {
+                parsed.format = PlyFormat::BinaryLittleEndian;
+            }
+        } else if (line.startsWith(QStringLiteral("element vertex"))) {
+            parsed.vertexCount = line.section(QLatin1Char(' '), 2).toInt();
+        } else if (line == QStringLiteral("property float nx")) {
+            parsed.hasNormals = true;
+        } else if (line == QStringLiteral("end_header")) {
+            inHeader = false;
+            parsed.headerEndOffset = static_cast<int>(device->pos());
+        }
+    }
+
+    if (parsed.format == PlyFormat::Unknown || parsed.vertexCount <= 0) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("PLY 头无效");
+        }
+        return false;
+    }
+
+    *header = parsed;
+    return true;
+}
+
+void writeBinaryFloat(std::ofstream& ofs, float value)
+{
+    ofs.write(reinterpret_cast<const char*>(&value), sizeof(float));
 }
 
 }  // namespace
@@ -58,27 +123,12 @@ bool savePointCloudFrameToPly(const PointCloudFrame& frame, const QString& absol
     }
 
     const auto& points = *frame.pointsXYZ;
-    const bool hasNormals = frame.hasNormals();
-    const auto* normals = hasNormals ? frame.normalsXYZ.get() : nullptr;
 
     const int pointCount = frame.pointCount;
     const int availablePointCount = static_cast<int>(points.size() / 3);
     const int count = std::min(pointCount, availablePointCount);
     if (count <= 0) {
-        qWarning(LOG_POINT_CLOUD_IO) << QStringLiteral("savePointCloudFrameToPly：无有效点");
-        return false;
-    }
-
-    std::size_t validCount = 0;
-    for (int index = 0; index < count; ++index) {
-        const auto base = static_cast<std::size_t>(index * 3);
-        if (isFinitePoint(points[base], points[base + 1], points[base + 2])) {
-            ++validCount;
-        }
-    }
-
-    if (validCount == 0) {
-        qWarning(LOG_POINT_CLOUD_IO) << QStringLiteral("savePointCloudFrameToPly：全部为 NaN 点");
+        qWarning(LOG_POINT_CLOUD_IO) << QStringLiteral("savePointCloudFrameToPly：无点可写");
         return false;
     }
 
@@ -92,36 +142,21 @@ bool savePointCloudFrameToPly(const PointCloudFrame& frame, const QString& absol
         return false;
     }
 
-    ofs << "ply\nformat ascii 1.0\nelement vertex " << validCount
-        << "\nproperty float x\nproperty float y\nproperty float z\nproperty float nx\nproperty float ny\nproperty float nz\nend_header\n";
+    ofs << "ply\nformat binary_little_endian 1.0\nelement vertex " << count
+        << "\nproperty float x\nproperty float y\nproperty float z\nend_header\n";
 
     for (int index = 0; index < count; ++index) {
         const auto base = static_cast<std::size_t>(index * 3);
-        const float x = points[base];
-        const float y = points[base + 1];
-        const float z = points[base + 2];
-        if (!isFinitePoint(x, y, z)) {
-            continue;
-        }
-
-        float nx = 0.0f;
-        float ny = 0.0f;
-        float nz = 1.0f;
-        if (normals != nullptr && static_cast<int>(normals->size()) >= (index + 1) * 3) {
-            nx = (*normals)[static_cast<std::size_t>(index * 3)];
-            ny = (*normals)[static_cast<std::size_t>(index * 3 + 1)];
-            nz = (*normals)[static_cast<std::size_t>(index * 3 + 2)];
-        }
-
-        ofs << x << " " << y << " " << z << " " << nx << " " << ny << " " << nz << "\n";
+        writeBinaryFloat(ofs, points[base]);
+        writeBinaryFloat(ofs, points[base + 1]);
+        writeBinaryFloat(ofs, points[base + 2]);
     }
 
     ofs.close();
 
     qInfo(LOG_POINT_CLOUD_IO).noquote()
-        << QStringLiteral("PLY 已保存：") << absolutePath
-        << QStringLiteral(" validPoints=") << validCount
-        << QStringLiteral("/") << count;
+        << QStringLiteral("PLY(binary) 已保存：") << absolutePath
+        << QStringLiteral(" points=") << count;
 
     return true;
 }
@@ -133,80 +168,100 @@ bool loadPointCloudFrameFromPly(const QString& absolutePath, PointCloudFrame* ou
     }
 
     QFile file(absolutePath);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    if (!file.open(QIODevice::ReadOnly)) {
         qWarning(LOG_POINT_CLOUD_IO).noquote()
             << QStringLiteral("loadPointCloudFrameFromPly：无法打开") << absolutePath;
         return false;
     }
 
-    QTextStream stream(&file);
-    QString line = stream.readLine().trimmed();
-    if (line != QStringLiteral("ply")) {
-        qWarning(LOG_POINT_CLOUD_IO) << QStringLiteral("loadPointCloudFrameFromPly：缺少 PLY 头");
-        return false;
-    }
-
-    bool hasNormals = false;
-    int vertexCount = 0;
-    bool inHeader = true;
-
-    while (inHeader && !stream.atEnd()) {
-        line = stream.readLine().trimmed();
-        if (line.startsWith(QStringLiteral("element vertex"))) {
-            vertexCount = line.section(QLatin1Char(' '), 2).toInt();
-        } else if (line == QStringLiteral("property float nx")) {
-            hasNormals = true;
-        } else if (line == QStringLiteral("end_header")) {
-            inHeader = false;
-        }
-    }
-
-    if (vertexCount <= 0) {
-        qWarning(LOG_POINT_CLOUD_IO) << QStringLiteral("loadPointCloudFrameFromPly：顶点数量无效");
+    PlyHeader header;
+    QString headerError;
+    if (!parsePlyHeader(&file, &header, &headerError)) {
+        qWarning(LOG_POINT_CLOUD_IO).noquote()
+            << QStringLiteral("loadPointCloudFrameFromPly：") << headerError << absolutePath;
         return false;
     }
 
     auto points = std::make_shared<std::vector<float>>();
     auto normals = std::make_shared<std::vector<float>>();
-    points->reserve(static_cast<std::size_t>(vertexCount) * 3);
-    if (hasNormals) {
-        normals->reserve(static_cast<std::size_t>(vertexCount) * 3);
+    points->reserve(static_cast<std::size_t>(header.vertexCount) * 3);
+    if (header.hasNormals) {
+        normals->reserve(static_cast<std::size_t>(header.vertexCount) * 3);
     }
 
-    int loaded = 0;
-    while (!stream.atEnd() && loaded < vertexCount) {
-        line = stream.readLine().trimmed();
-        if (line.isEmpty()) {
-            continue;
+    if (header.format == PlyFormat::BinaryLittleEndian) {
+        const int floatsPerVertex = header.hasNormals ? 6 : 3;
+        const qint64 bytesNeeded =
+            static_cast<qint64>(header.vertexCount) * floatsPerVertex * static_cast<qint64>(sizeof(float));
+        const QByteArray body = file.read(bytesNeeded);
+        if (body.size() != bytesNeeded) {
+            qWarning(LOG_POINT_CLOUD_IO).noquote()
+                << QStringLiteral("loadPointCloudFrameFromPly：二进制体长度不足") << absolutePath;
+            return false;
         }
 
-        const QStringList tokens = line.split(QLatin1Char(' '), Qt::SkipEmptyParts);
-        if (tokens.size() < 3) {
-            continue;
+        for (int index = 0; index < header.vertexCount; ++index) {
+            const auto offset = static_cast<std::size_t>(index * floatsPerVertex * sizeof(float));
+            float x = 0.0f;
+            float y = 0.0f;
+            float z = 0.0f;
+            std::memcpy(&x, body.data() + offset, sizeof(float));
+            std::memcpy(&y, body.data() + offset + sizeof(float), sizeof(float));
+            std::memcpy(&z, body.data() + offset + 2 * sizeof(float), sizeof(float));
+
+            points->push_back(x);
+            points->push_back(y);
+            points->push_back(z);
+
+            if (header.hasNormals) {
+                float nx = 0.0f;
+                float ny = 0.0f;
+                float nz = 1.0f;
+                std::memcpy(&nx, body.data() + offset + 3 * sizeof(float), sizeof(float));
+                std::memcpy(&ny, body.data() + offset + 4 * sizeof(float), sizeof(float));
+                std::memcpy(&nz, body.data() + offset + 5 * sizeof(float), sizeof(float));
+                normals->push_back(nx);
+                normals->push_back(ny);
+                normals->push_back(nz);
+            }
         }
+    } else {
+        int loaded = 0;
+        while (!file.atEnd() && loaded < header.vertexCount) {
+            const QByteArray rawLine = file.readLine();
+            const QString line = QString::fromUtf8(rawLine).trimmed();
+            if (line.isEmpty()) {
+                continue;
+            }
 
-        const float x = tokens[0].toFloat();
-        const float y = tokens[1].toFloat();
-        const float z = tokens[2].toFloat();
-        if (!isFinitePoint(x, y, z)) {
-            continue;
+            const QStringList tokens = line.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+            if (tokens.size() < 3) {
+                continue;
+            }
+
+            const float x = tokens[0].toFloat();
+            const float y = tokens[1].toFloat();
+            const float z = tokens[2].toFloat();
+            if (!isFinitePoint(x, y, z)) {
+                continue;
+            }
+
+            points->push_back(x);
+            points->push_back(y);
+            points->push_back(z);
+
+            if (header.hasNormals && tokens.size() >= 6) {
+                normals->push_back(tokens[3].toFloat());
+                normals->push_back(tokens[4].toFloat());
+                normals->push_back(tokens[5].toFloat());
+            } else if (header.hasNormals) {
+                normals->push_back(0.0f);
+                normals->push_back(0.0f);
+                normals->push_back(1.0f);
+            }
+
+            ++loaded;
         }
-
-        points->push_back(x);
-        points->push_back(y);
-        points->push_back(z);
-
-        if (hasNormals && tokens.size() >= 6) {
-            normals->push_back(tokens[3].toFloat());
-            normals->push_back(tokens[4].toFloat());
-            normals->push_back(tokens[5].toFloat());
-        } else if (hasNormals) {
-            normals->push_back(0.0f);
-            normals->push_back(0.0f);
-            normals->push_back(1.0f);
-        }
-
-        ++loaded;
     }
 
     file.close();
@@ -219,7 +274,7 @@ bool loadPointCloudFrameFromPly(const QString& absolutePath, PointCloudFrame* ou
 
     const int pointCount = static_cast<int>(points->size() / 3);
     outFrame->pointsXYZ = std::move(points);
-    if (hasNormals && static_cast<int>(normals->size()) == pointCount * 3) {
+    if (header.hasNormals && static_cast<int>(normals->size()) == pointCount * 3) {
         outFrame->normalsXYZ = std::move(normals);
     } else {
         outFrame->normalsXYZ.reset();
