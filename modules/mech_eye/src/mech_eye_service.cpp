@@ -50,6 +50,21 @@ MechEyeService::~MechEyeService()
  */
 void MechEyeService::start()
 {
+    const auto* configManager = common::ConfigManager::instance();
+    QString defaultKey;
+    if (configManager != nullptr) {
+        const auto cameraConfig = configManager->cameraConfig();
+        const auto visionConfig = configManager->visionConfig();
+        defaultKey = visionConfig.mechEyeCameraKey.trimmed();
+        if (defaultKey.isEmpty()) {
+            defaultKey = cameraConfig.defaultCamera;
+        }
+    }
+    start(defaultKey);
+}
+
+void MechEyeService::start(const QString& defaultCameraKey)
+{
     if (m_started) {
         return;
     }
@@ -59,14 +74,17 @@ void MechEyeService::start()
     const auto* configManager = common::ConfigManager::instance();
     if (configManager != nullptr) {
         const auto cameraConfig = configManager->cameraConfig();
-        const auto visionConfig = configManager->visionConfig();
-        m_defaultCameraKey = visionConfig.mechEyeCameraKey.trimmed();
+        m_defaultCameraKey = defaultCameraKey.trimmed();
         if (m_defaultCameraKey.isEmpty()) {
-            m_defaultCameraKey = cameraConfig.defaultCamera;
+            const auto visionConfig = configManager->visionConfig();
+            m_defaultCameraKey = visionConfig.mechEyeCameraKey.trimmed();
+            if (m_defaultCameraKey.isEmpty()) {
+                m_defaultCameraKey = cameraConfig.defaultCamera;
+            }
         }
         m_defaultCaptureTimeoutMs = cameraConfig.scanTimeoutMs > 0 ? cameraConfig.scanTimeoutMs : 5000;
     } else {
-        m_defaultCameraKey.clear();
+        m_defaultCameraKey = defaultCameraKey.trimmed();
         m_defaultCaptureTimeoutMs = 5000;
     }
 

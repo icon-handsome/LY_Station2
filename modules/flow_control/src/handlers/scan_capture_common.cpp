@@ -1,5 +1,7 @@
 #include "scan_tracking/flow_control/handlers/scan_capture_common.h"
 
+#include <cstring>
+
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/flow_control/detail/state_machine_internal.h"
 #include "scan_tracking/flow_control/plc_protocol.h"
@@ -50,12 +52,14 @@ void executeConfiguredScanCapture(
     }
 
     const bool kindIsInternal = isInternalSegmentKind(segmentKind);
-    if (telescopicInternal && !kindIsInternal) {
+    const bool isTelescopicScanTrigger =
+        std::strcmp(triggerLabel, "Trig_TelescopicScan") == 0;
+    if (isTelescopicScanTrigger && !kindIsInternal) {
         qInfo(LOG_FLOW).noquote()
             << QString::fromUtf8(triggerLabel)
             << QStringLiteral("：段号 %1 为 external 路径，仍执行组合采集。").arg(segmentIndex);
     }
-    if (!telescopicInternal && kindIsInternal) {
+    if (!isTelescopicScanTrigger && kindIsInternal) {
         qWarning(LOG_FLOW).noquote()
             << QString::fromUtf8(triggerLabel)
             << QStringLiteral("：段号 %1 为伸缩杆内部路径，请使用 Trig_TelescopicScan。")

@@ -189,6 +189,16 @@ void HmiTcpServer::bindServiceSignals()
     if (m_serviceSignalsBound) {
         return;
     }
+
+    qRegisterMetaType<scan_tracking::flow_control::AppState>(
+        "scan_tracking::flow_control::AppState");
+    qRegisterMetaType<scan_tracking::mech_eye::CaptureResult>(
+        "scan_tracking::mech_eye::CaptureResult");
+    qRegisterMetaType<scan_tracking::vision::MultiCameraCaptureBundle>(
+        "scan_tracking::vision::MultiCameraCaptureBundle");
+    qRegisterMetaType<scan_tracking::flow_control::InspectionResult>(
+        "scan_tracking::flow_control::InspectionResult");
+
     connectStateMachineSignals();
     connectModbusSignals();
     connectMechEyeSignals();
@@ -208,15 +218,27 @@ void HmiTcpServer::disconnectServiceSignals()
     if (m_modbusService) {
         disconnect(m_modbusService, nullptr, this, nullptr);
     }
-    if (m_mechEyeService) {
-        disconnect(m_mechEyeService, nullptr, this, nullptr);
+    if (m_mechEyeTelescopic) {
+        disconnect(m_mechEyeTelescopic, nullptr, this, nullptr);
+    }
+    if (m_mechEyeArm) {
+        disconnect(m_mechEyeArm, nullptr, this, nullptr);
     }
     if (m_visionPipeline) {
         disconnect(m_visionPipeline, nullptr, this, nullptr);
     }
     m_serviceSignalsBound = false;
 }
-void HmiTcpServer::setMechEyeService(mech_eye::MechEyeService* svc) { m_mechEyeService = svc; }
+void HmiTcpServer::setMechEyeService(mech_eye::MechEyeService* svc)
+{
+    m_mechEyeTelescopic = svc;
+}
+
+void HmiTcpServer::setMechEyeServices(mech_eye::MechEyeService* telescopic, mech_eye::MechEyeService* arm)
+{
+    m_mechEyeTelescopic = telescopic;
+    m_mechEyeArm = arm;
+}
 void HmiTcpServer::setVisionPipelineService(vision::VisionPipelineService* svc) { m_visionPipeline = svc; }
 void HmiTcpServer::setHikCameraServices(vision::HikCxpCameraService* hikA, vision::HikCxpCameraService* hikB,
                                         vision::HikCameraService* hikC) {
@@ -504,7 +526,28 @@ void HmiTcpServer::handleCmdGetConfig(const QJsonObject& message)
     
     // 5. Vision 配置
     QJsonObject visionObj;
-    visionObj[QLatin1String("mechEyeCameraKey")] = cfgMgr->visionConfig().mechEyeCameraKey; // MechEye 相机键
+    visionObj[QLatin1String("mechEyeCameraKey")] = cfgMgr->visionConfig().mechEyeCameraKey;
+
+    const auto buildDeviceGroupObj =
+        [](const scan_tracking::common::VisionDeviceGroupConfig& group) {
+            QJsonObject groupObj;
+            QJsonObject mechObj;
+            mechObj[QLatin1String("logicalName")] = group.mechEye.logicalName;
+            mechObj[QLatin1String("cameraKey")] = group.mechEye.cameraKey;
+            mechObj[QLatin1String("ipAddress")] = group.mechEye.ipAddress;
+            groupObj[QLatin1String("mechEye")] = mechObj;
+
+            QJsonObject hikObj;
+            hikObj[QLatin1String("logicalName")] = group.hikCameraC.logicalName;
+            hikObj[QLatin1String("cameraKey")] = group.hikCameraC.cameraKey;
+            hikObj[QLatin1String("ipAddress")] = group.hikCameraC.ipAddress;
+            groupObj[QLatin1String("hikCameraC")] = hikObj;
+            groupObj[QLatin1String("hikCameraCFtpDirectory")] = group.hikCameraCFtpDirectory;
+            return groupObj;
+        };
+    visionObj[QLatin1String("telescopicGroup")] =
+        buildDeviceGroupObj(cfgMgr->visionConfig().telescopicGroup);
+    visionObj[QLatin1String("armGroup")] = buildDeviceGroupObj(cfgMgr->visionConfig().armGroup);
     visionObj[QLatin1String("mechCaptureTimeoutMs")] = cfgMgr->visionConfig().mechCaptureTimeoutMs; // MechEye 捕获超时时间
     visionObj[QLatin1String("hikConnectTimeoutMs")] = cfgMgr->visionConfig().hikConnectTimeoutMs; // Hik 连接超时时间
     visionObj[QLatin1String("hikCaptureTimeoutMs")] = cfgMgr->visionConfig().hikCaptureTimeoutMs; // Hik 捕获超时时间
@@ -600,9 +643,13 @@ void HmiTcpServer::handleCmdRefreshCamera(const QJsonObject& message)
     const QString msgId = message.value(QLatin1String("msgId")).toString();
     
     // 刷新 MechEye 3D 相机连接状态
-    if (m_mechEyeService) {
-        qInfo(LOG_HMI_SERVER) << "[TCPIP] 收到相机刷新请求，正在刷新 MechEye 相机状态...";
-        m_mechEyeService->requestRefreshStatus();
+    if (m_mechEyeTelescopic) {
+        m_mechEyeTelescopic->requestRefreshStatus();
+    }
+    if (m_mechEyeArm) {
+        m_mechEyeArm->requestRefreshStatus();
+    }
+    if (m_mechEyeTelescopic || m_mechEyeArm) {
         sendResponse(QLatin1String(msg_type::kCmdRefreshCamera), msgId, true, QStringLiteral("相机刷新请求已发送"));
     } else {
         qWarning(LOG_HMI_SERVER) << "[TCPIP] 相机刷新失败：MechEye 服务不可用";
@@ -724,8 +771,9 @@ void HmiTcpServer::handleCmdCaptureMechEye(const QJsonObject& message)
 {
     const QString msgId = message.value(QLatin1String("msgId")).toString();
     const QString cameraKey = message.value(QLatin1String("payload")).toObject().value(QLatin1String("cameraKey")).toString();
-    if (m_mechEyeService) {
-        quint64 reqId = m_mechEyeService->requestCapture(cameraKey, mech_eye::CaptureMode::Capture3DOnly);
+    mech_eye::MechEyeService* service = resolveMechEyeService(cameraKey);
+    if (service != nullptr) {
+        quint64 reqId = service->requestCapture(cameraKey, mech_eye::CaptureMode::Capture3DOnly);
         QJsonObject payload = buildResponsePayload(true, QStringLiteral("采集请求已发送"));
         payload[QLatin1String("requestId")] = static_cast<qint64>(reqId);
         
@@ -761,7 +809,12 @@ void HmiTcpServer::handleCmdCaptureBundle(const QJsonObject& message)
         const auto mechCaptureMode = needMechEye2D
             ? scan_tracking::mech_eye::CaptureMode::Capture2DAnd3D
             : scan_tracking::mech_eye::CaptureMode::Capture3DOnly;
-        quint64 reqId = m_visionPipeline->requestCaptureBundle(segmentIndex, taskId, mechCaptureMode);
+        const QString deviceGroup = payloadObj.value(QLatin1String("deviceGroup")).toString().trimmed();
+        const bool telescopicInternal =
+            deviceGroup.compare(QStringLiteral("telescopic"), Qt::CaseInsensitive) == 0
+            || deviceGroup.compare(QStringLiteral("internal"), Qt::CaseInsensitive) == 0;
+        quint64 reqId = m_visionPipeline->requestCaptureBundle(
+            segmentIndex, taskId, mechCaptureMode, telescopicInternal);
         
         QJsonObject payload = buildResponsePayload(true, QStringLiteral("组合采集请求已发送"));
         payload[QLatin1String("requestId")] = static_cast<qint64>(reqId);
@@ -1048,20 +1101,39 @@ void HmiTcpServer::pushCameraStatus()
     checkCameraConnectivityEdges();
 }
 
-bool HmiTcpServer::mechEyeConnected() const
+bool HmiTcpServer::mechEyeServiceConnected(const mech_eye::MechEyeService* service) const
 {
-    if (!m_mechEyeService) {
+    if (service == nullptr) {
         return false;
     }
-    const auto state = m_mechEyeService->state();
+    const auto state = service->state();
     return state != mech_eye::CameraRuntimeState::Idle
         && state != mech_eye::CameraRuntimeState::Error;
 }
 
+mech_eye::MechEyeService* HmiTcpServer::resolveMechEyeService(const QString& cameraKey) const
+{
+    const auto* configMgr = scan_tracking::common::ConfigManager::instance();
+    const QString key = cameraKey.trimmed();
+    if (configMgr != nullptr && !key.isEmpty()) {
+        const auto& visionConfig = configMgr->visionConfig();
+        if (key == visionConfig.telescopicGroup.mechEye.cameraKey.trimmed()) {
+            return m_mechEyeTelescopic;
+        }
+        if (key == visionConfig.armGroup.mechEye.cameraKey.trimmed()) {
+            return m_mechEyeArm;
+        }
+    }
+    return m_mechEyeTelescopic != nullptr ? m_mechEyeTelescopic : m_mechEyeArm;
+}
+
 void HmiTcpServer::syncCameraConnectivityCache()
 {
-    if (m_mechEyeService) {
-        m_cameraConnectivityCache.mechEye = mechEyeConnected();
+    if (m_mechEyeTelescopic) {
+        m_cameraConnectivityCache.mechEyeTelescopic = mechEyeServiceConnected(m_mechEyeTelescopic);
+    }
+    if (m_mechEyeArm) {
+        m_cameraConnectivityCache.mechEyeArm = mechEyeServiceConnected(m_mechEyeArm);
     }
     if (m_hikCameraA) {
         m_cameraConnectivityCache.hikA = m_hikCameraA->isConnected();
@@ -1070,7 +1142,16 @@ void HmiTcpServer::syncCameraConnectivityCache()
         m_cameraConnectivityCache.hikB = m_hikCameraB->isConnected();
     }
     if (m_hikCameraC || m_hikCameraCController) {
-        m_cameraConnectivityCache.hikC = hikCameraCConnected();
+        const auto* configMgr = scan_tracking::common::ConfigManager::instance();
+        if (configMgr != nullptr && m_hikCameraCController != nullptr) {
+            const auto& visionConfig = configMgr->visionConfig();
+            m_cameraConnectivityCache.hikCTelescopic = hikCameraCConnected(
+                visionConfig.telescopicGroup.hikCameraC.ipAddress);
+            m_cameraConnectivityCache.hikCArm = hikCameraCConnected(
+                visionConfig.armGroup.hikCameraC.ipAddress);
+        } else {
+            m_cameraConnectivityCache.hikCTelescopic = hikCameraCConnected();
+        }
     }
     m_cameraConnectivityCache.valid = true;
 }
@@ -1100,16 +1181,29 @@ void HmiTcpServer::checkCameraConnectivityEdges()
         return;
     }
 
-    if (m_mechEyeService) {
-        const bool nowConnected = mechEyeConnected();
-        if (nowConnected != m_cameraConnectivityCache.mechEye) {
+    const auto checkMechEdge = [this](mech_eye::MechEyeService* service,
+                                      const QString& label,
+                                      bool& cachedConnected) {
+        if (service == nullptr) {
+            return;
+        }
+        const bool nowConnected = mechEyeServiceConnected(service);
+        if (nowConnected != cachedConnected) {
             emitCameraConnectivityAlarm(
-                QStringLiteral("梅卡相机"),
+                label,
                 nowConnected,
                 nowConnected ? kAlarmCodeMechEyeConnect : kAlarmCodeMechEyeDisconnect);
-            m_cameraConnectivityCache.mechEye = nowConnected;
+            cachedConnected = nowConnected;
         }
-    }
+    };
+    checkMechEdge(
+        m_mechEyeTelescopic,
+        QStringLiteral("梅卡相机[伸缩杆]"),
+        m_cameraConnectivityCache.mechEyeTelescopic);
+    checkMechEdge(
+        m_mechEyeArm,
+        QStringLiteral("梅卡相机[机械臂]"),
+        m_cameraConnectivityCache.mechEyeArm);
 
     if (m_hikCameraA) {
         const bool nowConnected = m_hikCameraA->isConnected();
@@ -1135,19 +1229,36 @@ void HmiTcpServer::checkCameraConnectivityEdges()
         }
     }
 
-    if (m_hikCameraC || m_hikCameraCController) {
-        const bool nowConnected = hikCameraCConnected();
-        if (nowConnected != m_cameraConnectivityCache.hikC) {
-            QString roleName = QStringLiteral("hikC");
-            if (m_hikCameraC) {
-                roleName = m_hikCameraC->roleName();
-            }
-            const QString label = QStringLiteral("海康相机 [%1]").arg(roleName);
+    const auto checkHikCEdge = [this](const QString& ip, const QString& label, bool& cachedConnected) {
+        if (ip.trimmed().isEmpty()) {
+            return;
+        }
+        const bool nowConnected = hikCameraCConnected(ip);
+        if (nowConnected != cachedConnected) {
             emitCameraConnectivityAlarm(
                 label,
                 nowConnected,
                 nowConnected ? kAlarmCodeHikConnect : kAlarmCodeHikDisconnect);
-            m_cameraConnectivityCache.hikC = nowConnected;
+            cachedConnected = nowConnected;
+        }
+    };
+    if (m_hikCameraC || m_hikCameraCController) {
+        const auto* configMgr = scan_tracking::common::ConfigManager::instance();
+        if (configMgr != nullptr) {
+            const auto& visionConfig = configMgr->visionConfig();
+            checkHikCEdge(
+                visionConfig.telescopicGroup.hikCameraC.ipAddress,
+                QStringLiteral("海康智能相机[伸缩杆]"),
+                m_cameraConnectivityCache.hikCTelescopic);
+            checkHikCEdge(
+                visionConfig.armGroup.hikCameraC.ipAddress,
+                QStringLiteral("海康智能相机[机械臂]"),
+                m_cameraConnectivityCache.hikCArm);
+        } else {
+            checkHikCEdge(
+                QString(),
+                QStringLiteral("海康智能相机"),
+                m_cameraConnectivityCache.hikCTelescopic);
         }
     }
 }
@@ -1155,13 +1266,22 @@ void HmiTcpServer::checkCameraConnectivityEdges()
 QJsonObject HmiTcpServer::buildCameraStatusPayload() const
 {
     QJsonObject payload;
-    
-    if (m_mechEyeService) {
+
+    const auto buildMechObj = [this](const mech_eye::MechEyeService* service) {
         QJsonObject mechEyeObj;
-        mechEyeObj[QLatin1String("state")] = static_cast<int>(m_mechEyeService->state());
-        mechEyeObj[QLatin1String("connected")] = (m_mechEyeService->state() != mech_eye::CameraRuntimeState::Idle
-                                                   && m_mechEyeService->state() != mech_eye::CameraRuntimeState::Error);
-        payload[QLatin1String("mechEye")] = mechEyeObj;
+        if (service == nullptr) {
+            mechEyeObj[QLatin1String("connected")] = false;
+            return mechEyeObj;
+        }
+        mechEyeObj[QLatin1String("state")] = static_cast<int>(service->state());
+        mechEyeObj[QLatin1String("connected")] = mechEyeServiceConnected(service);
+        return mechEyeObj;
+    };
+
+    payload[QLatin1String("mechEyeTelescopic")] = buildMechObj(m_mechEyeTelescopic);
+    payload[QLatin1String("mechEyeArm")] = buildMechObj(m_mechEyeArm);
+    if (m_mechEyeTelescopic) {
+        payload[QLatin1String("mechEye")] = buildMechObj(m_mechEyeTelescopic);
     }
     
     if (m_hikCameraA) {
@@ -1184,6 +1304,23 @@ QJsonObject HmiTcpServer::buildCameraStatusPayload() const
         hikCObj[QLatin1String("connected")] = hikCameraCConnected();
         payload[QLatin1String("hikC")] = hikCObj;
     }
+
+    const auto* configMgr = scan_tracking::common::ConfigManager::instance();
+    if (configMgr != nullptr && m_hikCameraCController) {
+        const auto& visionConfig = configMgr->visionConfig();
+        QJsonObject hikCTelescopicObj;
+        hikCTelescopicObj[QLatin1String("ipAddress")] =
+            visionConfig.telescopicGroup.hikCameraC.ipAddress;
+        hikCTelescopicObj[QLatin1String("connected")] = hikCameraCConnected(
+            visionConfig.telescopicGroup.hikCameraC.ipAddress);
+        payload[QLatin1String("hikCTelescopic")] = hikCTelescopicObj;
+
+        QJsonObject hikCArmObj;
+        hikCArmObj[QLatin1String("ipAddress")] = visionConfig.armGroup.hikCameraC.ipAddress;
+        hikCArmObj[QLatin1String("connected")] =
+            hikCameraCConnected(visionConfig.armGroup.hikCameraC.ipAddress);
+        payload[QLatin1String("hikCArm")] = hikCArmObj;
+    }
     
     if (m_visionPipeline) {
         QJsonObject pipelineObj;
@@ -1193,14 +1330,29 @@ QJsonObject HmiTcpServer::buildCameraStatusPayload() const
     return payload;
 }
 
-bool HmiTcpServer::hikCameraCConnected() const
+bool HmiTcpServer::hikCameraCConnected(const QString& cameraIp) const
 {
+    const QString normalizedIp = cameraIp.trimmed();
     if (m_hikCameraCController && m_hikCameraCController->isStarted()) {
+        if (!normalizedIp.isEmpty()) {
+            return m_hikCameraCController->isCameraConnected(normalizedIp);
+        }
         if (m_hikCameraCController->isCameraConnectedToTcp()) {
             return true;
         }
     }
     return m_hikCameraC && m_hikCameraC->isConnected();
+}
+
+bool HmiTcpServer::hikCameraCConnected() const
+{
+    const auto* configMgr = scan_tracking::common::ConfigManager::instance();
+    if (configMgr != nullptr && m_hikCameraCController && m_hikCameraCController->isStarted()) {
+        const auto& visionConfig = configMgr->visionConfig();
+        return hikCameraCConnected(visionConfig.telescopicGroup.hikCameraC.ipAddress)
+            || hikCameraCConnected(visionConfig.armGroup.hikCameraC.ipAddress);
+    }
+    return hikCameraCConnected(QString());
 }
 
 void HmiTcpServer::pushDeviceStatus()
@@ -1230,13 +1382,14 @@ QJsonObject HmiTcpServer::buildDeviceStatusPayload() const
         onlineWord0 |= (1u << kBitHmiClient);
     }
 
-    const bool mechEyeOnline = m_mechEyeService
-        && m_mechEyeService->state() != mech_eye::CameraRuntimeState::Idle
-        && m_mechEyeService->state() != mech_eye::CameraRuntimeState::Error;
-    if (mechEyeOnline) {
+    const bool mechTelescopicOnline = mechEyeServiceConnected(m_mechEyeTelescopic);
+    const bool mechArmOnline = mechEyeServiceConnected(m_mechEyeArm);
+    if (mechTelescopicOnline || mechArmOnline) {
         onlineWord0 |= (1u << kBitMechEye);
     }
-    if (m_mechEyeService && m_mechEyeService->state() == mech_eye::CameraRuntimeState::Error) {
+    if ((m_mechEyeTelescopic
+         && m_mechEyeTelescopic->state() == mech_eye::CameraRuntimeState::Error)
+        || (m_mechEyeArm && m_mechEyeArm->state() == mech_eye::CameraRuntimeState::Error)) {
         faultWord0 |= (1u << kBitMechEye);
     }
 
@@ -1337,7 +1490,12 @@ void HmiTcpServer::connectStateMachineSignals()
         sendToClient(buildEnvelope(QLatin1String(msg_type::kEventScanFinished), nextEventId(), payload));
     }, Qt::UniqueConnection);
 
-    // 综合检测结果由业务层调用 publishInspectionResult() 直推 event.inspection.finished。
+    connect(
+        m_stateMachine,
+        &flow_control::StateMachine::inspectionResultReady,
+        this,
+        &HmiTcpServer::publishInspectionResult,
+        Qt::UniqueConnection);
 
     // 位姿校验完成
     connect(m_stateMachine, &flow_control::StateMachine::poseCheckFinished, this,
@@ -1441,32 +1599,39 @@ void HmiTcpServer::connectModbusSignals()
 
 void HmiTcpServer::connectMechEyeSignals()
 {
-    if (!m_mechEyeService) return;
-
-    connect(m_mechEyeService, &mech_eye::MechEyeService::captureFinished, this,
-        [this](scan_tracking::mech_eye::CaptureResult result) {
-        QJsonObject payload;
-        payload[QLatin1String("requestId")] = static_cast<qint64>(result.requestId);
-        payload[QLatin1String("cameraKey")] = result.cameraKey;
-        payload[QLatin1String("pointCount")] = static_cast<int>(result.pointCloud.pointCount);
-        payload[QLatin1String("width")] = result.pointCloud.width;
-        payload[QLatin1String("height")] = result.pointCloud.height;
-        payload[QLatin1String("elapsedMs")] = static_cast<int>(result.elapsedMs);
-        payload[QLatin1String("errorCode")] = static_cast<int>(result.errorCode);
-        sendToClient(buildEnvelope(QLatin1String(msg_type::kEventImageCaptured), nextEventId(), payload));
-    });
-
-    connect(m_mechEyeService, &mech_eye::MechEyeService::fatalError, this,
-        [this](scan_tracking::mech_eye::CaptureErrorCode code, QString message) {
-        QJsonObject payload;
-        payload[QLatin1String("message")] = message;
-        payload[QLatin1String("level")] = 3;
-        payload[QLatin1String("code")] = static_cast<int>(code);
-        sendToClient(buildEnvelope(QLatin1String(msg_type::kEventAlarm), nextEventId(), payload));
-        if (hasClient()) {
-            pushDeviceStatus();
+    const auto connectOne = [this](mech_eye::MechEyeService* service) {
+        if (service == nullptr) {
+            return;
         }
-    });
+        connect(service, &mech_eye::MechEyeService::captureFinished, this,
+            [this](scan_tracking::mech_eye::CaptureResult result) {
+                QJsonObject payload;
+                payload[QLatin1String("requestId")] = static_cast<qint64>(result.requestId);
+                payload[QLatin1String("cameraKey")] = result.cameraKey;
+                payload[QLatin1String("pointCount")] = static_cast<int>(result.pointCloud.pointCount);
+                payload[QLatin1String("width")] = result.pointCloud.width;
+                payload[QLatin1String("height")] = result.pointCloud.height;
+                payload[QLatin1String("elapsedMs")] = static_cast<int>(result.elapsedMs);
+                payload[QLatin1String("errorCode")] = static_cast<int>(result.errorCode);
+                sendToClient(buildEnvelope(QLatin1String(msg_type::kEventImageCaptured), nextEventId(), payload));
+            },
+            Qt::QueuedConnection);
+
+        connect(service, &mech_eye::MechEyeService::fatalError, this,
+            [this](scan_tracking::mech_eye::CaptureErrorCode code, QString message) {
+                QJsonObject payload;
+                payload[QLatin1String("message")] = message;
+                payload[QLatin1String("level")] = 3;
+                payload[QLatin1String("code")] = static_cast<int>(code);
+                sendToClient(buildEnvelope(QLatin1String(msg_type::kEventAlarm), nextEventId(), payload));
+                if (hasClient()) {
+                    pushDeviceStatus();
+                }
+            },
+            Qt::QueuedConnection);
+    };
+    connectOne(m_mechEyeTelescopic);
+    connectOne(m_mechEyeArm);
 }
 
 void HmiTcpServer::connectStatusRefreshSignals()
@@ -1499,15 +1664,20 @@ void HmiTcpServer::connectStatusRefreshSignals()
         }, Qt::UniqueConnection);
     }
 
-    if (m_mechEyeService) {
-        connect(m_mechEyeService, &mech_eye::MechEyeService::stateChanged, this,
+    const auto connectMechState = [this](mech_eye::MechEyeService* service) {
+        if (service == nullptr) {
+            return;
+        }
+        connect(service, &mech_eye::MechEyeService::stateChanged, this,
                 [this](mech_eye::CameraRuntimeState, QString) {
             if (hasClient()) {
                 pushCameraStatus();
                 pushDeviceStatus();
             }
         }, Qt::UniqueConnection);
-    }
+    };
+    connectMechState(m_mechEyeTelescopic);
+    connectMechState(m_mechEyeArm);
 
     if (m_visionPipeline) {
         connect(m_visionPipeline, &vision::VisionPipelineService::stateChanged, this,
@@ -1559,7 +1729,8 @@ void HmiTcpServer::connectVisionPipelineSignals()
         payload[QLatin1String("hikAOk")] = bundle.hikCameraAResult.success();
         payload[QLatin1String("hikBOk")] = bundle.hikCameraBResult.success();
         sendToClient(buildEnvelope(QLatin1String(msg_type::kEventBundleCaptured), nextEventId(), payload));
-    });
+    },
+        Qt::QueuedConnection);
 }
 
 // --- 日志转发实现（默认关闭，见 kForwardQtLogsToHmi）---

@@ -7,7 +7,6 @@
 #include <QtCore/QtGlobal>
 
 #include <atomic>
-#include <functional>
 #include <memory>
 
 #include "scan_tracking/flow_control/inspection_types.h"
@@ -25,6 +24,7 @@ class MechEyeService;
 }
 namespace vision {
 class VisionPipelineService;
+class HikCameraCController;
 }
 namespace flow_control {
 
@@ -37,14 +37,18 @@ enum class AppState {
     Error,
 };
 
+Q_DECLARE_METATYPE(scan_tracking::flow_control::AppState)
+
 class StateMachine : public QObject, public PlcTaskHost {
     Q_OBJECT
 
 public:
     explicit StateMachine(
         modbus::ModbusService* modbusService,
-        mech_eye::MechEyeService* mechEyeService = nullptr,
+        mech_eye::MechEyeService* mechEyeTelescopicService = nullptr,
+        mech_eye::MechEyeService* mechEyeArmService = nullptr,
         vision::VisionPipelineService* visionPipelineService = nullptr,
+        vision::HikCameraCController* hikCameraCController = nullptr,
         QObject* parent = nullptr);
     ~StateMachine();
 
@@ -69,9 +73,6 @@ public:
     void setAlarm(quint16 level, quint16 code, const QString& message);
     bool reportPersonZoneAlarm(bool alarm);
 
-    using InspectionResultPublisher = std::function<void(const InspectionResult&)>;
-    void setInspectionResultPublisher(InspectionResultPublisher publisher);
-
     InspectionResult evaluateCachedInspection(quint32 taskId = 0) const;
 
     const ScanSegmentCache& scanSegmentCache() const { return m_scanSegmentCache; }
@@ -79,7 +80,10 @@ public:
     // --- PlcTaskHost（供 Handler 调用）---
     modbus::ModbusService* modbusService() const override;
     mech_eye::MechEyeService* mechEyeService() const override;
+    mech_eye::MechEyeService* mechEyeTelescopicService() const override;
+    mech_eye::MechEyeService* mechEyeArmService() const override;
     vision::VisionPipelineService* visionPipelineService() const override;
+    vision::HikCameraCController* hikCameraCController() const override;
     bool isModbusConnected() const override;
 
     bool completeActiveTask(
@@ -136,6 +140,7 @@ signals:
                             quint16 measureItemCount,
                             const InspectionMeasurement& measurement,
                             const QString& message);
+    void inspectionResultReady(const InspectionResult& result);
     void poseCheckFinished(bool success, quint16 resultCode, double poseDeviationMm,
                            const QVector<double>& rt, const QString& message);
     void loadGraspFinished(quint16 resultCode, float x, float y, float z,
@@ -196,8 +201,10 @@ private:
     quint16 resolveScanSegmentIndex(const QVector<quint16>& commandBlock) const;
 
     modbus::ModbusService* m_modbus = nullptr;
-    mech_eye::MechEyeService* m_mechEye = nullptr;
+    mech_eye::MechEyeService* m_mechEyeTelescopic = nullptr;
+    mech_eye::MechEyeService* m_mechEyeArm = nullptr;
     vision::VisionPipelineService* m_visionPipeline = nullptr;
+    vision::HikCameraCController* m_hikCameraCController = nullptr;
     QTimer* m_pollTimer = nullptr;
     QTimer* m_heartbeatTimer = nullptr;
     QTimer* m_timeoutTimer = nullptr;
@@ -222,7 +229,6 @@ private:
     QVector<quint16> m_lastCommandBlock;
     protocol::registers::Pose6f m_robotTcpPose;
     ScanSegmentCache m_scanSegmentCache;
-    InspectionResultPublisher m_inspectionResultPublisher;
     std::atomic_bool m_stopped{false};
 };
 

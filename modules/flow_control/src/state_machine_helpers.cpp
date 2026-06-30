@@ -134,7 +134,7 @@ PoseSourceResult parsePoseSource(
 void countBundleFrames(const vision::MultiCameraCaptureBundle& bundle, int* imageCount, int* cloudFrameCount)
 {
     int images = 0;
-    if (bundle.hikCameraCCaptureOk()) {
+    if (bundle.hikCameraCOk()) {
         ++images;
     }
     if (bundle.hikCameraAResult.success()) {

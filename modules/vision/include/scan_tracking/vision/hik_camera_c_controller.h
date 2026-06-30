@@ -6,8 +6,10 @@
 // 不经过 MVS SDK 打开设备，可与 SCMVS 同时运行。
 // 由 StateMachine / HmiTcpServer 触发表面缺陷、焊缝、编号识别等拍照任务。
 
+#include <QtCore/QHash>
 #include <QtCore/QObject>
 #include <QtCore/QTimer>
+#include <QtCore/QVector>
 
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/vision/vision_types.h"
@@ -45,12 +47,15 @@ public:
     HikCameraCState state() const { return m_state; }
 
     bool isTcpServerRunning() const;
+    bool isCameraConnected(const QString& cameraIp) const;
     bool isCameraConnectedToTcp() const;
 
     bool isFtpMonitorRunning() const;
     QString ftpDirectory() const;
+    QStringList configuredCameraIps() const;
 
-    /* 向已连接的智能相机发送拍照指令（TCP start\r\n），类型决定后续 FTP 文件名解析 */
+    /* 向已连接的智能相机发送拍照指令（TCP start），类型决定后续 FTP 文件名解析 */
+    bool requestCapture(CaptureType type, const QString& cameraIp);
     bool requestCapture(CaptureType type = CaptureType::SurfaceDefect);
 
     /* 启用周期性自动拍照（联调/冒烟，默认 10s 间隔） */
@@ -59,8 +64,8 @@ public:
 signals:
     void stateChanged(scan_tracking::vision::HikCameraCState state, QString description);
     void fatalError(scan_tracking::vision::VisionErrorCode code, QString message);
-    void captureCompleted(CaptureType type, QByteArray imageData);
-    void imageReceived(CaptureType type, QString filePath, qint64 fileSize);  ///< FTP 落图就绪
+    void captureCompleted(CaptureType type, QString cameraIp, QByteArray imageData);
+    void imageReceived(CaptureType type, QString cameraIp, QString filePath, qint64 fileSize);
 
 private slots:
     void onTcpServerStarted(QString listenIp, quint16 port);
@@ -81,32 +86,45 @@ private slots:
     void onTestCaptureTimer();
 
 private:
+    struct FtpBinding {
+        QString cameraIp;
+        QString ftpDirectory;
+        HikSmartCameraFtpMonitor* monitor = nullptr;
+    };
+
     static void registerMetaTypes();
     void setState(HikCameraCState state, const QString& description);
     void initializeTcpServer();
     void cleanupTcpServer();
-    void initializeFtpMonitor();
-    void cleanupFtpMonitor();
-    bool saveImageToFile(const QByteArray& imageData, CaptureType type);
+    void initializeFtpMonitors();
+    void cleanupFtpMonitors();
+    bool saveImageToFile(const QByteArray& imageData, CaptureType type, const QString& cameraIp);
     QString getCaptureTypeString(CaptureType type) const;
+    bool isConfiguredCameraIp(const QString& cameraIp) const;
+    QString groupLabelForCamera(const QString& cameraIp) const;
+    void updateReadyStateFromConnections();
+    void scheduleReadyStateUpdate();
+    FtpBinding* findFtpBindingByMonitor(HikSmartCameraFtpMonitor* monitor);
 
     HikSmartCameraTcpServer* m_tcpServer = nullptr;
-    HikSmartCameraFtpMonitor* m_ftpMonitor = nullptr;
+    QVector<FtpBinding> m_ftpBindings;
     QTimer* m_testCaptureTimer = nullptr;
     scan_tracking::common::VisionConfig m_config;
     bool m_started = false;
     HikCameraCState m_state = HikCameraCState::Idle;
-    QString m_smartCameraIp;      ///< 智能相机 IP，来自配置 hikCameraCIp
-    QString m_tcpListenIp;        ///< TCP 服务端监听 IP
-    quint16 m_tcpListenPort = 0;  ///< TCP 服务端监听端口
-    QString m_ftpDirectory;       ///< FTP 落图根目录
-    CaptureType m_currentCaptureType = CaptureType::SurfaceDefect;
-    int m_captureCounter = 0;
+    QStringList m_configuredCameraIps;
+    QString m_primaryCameraIp;
+    QString m_tcpListenIp;
+    quint16 m_tcpListenPort = 0;
+    QHash<QString, CaptureType> m_pendingCaptureTypeByIp;
+    QHash<QString, int> m_captureCounterByIp;
 
-    QString m_lastOcrText;        ///< OCR 结果限频：上次已打印文本
+    QString m_lastOcrText;
     qint64 m_lastOcrLogMs = 0;
     int m_suppressedOcrLogCount = 0;
 };
 
 }  // namespace vision
 }  // namespace scan_tracking
+
+Q_DECLARE_METATYPE(scan_tracking::vision::HikCameraCState)

@@ -15,6 +15,7 @@ class MechEyeService;
 }
 namespace vision {
 class VisionPipelineService;
+class HikCameraCController;
 }
 namespace flow_control {
 
@@ -39,7 +40,10 @@ public:
 
     virtual modbus::ModbusService* modbusService() const = 0;
     virtual mech_eye::MechEyeService* mechEyeService() const = 0;
+    virtual mech_eye::MechEyeService* mechEyeTelescopicService() const = 0;
+    virtual mech_eye::MechEyeService* mechEyeArmService() const = 0;
     virtual vision::VisionPipelineService* visionPipelineService() const = 0;
+    virtual vision::HikCameraCController* hikCameraCController() const = 0;
     virtual bool isModbusConnected() const = 0;
 
     virtual bool completeActiveTask(

@@ -9,7 +9,7 @@ int ScanSegmentHandler::trigOffset() const { return 23; }
 
 void ScanSegmentHandler::execute(TaskHandlerContext& ctx)
 {
-    executeConfiguredScanCapture(ctx, triggerName(), false);
+    executeConfiguredScanCapture(ctx, triggerName(), true);
 }
 
 }  // namespace scan_tracking::flow_control

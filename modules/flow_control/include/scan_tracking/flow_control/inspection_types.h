@@ -1,8 +1,7 @@
 #pragma once
 
-#include <functional>
-
 #include <QtCore/QJsonObject>
+#include <QtCore/QMetaType>
 #include <QtCore/QString>
 #include <QtCore/QtGlobal>
 
@@ -27,3 +26,6 @@ void appendInspectionMeasurementFields(QJsonObject& payload, const InspectionMea
 
 }  // namespace flow_control
 }  // namespace scan_tracking
+
+Q_DECLARE_METATYPE(scan_tracking::flow_control::InspectionMeasurement)
+Q_DECLARE_METATYPE(scan_tracking::flow_control::InspectionResult)

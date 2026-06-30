@@ -134,6 +134,7 @@ struct MultiCameraCaptureRequest {
     QString hikCameraAKey;
     QString hikCameraBKey;
     int hikTimeoutMs = 1000;
+    QString hikCameraCIp;
 };
 
 struct MultiCameraCaptureBundle {
@@ -142,10 +143,16 @@ struct MultiCameraCaptureBundle {
     HikPoseCaptureResult hikCameraAResult;
     HikPoseCaptureResult hikCameraBResult;
     QString hikCameraCImagePath;
+    bool hikCameraCTriggerOk = false;
 
     bool hikCameraCCaptureOk() const
     {
         return !hikCameraCImagePath.trimmed().isEmpty();
+    }
+
+    bool hikCameraCOk() const
+    {
+        return hikCameraCTriggerOk || hikCameraCCaptureOk();
     }
 
     bool allCamerasOk() const
@@ -156,10 +163,13 @@ struct MultiCameraCaptureBundle {
         if (cxpParticipated) {
             return mechOk && hikCameraAResult.success() && hikCameraBResult.success();
         }
-        return mechOk && hikCameraCCaptureOk();
+        if (!request.hikCameraCIp.trimmed().isEmpty()) {
+            return mechOk && hikCameraCOk();
+        }
+        return mechOk;
     }
 
-    /// 任一路相机成功即视为组合采集成功（允许部分相机失败）。
+    /// 梅卡成功且（未参与海康 C 或海康 C 触发/出图成功）。
     bool success() const
     {
         const bool mechOk = mechEyeResult.success();
@@ -168,7 +178,10 @@ struct MultiCameraCaptureBundle {
         if (cxpParticipated) {
             return mechOk || hikCameraAResult.success() || hikCameraBResult.success();
         }
-        return mechOk || hikCameraCCaptureOk();
+        if (!request.hikCameraCIp.trimmed().isEmpty()) {
+            return mechOk && hikCameraCOk();
+        }
+        return mechOk;
     }
 
     QString summary() const
@@ -176,24 +189,23 @@ struct MultiCameraCaptureBundle {
         const auto flag = [](bool ok) {
             return ok ? QStringLiteral("成功") : QStringLiteral("失败");
         };
-        if (hikCameraCCaptureOk() || !hikCameraAResult.logicalName.isEmpty() ||
+        if (!request.hikCameraCIp.trimmed().isEmpty() ||
+            hikCameraCCaptureOk() || hikCameraCTriggerOk ||
+            !hikCameraAResult.logicalName.isEmpty() ||
             !hikCameraBResult.logicalName.isEmpty()) {
-            const QString hikPart = hikCameraCCaptureOk()
-                ? flag(hikCameraCCaptureOk())
-                : QStringLiteral("%1/%2")
-                      .arg(flag(hikCameraAResult.success()))
-                      .arg(flag(hikCameraBResult.success()));
-            QString line = QStringLiteral(
-                             "组合采集 requestId=%1 taskId=%2 段号=%3 梅卡=%4 海康=%5")
-                             .arg(request.requestId)
-                             .arg(request.taskId)
-                             .arg(request.segmentIndex)
-                             .arg(flag(mechEyeResult.success()))
-                             .arg(hikPart);
-            if (success() && !allCamerasOk()) {
-                line += QStringLiteral(" 整体=成功(部分)");
-            }
-            return line;
+            const QString hikPart =
+                !request.hikCameraCIp.trimmed().isEmpty()
+                    ? flag(hikCameraCOk())
+                    : QStringLiteral("%1/%2")
+                          .arg(flag(hikCameraAResult.success()))
+                          .arg(flag(hikCameraBResult.success()));
+            return QStringLiteral(
+                       "组合采集 requestId=%1 taskId=%2 段号=%3 梅卡=%4 海康=%5")
+                .arg(request.requestId)
+                .arg(request.taskId)
+                .arg(request.segmentIndex)
+                .arg(flag(mechEyeResult.success()))
+                .arg(hikPart);
         }
         return QStringLiteral(
                    "组合采集 requestId=%1 taskId=%2 段号=%3 梅卡=%4")

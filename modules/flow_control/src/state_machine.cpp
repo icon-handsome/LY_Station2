@@ -2,26 +2,28 @@
 
 #include "scan_tracking/flow_control/detail/state_machine_internal.h"
 
-#include "scan_tracking/mech_eye/mech_eye_service.h"
-#include "scan_tracking/vision/vision_pipeline_service.h"
-
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/flow_control/station_trigger_policy.h"
 #include "scan_tracking/flow_control/task_handler_registry.h"
 #include "scan_tracking/mech_eye/mech_eye_service.h"
+#include "scan_tracking/vision/hik_camera_c_controller.h"
 #include "scan_tracking/vision/vision_pipeline_service.h"
 
 namespace scan_tracking::flow_control {
 
 StateMachine::StateMachine(
     modbus::ModbusService* modbusService,
-    mech_eye::MechEyeService* mechEyeService,
+    mech_eye::MechEyeService* mechEyeTelescopicService,
+    mech_eye::MechEyeService* mechEyeArmService,
     vision::VisionPipelineService* visionPipelineService,
+    vision::HikCameraCController* hikCameraCController,
     QObject* parent)
     : QObject(parent)
     , m_modbus(modbusService)
-    , m_mechEye(mechEyeService)
+    , m_mechEyeTelescopic(mechEyeTelescopicService)
+    , m_mechEyeArm(mechEyeArmService)
     , m_visionPipeline(visionPipelineService)
+    , m_hikCameraCController(hikCameraCController)
     , m_pollTimer(new QTimer(this))
     , m_heartbeatTimer(new QTimer(this))
     , m_timeoutTimer(new QTimer(this))
@@ -62,21 +64,26 @@ StateMachine::StateMachine(
         connect(m_modbus, &modbus::ModbusService::registerWriteFailed, this, &StateMachine::onRegisterWriteFailed);
     }
 
-    if (m_mechEye) {
+    const auto connectMechEye = [this](mech_eye::MechEyeService* service, const char* label) {
+        if (service == nullptr) {
+            return;
+        }
         connect(
-            m_mechEye,
+            service,
             &mech_eye::MechEyeService::stateChanged,
             this,
-            [](mech_eye::CameraRuntimeState state, QString desc) {
-                qInfo(LOG_FLOW) << "[MechEye] 相机状态变更:" << static_cast<int>(state) << desc;
+            [label](mech_eye::CameraRuntimeState state, QString desc) {
+                qInfo(LOG_FLOW) << label << QStringLiteral("相机状态变更:") << static_cast<int>(state) << desc;
             });
         connect(
-            m_mechEye,
+            service,
             &mech_eye::MechEyeService::fatalError,
             this,
             &StateMachine::onMechEyeFatalError,
             Qt::QueuedConnection);
-    }
+    };
+    connectMechEye(m_mechEyeTelescopic, "[MechEye-Telescopic]");
+    connectMechEye(m_mechEyeArm, "[MechEye-Arm]");
 
     if (m_visionPipeline) {
         connect(
@@ -97,7 +104,7 @@ StateMachine::StateMachine(
             &vision::VisionPipelineService::bundleCaptureFinished,
             this,
             &StateMachine::onBundleCaptureFinished,
-            Qt::QueuedConnection);
+            Qt::DirectConnection);
     }
 }
 
@@ -133,15 +140,7 @@ void StateMachine::stop()
         return;
     }
 
-    if (m_modbus != nullptr) {
-        disconnect(m_modbus, nullptr, this, nullptr);
-    }
-    if (m_mechEye != nullptr) {
-        disconnect(m_mechEye, nullptr, this, nullptr);
-    }
-    if (m_visionPipeline != nullptr) {
-        disconnect(m_visionPipeline, nullptr, this, nullptr);
-    }
+    blockSignals(true);
 
     if (m_pollTimer != nullptr) {
         m_pollTimer->stop();
@@ -154,6 +153,20 @@ void StateMachine::stop()
     }
 
     m_isPollingPlc = false;
+
+    if (m_modbus != nullptr) {
+        disconnect(m_modbus, nullptr, this, nullptr);
+    }
+    if (m_mechEyeTelescopic != nullptr) {
+        disconnect(m_mechEyeTelescopic, nullptr, this, nullptr);
+    }
+    if (m_mechEyeArm != nullptr) {
+        disconnect(m_mechEyeArm, nullptr, this, nullptr);
+    }
+    if (m_visionPipeline != nullptr) {
+        disconnect(m_visionPipeline, nullptr, this, nullptr);
+    }
+
     clearActiveTask();
 
     m_consecutiveModbusFailures = 0;
@@ -165,8 +178,7 @@ void StateMachine::stop()
     m_heartbeatCounter = 0;
     m_ipcState = protocol::IpcState::Uninitialized;
     m_currentStage = protocol::Stage::Idle;
-    resetPlcOutputRegisters();
-    setState(AppState::Init);
+    m_state = AppState::Init;
 }
 
 void StateMachine::setState(AppState newState)
@@ -219,12 +231,27 @@ bool StateMachine::isModbusConnected() const
 
 mech_eye::MechEyeService* StateMachine::mechEyeService() const
 {
-    return m_mechEye;
+    return m_mechEyeTelescopic != nullptr ? m_mechEyeTelescopic : m_mechEyeArm;
+}
+
+mech_eye::MechEyeService* StateMachine::mechEyeTelescopicService() const
+{
+    return m_mechEyeTelescopic;
+}
+
+mech_eye::MechEyeService* StateMachine::mechEyeArmService() const
+{
+    return m_mechEyeArm;
 }
 
 vision::VisionPipelineService* StateMachine::visionPipelineService() const
 {
     return m_visionPipeline;
+}
+
+vision::HikCameraCController* StateMachine::hikCameraCController() const
+{
+    return m_hikCameraCController;
 }
 
 void StateMachine::setTaskProgress(quint16 progress)

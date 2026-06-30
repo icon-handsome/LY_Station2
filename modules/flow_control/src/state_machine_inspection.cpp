@@ -7,11 +7,6 @@
 
 namespace scan_tracking::flow_control {
 
-void StateMachine::setInspectionResultPublisher(InspectionResultPublisher publisher)
-{
-    m_inspectionResultPublisher = std::move(publisher);
-}
-
 int StateMachine::resolveExpectedScanSegmentCount() const
 {
     const auto* configMgr = common::ConfigManager::instance();
@@ -61,9 +56,7 @@ void StateMachine::finishInspection(const InspectionResult& result)
         result.measurement,
         result.message);
 
-    if (m_inspectionResultPublisher) {
-        m_inspectionResultPublisher(result);
-    }
+    emit inspectionResultReady(result);
 
     qInfo(LOG_FLOW).noquote()
         << QStringLiteral("Trig_Inspection：已完成 Res=") << result.resultCode

@@ -1,6 +1,6 @@
 #pragma once
 
-// 多相机视觉流水线：Mech-Eye + 海康 CXP 双目，或临时 Mech-Eye + 海康智能 C。
+// 多相机视觉流水线：Mech-Eye + 海康 CXP 双目，或 Mech-Eye + 海康智能 C（双设备组）。
 
 #include <QtCore/QObject>
 
@@ -19,7 +19,8 @@ class VisionPipelineService : public QObject {
 
 public:
     VisionPipelineService(
-        scan_tracking::mech_eye::MechEyeService* mechEyeService,
+        scan_tracking::mech_eye::MechEyeService* mechEyeTelescopicService,
+        scan_tracking::mech_eye::MechEyeService* mechEyeArmService,
         HikCxpCameraService* hikCameraAService,
         HikCxpCameraService* hikCameraBService,
         HikCameraCController* hikCameraCController = nullptr,
@@ -37,7 +38,7 @@ public:
         quint32 taskId,
         scan_tracking::mech_eye::CaptureMode mechCaptureMode);
 
-    /// @param telescopicConcurrentHikC 伸缩杆触发：梅卡与海康智能 C 同时发拍照指令，不等待 C 回图
+    /// @param telescopicConcurrentHikC true：伸缩杆设备组且梅卡/海康 C 并发触发；false：机械臂设备组且梅卡完成后触发海康 C
     quint64 requestCaptureBundle(
         int segmentIndex,
         quint32 taskId,
@@ -52,8 +53,15 @@ signals:
 private slots:
     void onMechEyeCaptureFinished(scan_tracking::mech_eye::CaptureResult result);
     void onHikPoseCaptureFinished(scan_tracking::vision::HikPoseCaptureResult result);
-    void onHikCameraCImageReceived(scan_tracking::vision::CaptureType type, QString filePath, qint64 fileSize);
-    void onHikCameraCCaptureCompleted(scan_tracking::vision::CaptureType type, QByteArray imageData);
+    void onHikCameraCImageReceived(
+        scan_tracking::vision::CaptureType type,
+        QString cameraIp,
+        QString filePath,
+        qint64 fileSize);
+    void onHikCameraCCaptureCompleted(
+        scan_tracking::vision::CaptureType type,
+        QString cameraIp,
+        QByteArray imageData);
 
 private:
     struct PendingCaptureContext {
@@ -64,9 +72,12 @@ private:
         bool hikCDone = false;
         bool useHikCameraC = false;
         bool hikCTriggerOnly = false;
+        bool hikCConcurrent = false;
         quint64 mechRequestId = 0;
         quint64 hikARequestId = 0;
         quint64 hikBRequestId = 0;
+        QString hikCameraCIp;
+        scan_tracking::mech_eye::MechEyeService* activeMechService = nullptr;
         scan_tracking::vision::MultiCameraCaptureBundle bundle;
     };
 
@@ -79,7 +90,8 @@ private:
     void onHikCameraCCaptureTimeout();
     void finishBundleIfReady();
 
-    scan_tracking::mech_eye::MechEyeService* m_mechEyeService = nullptr;
+    scan_tracking::mech_eye::MechEyeService* m_mechEyeTelescopicService = nullptr;
+    scan_tracking::mech_eye::MechEyeService* m_mechEyeArmService = nullptr;
     HikCxpCameraService* m_hikCameraAService = nullptr;
     HikCxpCameraService* m_hikCameraBService = nullptr;
     HikCameraCController* m_hikCameraCController = nullptr;

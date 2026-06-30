@@ -330,6 +330,12 @@ void ConfigManager::writeDefaults(QSettings& settings)
     settings.setValue("hikCameraCTcpListenIp", "192.168.8.13");
     settings.setValue("hikCameraCTcpListenPort", 8999);
     settings.setValue("hikCameraCFtpDirectory", "D:/HikCameraFTP");
+    settings.setValue("mechEyeTelescopicKey", "192.168.8.208");
+    settings.setValue("hikCameraCTelescopicIp", "192.168.8.209");
+    settings.setValue("hikCameraCTelescopicFtpDirectory", "D:/HikCameraFTP/telescopic");
+    settings.setValue("mechEyeArmKey", "192.168.8.203");
+    settings.setValue("hikCameraCArmIp", "192.168.8.204");
+    settings.setValue("hikCameraCArmFtpDirectory", "D:/HikCameraFTP/arm");
     settings.setValue("hikCxpEnabled", true);
     settings.setValue("hikCxpCaptureTimeoutMs", 5000);
     settings.setValue("hikCxpExposureTimeUs", 50000);
@@ -533,6 +539,42 @@ void ConfigManager::load(const QString& filePath)
         settings.value("hikCxpCameraBKey", "DA9122998").toString();
     m_visionConfig.hikCxpCameraB.serialNumber =
         settings.value("hikCxpCameraBSerial", "DA9122998").toString();
+
+    const QString telescopicMechKey =
+        settings.value("mechEyeTelescopicKey", m_visionConfig.mechEyeCameraKey).toString();
+    const QString telescopicHikIp =
+        settings.value("hikCameraCTelescopicIp", m_visionConfig.hikCameraC.ipAddress).toString();
+    const QString telescopicFtpDir = settings.value(
+        "hikCameraCTelescopicFtpDirectory",
+        m_visionConfig.hikCameraCFtpDirectory.isEmpty()
+            ? QStringLiteral("D:/HikCameraFTP/telescopic")
+            : m_visionConfig.hikCameraCFtpDirectory)
+                                         .toString();
+    m_visionConfig.telescopicGroup.mechEye.logicalName =
+        QStringLiteral("mech_eye_telescopic");
+    m_visionConfig.telescopicGroup.mechEye.cameraKey = telescopicMechKey;
+    m_visionConfig.telescopicGroup.mechEye.ipAddress = telescopicMechKey;
+    m_visionConfig.telescopicGroup.hikCameraC.logicalName =
+        QStringLiteral("hik_camera_c_telescopic");
+    m_visionConfig.telescopicGroup.hikCameraC.cameraKey = telescopicHikIp;
+    m_visionConfig.telescopicGroup.hikCameraC.ipAddress = telescopicHikIp;
+    m_visionConfig.telescopicGroup.hikCameraCFtpDirectory = telescopicFtpDir;
+
+    const QString armMechKey =
+        settings.value("mechEyeArmKey", QStringLiteral("192.168.8.203")).toString();
+    const QString armHikIp =
+        settings.value("hikCameraCArmIp", QStringLiteral("192.168.8.204")).toString();
+    const QString armFtpDir = settings
+                                  .value("hikCameraCArmFtpDirectory", QStringLiteral("D:/HikCameraFTP/arm"))
+                                  .toString();
+    m_visionConfig.armGroup.mechEye.logicalName = QStringLiteral("mech_eye_arm");
+    m_visionConfig.armGroup.mechEye.cameraKey = armMechKey;
+    m_visionConfig.armGroup.mechEye.ipAddress = armMechKey;
+    m_visionConfig.armGroup.hikCameraC.logicalName = QStringLiteral("hik_camera_c_arm");
+    m_visionConfig.armGroup.hikCameraC.cameraKey = armHikIp;
+    m_visionConfig.armGroup.hikCameraC.ipAddress = armHikIp;
+    m_visionConfig.armGroup.hikCameraCFtpDirectory = armFtpDir;
+
     settings.endGroup();
 
     // --- [FlowControl] ---
@@ -599,6 +641,7 @@ void ConfigManager::load(const QString& filePath)
 
     // --- [Hmi] ---
     settings.beginGroup("Hmi");
+    m_hmiConfig.enabled = settings.value("enabled", true).toBool();
     {
         const int port = settings.value("tcpPort", 9900).toInt();
         m_hmiConfig.tcpPort = static_cast<quint16>(

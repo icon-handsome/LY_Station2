@@ -24,6 +24,7 @@ public:
     quint16 cameraPort() const { return m_cameraPort; }
     bool isConnected() const;
     qint64 lastHeartbeatTime() const { return m_lastHeartbeatMs; }
+    bool everReceivedHeartbeat() const { return m_receivedHeartbeat; }
 
     // 发送指令
     bool sendCommand(const QString& command);
@@ -51,6 +52,7 @@ private:
     quint16 m_cameraPort = 0;
     QByteArray m_receiveBuffer;  // 接收缓冲区
     qint64 m_lastHeartbeatMs = 0;
+    bool m_receivedHeartbeat = false;
 };
 
 // TCP 服务端

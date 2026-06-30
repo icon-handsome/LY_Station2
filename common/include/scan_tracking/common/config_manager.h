@@ -47,10 +47,17 @@ struct VisionCameraEndpointConfig {
     QString accessMode = QStringLiteral("exclusive");  ///< 访问模式：exclusive / monitor 等
 };
 
+/// 单组视觉设备：Mech-Eye + 海康智能 C 及 C 的 FTP 落盘目录。
+struct VisionDeviceGroupConfig {
+    VisionCameraEndpointConfig mechEye;
+    VisionCameraEndpointConfig hikCameraC;
+    QString hikCameraCFtpDirectory;
+};
+
 /// 视觉子系统配置，对应 config.ini [Vision] 节。
 /// 涵盖 Mech-Eye 深度相机、海康 GigE 相机 A/B/C、CXP 相机及 Camera C 的 TCP/FTP 监听。
 struct VisionConfig {
-    QString mechEyeCameraKey;   ///< Mech-Eye 设备 Key
+    QString mechEyeCameraKey;   ///< Mech-Eye 设备 Key（遗留字段，缺省映射伸缩杆组）
     int mechCaptureTimeoutMs;   ///< Mech-Eye 采集超时
     int mechDepthRangeMin;      ///< Mech-Eye 深度范围下限（毫米）
     int mechDepthRangeMax;      ///< Mech-Eye 深度范围上限（毫米）
@@ -71,7 +78,9 @@ struct VisionConfig {
     VisionCameraEndpointConfig hikCxpCameraB;
     QString hikCameraCTcpListenIp;             ///< Camera C 触发用 TCP 监听 IP
     quint16 hikCameraCTcpListenPort;           ///< Camera C 触发用 TCP 端口
-    QString hikCameraCFtpDirectory;            ///< Camera C FTP 落盘目录
+    QString hikCameraCFtpDirectory;            ///< Camera C FTP 落盘目录（遗留，缺省映射伸缩杆组）
+    VisionDeviceGroupConfig telescopicGroup;   ///< 伸缩杆组：Mech + 海康 C
+    VisionDeviceGroupConfig armGroup;          ///< 机械臂组：Mech + 海康 C
 };
 
 /// 流程控制轮询与心跳参数，对应 config.ini [FlowControl] 节。

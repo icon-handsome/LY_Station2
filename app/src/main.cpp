@@ -1,3 +1,5 @@
+#include <memory>
+
 #include <QCoreApplication>
 #include <QtNetwork/QNetworkProxy>
 #include <QtNetwork/QNetworkProxyFactory>
@@ -27,8 +29,10 @@ int main(int argc, char* argv[])
         QCoreApplication::applicationDirPath() + QStringLiteral("/logs"));
     scan_tracking::common::ConfigManager::initialize();
 
-    scan_tracking::app::ConsoleRuntime runtime(app);
-    const int exit_code = runtime.run();
+    const int exit_code = [&app]() {
+        auto runtime = std::make_unique<scan_tracking::app::ConsoleRuntime>(app);
+        return runtime->run();
+    }();
 
     scan_tracking::common::ConfigManager::cleanup();
     scan_tracking::common::Logger::cleanup();

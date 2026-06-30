@@ -72,7 +72,21 @@ bool HikSmartCameraSession::sendCommand(const QString& command)
 
 bool HikSmartCameraSession::sendStartCapture()
 {
-    return sendCommand(QStringLiteral("start"));
+    if (!isConnected()) {
+        qWarning(hikTcpLog) << QStringLiteral("无法发送 start：未连接") << m_cameraIp;
+        return false;
+    }
+
+    static const QByteArray kStartTrigger("start");
+    const qint64 written = m_socket->write(kStartTrigger);
+    if (written != kStartTrigger.size()) {
+        qWarning(hikTcpLog) << QStringLiteral("发送 start 失败") << m_cameraIp;
+        return false;
+    }
+
+    m_socket->flush();
+    qInfo(hikTcpLog) << QStringLiteral("发送 start 到") << m_cameraIp;
+    return true;
 }
 
 void HikSmartCameraSession::drainReceiveBuffer()
@@ -132,15 +146,19 @@ void HikSmartCameraSession::processReceivedData(const QByteArray& data)
         return;
     }
 
-    qInfo(hikTcpLog) << "从" << m_cameraIp << "接收到：" << message;
-
     // 处理心跳包（相机配置 heartbeat\r\n 或 hello）
     if (message.compare(QStringLiteral("hello"), Qt::CaseInsensitive) == 0 ||
         message.compare(QStringLiteral("heartbeat"), Qt::CaseInsensitive) == 0) {
+        m_receivedHeartbeat = true;
         updateHeartbeat();
         emit heartbeatReceived(m_cameraIp);
         return;
     }
+
+    qInfo(hikTcpLog) << "从" << m_cameraIp << "接收到：" << message;
+
+    // 任意有效报文视为链路活跃（部分相机不发 heartbeat）
+    updateHeartbeat();
 
     // 其他指令
     emit commandReceived(m_cameraIp, message);
@@ -330,6 +348,9 @@ void HikSmartCameraTcpServer::onHeartbeatTimeout()
     QStringList timeoutCameras;
 
     for (auto it = m_sessions.begin(); it != m_sessions.end(); ++it) {
+        if (!it.value()->everReceivedHeartbeat()) {
+            continue;
+        }
         qint64 elapsed = now - it.value()->lastHeartbeatTime();
         if (elapsed > m_heartbeatTimeoutMs) {
             qWarning(hikTcpLog) << QStringLiteral("相机心跳超时：") << it.key()

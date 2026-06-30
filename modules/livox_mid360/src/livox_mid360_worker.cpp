@@ -19,6 +19,7 @@
 #endif
 
 #include <algorithm>
+#include <mutex>
 
 Q_LOGGING_CATEGORY(LOG_LIVOX_MID360, "livox.mid360")
 
@@ -83,6 +84,7 @@ QString formatOpenedDeviceLine(const LivoxMid360DeviceSummary& summary)
 }
 
 LivoxMid360Worker* g_activeWorker = nullptr;
+std::mutex g_livoxCallbackMutex;
 
 bool hasUtf8Bom(const QByteArray& data)
 {
@@ -94,8 +96,9 @@ bool hasUtf8Bom(const QByteArray& data)
 
 void livoxInfoChangeCallback(const uint32_t handle, const LivoxLidarInfo* info, void* client_data)
 {
+    std::lock_guard<std::mutex> lock(g_livoxCallbackMutex);
     auto* worker = static_cast<LivoxMid360Worker*>(client_data);
-    if (worker == nullptr || info == nullptr) {
+    if (worker == nullptr || info == nullptr || g_activeWorker != worker) {
         return;
     }
 
@@ -344,7 +347,16 @@ void LivoxMid360Worker::finishDiscovery()
         emit logMessage(QStringLiteral("%1 %2").arg(logPrefix(), message));
         emit openFinished(false, {}, message);
         emit stateChanged(LivoxMid360RuntimeState::Failed, message);
-        teardownSdk();
+        {
+            std::lock_guard<std::mutex> lock(g_livoxCallbackMutex);
+            if (g_activeWorker == this) {
+                g_activeWorker = nullptr;
+            }
+            SetLivoxLidarInfoChangeCallback(nullptr, nullptr);
+        }
+        m_discoveryActive = false;
+        // 发现失败时不调用 LivoxLidarSdkUninit：现场/联调环境常无雷达，Uninit 易与 SDK 后台线程竞态崩溃。
+        m_sdkInitialized = false;
         return;
     }
 
@@ -356,12 +368,15 @@ void LivoxMid360Worker::finishDiscovery()
 
 void LivoxMid360Worker::teardownSdk()
 {
-    if (g_activeWorker == this) {
-        g_activeWorker = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_livoxCallbackMutex);
+        if (g_activeWorker == this) {
+            g_activeWorker = nullptr;
+        }
+        SetLivoxLidarInfoChangeCallback(nullptr, nullptr);
     }
 
     if (m_sdkInitialized) {
-        SetLivoxLidarInfoChangeCallback(nullptr, nullptr);
         LivoxLidarSdkUninit();
         m_sdkInitialized = false;
     }

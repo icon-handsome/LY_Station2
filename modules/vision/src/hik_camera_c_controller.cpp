@@ -5,6 +5,7 @@
 #include <QtCore/QFile>
 #include <QtCore/QLoggingCategory>
 #include <QtCore/QThread>
+#include <QtCore/QTimer>
 
 #include "scan_tracking/vision/hik_smart_camera_tcp_server.h"
 #include "scan_tracking/vision/hik_smart_camera_ftp_monitor.h"
@@ -22,7 +23,8 @@ void HikCameraCController::registerMetaTypes()
     }
     qRegisterMetaType<scan_tracking::vision::HikCameraCState>("scan_tracking::vision::HikCameraCState");
     qRegisterMetaType<scan_tracking::vision::CaptureType>("scan_tracking::vision::CaptureType");
-    qRegisterMetaType<scan_tracking::vision::ImageFileInfo>("scan_tracking::vision::ImageFileInfo");    registered = true;
+    qRegisterMetaType<scan_tracking::vision::ImageFileInfo>("scan_tracking::vision::ImageFileInfo");
+    registered = true;
 }
 
 HikCameraCController::HikCameraCController(QObject* parent)
@@ -35,7 +37,7 @@ HikCameraCController::HikCameraCController(QObject* parent)
 
 HikCameraCController::~HikCameraCController()
 {
-    cleanupFtpMonitor();
+    cleanupFtpMonitors();
     cleanupTcpServer();
 
     if (m_testCaptureTimer) {
@@ -54,29 +56,42 @@ void HikCameraCController::start(const scan_tracking::common::VisionConfig& conf
     }
 
     m_config = config;
-    m_smartCameraIp = config.hikCameraC.ipAddress;
+    m_configuredCameraIps.clear();
+
+    const auto appendGroup = [this](const scan_tracking::common::VisionDeviceGroupConfig& group) {
+        const QString ip = group.hikCameraC.ipAddress.trimmed();
+        if (!ip.isEmpty() && !m_configuredCameraIps.contains(ip)) {
+            m_configuredCameraIps.append(ip);
+        }
+    };
+    appendGroup(config.telescopicGroup);
+    appendGroup(config.armGroup);
+    if (m_configuredCameraIps.isEmpty()) {
+        const QString legacyIp = config.hikCameraC.ipAddress.trimmed();
+        if (!legacyIp.isEmpty()) {
+            m_configuredCameraIps.append(legacyIp);
+        }
+    }
+
+    m_primaryCameraIp = m_configuredCameraIps.isEmpty()
+                            ? config.telescopicGroup.hikCameraC.ipAddress
+                            : m_configuredCameraIps.first();
     m_tcpListenIp = config.hikCameraCTcpListenIp.isEmpty()
                         ? QStringLiteral("192.168.8.13")
                         : config.hikCameraCTcpListenIp;
     m_tcpListenPort = config.hikCameraCTcpListenPort > 0
                           ? config.hikCameraCTcpListenPort
                           : 8999;
-    m_ftpDirectory = config.hikCameraCFtpDirectory.isEmpty()
-                         ? QStringLiteral("D:/HikCameraFTP")
-                         : config.hikCameraCFtpDirectory;
 
     m_started = true;
     setState(HikCameraCState::Initializing, QStringLiteral("海康相机 C 控制器正在初始化（纯TCP模式）"));
 
-    qInfo(hikCControllerLog) << QStringLiteral("HikCameraCController 已启动，相机：")
-                             << m_config.hikCameraC.logicalName
-                             << QStringLiteral(" IP:") << m_config.hikCameraC.ipAddress;
+    qInfo(hikCControllerLog).noquote()
+        << QStringLiteral("HikCameraCController 已启动，相机 IP：")
+        << m_configuredCameraIps.join(QLatin1String(", "));
 
-    // 初始化 TCP 服务器（唯一通信通道）
     initializeTcpServer();
-
-    // 初始化 FTP 监控器
-    initializeFtpMonitor();
+    initializeFtpMonitors();
 }
 
 void HikCameraCController::stop()
@@ -85,14 +100,13 @@ void HikCameraCController::stop()
         return;
     }
 
-    // 停止测试定时器
     if (m_testCaptureTimer && m_testCaptureTimer->isActive()) {
         m_testCaptureTimer->stop();
         qInfo(hikCControllerLog) << "测试采集定时器已停止";
     }
 
     m_started = false;
-    cleanupFtpMonitor();
+    cleanupFtpMonitors();
     cleanupTcpServer();
     setState(HikCameraCState::Stopped, QStringLiteral("海康相机 C 控制器已停止"));
     qInfo(hikCControllerLog) << QStringLiteral("HikCameraCController 已停止。");
@@ -107,15 +121,17 @@ void HikCameraCController::initializeTcpServer()
 
     m_tcpServer = new HikSmartCameraTcpServer(this);
 
-    // 连接 TCP 服务器信号
     connect(m_tcpServer, &HikSmartCameraTcpServer::serverStarted,
             this, &HikCameraCController::onTcpServerStarted);
     connect(m_tcpServer, &HikSmartCameraTcpServer::serverStopped,
             this, &HikCameraCController::onTcpServerStopped);
+    // 相机可能在 start() 栈内立即连入；QueuedConnection 避免 initModules 尚未完成时重入 setState。
     connect(m_tcpServer, &HikSmartCameraTcpServer::cameraConnected,
-            this, &HikCameraCController::onTcpCameraConnected);
+            this, &HikCameraCController::onTcpCameraConnected,
+            Qt::QueuedConnection);
     connect(m_tcpServer, &HikSmartCameraTcpServer::cameraDisconnected,
-            this, &HikCameraCController::onTcpCameraDisconnected);
+            this, &HikCameraCController::onTcpCameraDisconnected,
+            Qt::QueuedConnection);
     connect(m_tcpServer, &HikSmartCameraTcpServer::heartbeatReceived,
             this, &HikCameraCController::onTcpHeartbeatReceived);
     connect(m_tcpServer, &HikSmartCameraTcpServer::commandReceived,
@@ -125,36 +141,30 @@ void HikCameraCController::initializeTcpServer()
     connect(m_tcpServer, &HikSmartCameraTcpServer::error,
             this, &HikCameraCController::onTcpError);
 
-    // 启动 TCP 服务器，监听地址和端口来自配置
     const QString listenIp = m_tcpListenIp;
     const quint16 listenPort = m_tcpListenPort;
 
-    // 尝试启动服务器，如果失败则等待一段时间后重试
     if (!m_tcpServer->start(listenIp, listenPort)) {
         qWarning(hikCControllerLog) << QStringLiteral("首次启动 TCP 服务器失败，等待 2 秒后重试...");
-        
-        // 等待2秒让系统释放端口
         QThread::msleep(2000);
-        
-        // 重试一次
+
         if (!m_tcpServer->start(listenIp, listenPort)) {
             qCritical(hikCControllerLog) << QStringLiteral("重试后仍无法启动 TCP 服务器") << listenIp << QStringLiteral(":") << listenPort;
             setState(HikCameraCState::Error, QStringLiteral("TCP 服务器启动失败（端口可能被占用）"));
             emit fatalError(VisionErrorCode::DeviceOpenFailed,
                           QStringLiteral("TCP 服务器启动失败，端口 %1 可能被其他进程占用。").arg(listenPort));
         } else {
-        qInfo(hikCControllerLog) << "重试后 TCP 服务器启动成功";
+            qInfo(hikCControllerLog) << "重试后 TCP 服务器启动成功";
         }
     } else {
         qInfo(hikCControllerLog) << "TCP 服务器启动成功，地址" << listenIp << ":" << listenPort;
     }
 }
-// 清理 TCP 服务器资源
+
 void HikCameraCController::cleanupTcpServer()
 {
     if (m_tcpServer != nullptr) {
         m_tcpServer->stop();
-        // 切断父子关系后同步删除，避免 QObject 树析构时二次释放
         m_tcpServer->setParent(nullptr);
         delete m_tcpServer;
         m_tcpServer = nullptr;
@@ -162,92 +172,151 @@ void HikCameraCController::cleanupTcpServer()
     }
 }
 
-void HikCameraCController::initializeFtpMonitor()
+void HikCameraCController::initializeFtpMonitors()
 {
-    if (m_ftpMonitor != nullptr) {
+    if (!m_ftpBindings.isEmpty()) {
         qWarning(hikCControllerLog) << QStringLiteral("FTP 监控器已初始化");
         return;
     }
 
-    m_ftpMonitor = new HikSmartCameraFtpMonitor(this);
+    const auto addBinding = [this](const scan_tracking::common::VisionDeviceGroupConfig& group) {
+        const QString ip = group.hikCameraC.ipAddress.trimmed();
+        const QString dir = group.hikCameraCFtpDirectory.trimmed();
+        if (ip.isEmpty() || dir.isEmpty()) {
+            return;
+        }
+        for (const FtpBinding& existing : m_ftpBindings) {
+            if (existing.cameraIp == ip || existing.ftpDirectory == dir) {
+                return;
+            }
+        }
 
-    // 连接 FTP 监控器信号
-    connect(m_ftpMonitor, &HikSmartCameraFtpMonitor::monitorStarted,
-            this, &HikCameraCController::onFtpMonitorStarted);
-    connect(m_ftpMonitor, &HikSmartCameraFtpMonitor::monitorStopped,
-            this, &HikCameraCController::onFtpMonitorStopped);
-    connect(m_ftpMonitor, &HikSmartCameraFtpMonitor::newImageDetected,
-            this, &HikCameraCController::onFtpNewImageDetected);
-    connect(m_ftpMonitor, &HikSmartCameraFtpMonitor::imageReady,
-            this, &HikCameraCController::onFtpImageReady);
-    connect(m_ftpMonitor, &HikSmartCameraFtpMonitor::error,
-            this, &HikCameraCController::onFtpError);
+        FtpBinding binding;
+        binding.cameraIp = ip;
+        binding.ftpDirectory = dir;
+        binding.monitor = new HikSmartCameraFtpMonitor(this);
 
-    // 启动 FTP 监控器（失败不阻断 TCP 模式，仅告警）
-    if (!m_ftpMonitor->start(m_ftpDirectory)) {
-        qWarning(hikCControllerLog).noquote()
-            << QStringLiteral("FTP 监控器启动失败，目录：") << m_ftpDirectory
-            << QStringLiteral("（海康 C 仍可通过 TCP 通信）");
-    } else {
-        qInfo(hikCControllerLog) << "FTP 监控器启动成功，监控目录：" << m_ftpDirectory;
+        connect(binding.monitor, &HikSmartCameraFtpMonitor::monitorStarted,
+                this, &HikCameraCController::onFtpMonitorStarted);
+        connect(binding.monitor, &HikSmartCameraFtpMonitor::monitorStopped,
+                this, &HikCameraCController::onFtpMonitorStopped);
+        connect(binding.monitor, &HikSmartCameraFtpMonitor::newImageDetected,
+                this, &HikCameraCController::onFtpNewImageDetected);
+        connect(binding.monitor, &HikSmartCameraFtpMonitor::imageReady,
+                this, &HikCameraCController::onFtpImageReady);
+        connect(binding.monitor, &HikSmartCameraFtpMonitor::error,
+                this, &HikCameraCController::onFtpError);
+
+        if (!binding.monitor->start(dir)) {
+            qWarning(hikCControllerLog).noquote()
+                << QStringLiteral("FTP 监控器启动失败，相机=") << ip
+                << QStringLiteral(" 目录=") << dir
+                << QStringLiteral("（海康 C 仍可通过 TCP 通信）");
+        } else {
+            qInfo(hikCControllerLog).noquote()
+                << QStringLiteral("FTP 监控器启动成功，相机=") << ip
+                << QStringLiteral(" 目录=") << dir;
+        }
+        m_ftpBindings.append(binding);
+    };
+
+    addBinding(m_config.telescopicGroup);
+    addBinding(m_config.armGroup);
+
+    if (m_ftpBindings.isEmpty()) {
+        const QString legacyDir = m_config.hikCameraCFtpDirectory.trimmed();
+        if (!legacyDir.isEmpty() && !m_primaryCameraIp.isEmpty()) {
+            scan_tracking::common::VisionDeviceGroupConfig legacyGroup;
+            legacyGroup.hikCameraC.ipAddress = m_primaryCameraIp;
+            legacyGroup.hikCameraCFtpDirectory = legacyDir;
+            addBinding(legacyGroup);
+        }
     }
 }
 
-void HikCameraCController::cleanupFtpMonitor()
+void HikCameraCController::cleanupFtpMonitors()
 {
-    if (m_ftpMonitor != nullptr) {
-        m_ftpMonitor->stop();
-        m_ftpMonitor->setParent(nullptr);
-        delete m_ftpMonitor;
-        m_ftpMonitor = nullptr;
-        qInfo(hikCControllerLog) << "FTP 监控器已清理";
+    for (FtpBinding& binding : m_ftpBindings) {
+        if (binding.monitor != nullptr) {
+            binding.monitor->stop();
+            binding.monitor->setParent(nullptr);
+            delete binding.monitor;
+            binding.monitor = nullptr;
+        }
     }
+    m_ftpBindings.clear();
+    qInfo(hikCControllerLog) << "FTP 监控器已清理";
 }
 
-// 检查 TCP 服务器是否正在运行
 bool HikCameraCController::isTcpServerRunning() const
 {
     return m_tcpServer != nullptr && m_tcpServer->isListening();
 }
 
-bool HikCameraCController::isCameraConnectedToTcp() const
+bool HikCameraCController::isCameraConnected(const QString& cameraIp) const
 {
-    if (m_tcpServer == nullptr) {
+    if (m_tcpServer == nullptr || cameraIp.trimmed().isEmpty()) {
         return false;
     }
-    return m_tcpServer->connectedCameras().contains(m_smartCameraIp);
+    return m_tcpServer->connectedCameras().contains(cameraIp.trimmed());
+}
+
+bool HikCameraCController::isCameraConnectedToTcp() const
+{
+    return isCameraConnected(m_primaryCameraIp);
 }
 
 bool HikCameraCController::isFtpMonitorRunning() const
 {
-    return m_ftpMonitor != nullptr && m_ftpMonitor->isMonitoring();
+    for (const FtpBinding& binding : m_ftpBindings) {
+        if (binding.monitor != nullptr && binding.monitor->isMonitoring()) {
+            return true;
+        }
+    }
+    return false;
 }
 
 QString HikCameraCController::ftpDirectory() const
 {
-    return m_ftpDirectory;
+    if (m_ftpBindings.isEmpty()) {
+        return QString();
+    }
+    return m_ftpBindings.first().ftpDirectory;
+}
+
+QStringList HikCameraCController::configuredCameraIps() const
+{
+    return m_configuredCameraIps;
 }
 
 bool HikCameraCController::requestCapture(CaptureType type)
 {
+    return requestCapture(type, m_primaryCameraIp);
+}
+
+bool HikCameraCController::requestCapture(CaptureType type, const QString& cameraIp)
+{
+    const QString normalizedIp = cameraIp.trimmed();
     if (!isTcpServerRunning()) {
         qWarning(hikCControllerLog) << QStringLiteral("无法请求采集：TCP 服务器未运行");
         return false;
     }
 
-    if (!isCameraConnectedToTcp()) {
-        qWarning(hikCControllerLog) << QStringLiteral("无法请求采集：相机未通过 TCP 连接");
+    if (!isCameraConnected(normalizedIp)) {
+        qWarning(hikCControllerLog).noquote()
+            << QStringLiteral("无法请求采集：相机未通过 TCP 连接：") << normalizedIp;
         return false;
     }
 
-    m_currentCaptureType = type;
-    m_captureCounter++;
-    
-    qInfo(hikCControllerLog) << "请求采集 #" << m_captureCounter 
-                             << "从相机" << m_smartCameraIp
-                             << "类型：" << getCaptureTypeString(type);
-    
-    return m_tcpServer->sendStartCaptureToCamera(m_smartCameraIp);
+    m_pendingCaptureTypeByIp[normalizedIp] = type;
+    m_captureCounterByIp[normalizedIp] = m_captureCounterByIp.value(normalizedIp, 0) + 1;
+
+    qInfo(hikCControllerLog).noquote()
+        << QStringLiteral("请求采集 #") << m_captureCounterByIp.value(normalizedIp)
+        << QStringLiteral(" 从相机 ") << normalizedIp
+        << QStringLiteral(" 类型：") << getCaptureTypeString(type);
+
+    return m_tcpServer->sendStartCaptureToCamera(normalizedIp);
 }
 
 void HikCameraCController::enableTestMode(bool enable, int intervalMs)
@@ -255,38 +324,38 @@ void HikCameraCController::enableTestMode(bool enable, int intervalMs)
     if (enable) {
         if (m_testCaptureTimer == nullptr) {
             m_testCaptureTimer = new QTimer(this);
-            connect(m_testCaptureTimer, &QTimer::timeout, 
+            connect(m_testCaptureTimer, &QTimer::timeout,
                     this, &HikCameraCController::onTestCaptureTimer);
         }
-        
+
         m_testCaptureTimer->setInterval(intervalMs);
         m_testCaptureTimer->start();
         qInfo(hikCControllerLog) << "测试模式已启用，采集间隔：" << intervalMs << "ms";
-    } else {
-        if (m_testCaptureTimer && m_testCaptureTimer->isActive()) {
-            m_testCaptureTimer->stop();
-            qInfo(hikCControllerLog) << QStringLiteral("测试模式已禁用");
-        }
+    } else if (m_testCaptureTimer && m_testCaptureTimer->isActive()) {
+        m_testCaptureTimer->stop();
+        qInfo(hikCControllerLog) << QStringLiteral("测试模式已禁用");
     }
 }
 
 QString HikCameraCController::getCaptureTypeString(CaptureType type) const
 {
     switch (type) {
-        case CaptureType::SurfaceDefect:
-            return QStringLiteral("SurfaceDefect");
-        case CaptureType::WeldDefect:
-            return QStringLiteral("WeldDefect");
-        case CaptureType::NumberRecognition:
-            return QStringLiteral("NumberRecognition");
-        default:
-            return QStringLiteral("Unknown");
+    case CaptureType::SurfaceDefect:
+        return QStringLiteral("SurfaceDefect");
+    case CaptureType::WeldDefect:
+        return QStringLiteral("WeldDefect");
+    case CaptureType::NumberRecognition:
+        return QStringLiteral("NumberRecognition");
+    default:
+        return QStringLiteral("Unknown");
     }
 }
 
-bool HikCameraCController::saveImageToFile(const QByteArray& imageData, CaptureType type)
+bool HikCameraCController::saveImageToFile(
+    const QByteArray& imageData,
+    CaptureType type,
+    const QString& cameraIp)
 {
-    // 创建保存目录
     QString saveDir = QStringLiteral("./smart_camera_images");
     QDir dir;
     if (!dir.exists(saveDir)) {
@@ -296,23 +365,23 @@ bool HikCameraCController::saveImageToFile(const QByteArray& imageData, CaptureT
         }
     }
 
-    // 生成文件名：类型_时间戳_计数器.jpg
-    QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss");
-    QString typeStr = getCaptureTypeString(type);
-    QString filename = QString("%1/%2_%3_%4.jpg")
-                           .arg(saveDir)
-                           .arg(typeStr)
-                           .arg(timestamp)
-                           .arg(m_captureCounter, 4, 10, QChar('0'));
+    const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
+    const QString typeStr = getCaptureTypeString(type);
+    const int counter = m_captureCounterByIp.value(cameraIp.trimmed(), 0);
+    const QString filename = QStringLiteral("%1/%2_%3_%4_%5.jpg")
+                                 .arg(saveDir)
+                                 .arg(typeStr)
+                                 .arg(cameraIp.trimmed().replace(QLatin1Char('.'), QLatin1Char('_')))
+                                 .arg(timestamp)
+                                 .arg(counter, 4, 10, QChar('0'));
 
-    // 保存文件
     QFile file(filename);
     if (!file.open(QIODevice::WriteOnly)) {
         qWarning(hikCControllerLog) << QStringLiteral("打开文件写入失败：") << filename;
         return false;
     }
 
-    qint64 written = file.write(imageData);
+    const qint64 written = file.write(imageData);
     file.close();
 
     if (written != imageData.size()) {
@@ -329,19 +398,75 @@ void HikCameraCController::setState(HikCameraCState state, const QString& descri
 {
     if (m_state != state) {
         m_state = state;
-        emit stateChanged(state, description);
         qInfo(hikCControllerLog) << QStringLiteral("状态切换为") << static_cast<int>(state) << QStringLiteral("：") << description;
+        emit stateChanged(state, description);
     }
 }
 
-// ============================================================================
-// TCP 服务器信号槽
-// ============================================================================
+bool HikCameraCController::isConfiguredCameraIp(const QString& cameraIp) const
+{
+    return m_configuredCameraIps.contains(cameraIp.trimmed());
+}
+
+QString HikCameraCController::groupLabelForCamera(const QString& cameraIp) const
+{
+    const QString ip = cameraIp.trimmed();
+    if (ip == m_config.telescopicGroup.hikCameraC.ipAddress.trimmed()) {
+        return QStringLiteral("[海康C-伸缩杆]");
+    }
+    if (ip == m_config.armGroup.hikCameraC.ipAddress.trimmed()) {
+        return QStringLiteral("[海康C-机械臂]");
+    }
+    return QStringLiteral("[海康C]");
+}
+
+void HikCameraCController::scheduleReadyStateUpdate()
+{
+    QTimer::singleShot(0, this, [this]() {
+        if (m_started) {
+            updateReadyStateFromConnections();
+        }
+    });
+}
+
+void HikCameraCController::updateReadyStateFromConnections()
+{
+    if (!m_started || m_tcpServer == nullptr) {
+        return;
+    }
+
+    QStringList connectedConfigured;
+    for (const QString& ip : m_configuredCameraIps) {
+        if (isCameraConnected(ip)) {
+            connectedConfigured.append(ip);
+        }
+    }
+
+    if (connectedConfigured.isEmpty()) {
+        return;
+    }
+
+    setState(
+        HikCameraCState::Ready,
+        QStringLiteral("已连接智能相机：%1").arg(connectedConfigured.join(QLatin1String(", "))));
+}
+
+HikCameraCController::FtpBinding* HikCameraCController::findFtpBindingByMonitor(
+    HikSmartCameraFtpMonitor* monitor)
+{
+    for (FtpBinding& binding : m_ftpBindings) {
+        if (binding.monitor == monitor) {
+            return &binding;
+        }
+    }
+    return nullptr;
+}
 
 void HikCameraCController::onTcpServerStarted(QString listenIp, quint16 port)
 {
     qInfo(hikCControllerLog) << "TCP 服务器已启动，地址" << listenIp << ":" << port;
-    qInfo(hikCControllerLog) << "等待智能相机" << m_smartCameraIp << "连接...";
+    qInfo(hikCControllerLog).noquote()
+        << QStringLiteral("等待智能相机连接：") << m_configuredCameraIps.join(QLatin1String(", "));
 }
 
 void HikCameraCController::onTcpServerStopped()
@@ -351,29 +476,41 @@ void HikCameraCController::onTcpServerStopped()
 
 void HikCameraCController::onTcpCameraConnected(QString cameraIp, quint16 cameraPort)
 {
-    qInfo(hikCControllerLog) << QStringLiteral("智能相机已通过 TCP 连接：") << cameraIp << QStringLiteral(":") << cameraPort;
-    
-    if (cameraIp == m_smartCameraIp) {
-        setState(HikCameraCState::Ready, QStringLiteral("智能相机已通过 TCP 连接并就绪"));
+    qInfo(hikCControllerLog).noquote()
+        << QStringLiteral("智能相机已通过 TCP 连接：") << cameraIp << QStringLiteral(":") << cameraPort;
+
+    if (isConfiguredCameraIp(cameraIp)) {
+        qInfo(hikCControllerLog).noquote()
+            << groupLabelForCamera(cameraIp) << cameraIp << QStringLiteral("TCP 已连接");
+
+        scheduleReadyStateUpdate();
 
         if (m_testCaptureTimer && m_testCaptureTimer->isActive()) {
             m_testCaptureTimer->stop();
         }
-        qInfo(hikCControllerLog) << QStringLiteral("等待 PLC 伸缩杆触发（Trig_TelescopicScan）后再发送 start");
+        qInfo(hikCControllerLog).noquote()
+            << QStringLiteral("相机 ") << cameraIp << QStringLiteral(" 已就绪，等待 PLC 触发后再发送 start");
     } else {
-        qWarning(hikCControllerLog) << QStringLiteral("意外相机 IP 已连接：") << cameraIp
-                                    << QStringLiteral("（期望：") << m_smartCameraIp << QStringLiteral("）");
+        qWarning(hikCControllerLog).noquote()
+            << QStringLiteral("未配置相机 IP 已连接：") << cameraIp
+            << QStringLiteral("（期望：") << m_configuredCameraIps.join(QLatin1String(", "))
+            << QStringLiteral("）");
     }
 }
 
 void HikCameraCController::onTcpCameraDisconnected(QString cameraIp)
 {
-    qWarning(hikCControllerLog) << QStringLiteral("智能相机 TCP 连接断开：") << cameraIp;
-    
-    if (cameraIp == m_smartCameraIp) {
-        setState(HikCameraCState::Error, QStringLiteral("智能相机 TCP 连接断开"));
-        
-        // 停止测试定时器
+    qWarning(hikCControllerLog).noquote()
+        << QStringLiteral("智能相机 TCP 连接断开：") << cameraIp;
+
+    if (isConfiguredCameraIp(cameraIp)) {
+        qInfo(hikCControllerLog).noquote()
+            << groupLabelForCamera(cameraIp) << cameraIp << QStringLiteral("TCP 已断开");
+        if (m_started && m_state == HikCameraCState::Ready) {
+            qInfo(hikCControllerLog).noquote()
+                << QStringLiteral("相机 ") << cameraIp << QStringLiteral(" TCP 会话结束，等待重连");
+        }
+
         if (m_testCaptureTimer && m_testCaptureTimer->isActive()) {
             m_testCaptureTimer->stop();
             qInfo(hikCControllerLog) << "因断开连接，测试采集定时器已停止";
@@ -383,13 +520,11 @@ void HikCameraCController::onTcpCameraDisconnected(QString cameraIp)
 
 void HikCameraCController::onTcpHeartbeatReceived(QString cameraIp)
 {
-    // 心跳日志可以设置为 Debug 级别，避免刷屏
-    qDebug(hikCControllerLog) << QStringLiteral("收到心跳：") << cameraIp;
+    Q_UNUSED(cameraIp);
 }
 
 void HikCameraCController::onTcpCommandReceived(QString cameraIp, QString command)
 {
-    // 相机回包可能很快：OCR/状态类信息做提取并限频打印，避免刷屏。
     QString ocrText = command.trimmed();
     if (ocrText.endsWith(QLatin1Char(';'))) {
         ocrText.chop(1);
@@ -402,12 +537,10 @@ void HikCameraCController::onTcpCommandReceived(QString cameraIp, QString comman
     }
 
     if (!ocrText.isEmpty()
-        && ocrText.compare(QStringLiteral("hello"), Qt::CaseInsensitive) != 0) {
+        && ocrText.compare(QStringLiteral("hello"), Qt::CaseInsensitive) != 0
+        && ocrText.compare(QStringLiteral("heartbeat"), Qt::CaseInsensitive) != 0) {
         const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
 
-        // 限频策略：
-        // - 相同 OCR 结果在 2 秒内只打印一次
-        // - 任意 OCR 打印最小间隔 300ms
         const bool sameAsLast = (!m_lastOcrText.isEmpty() && ocrText == m_lastOcrText);
         const qint64 sinceLastMs = (m_lastOcrLogMs > 0) ? (nowMs - m_lastOcrLogMs) : INT64_MAX;
         if ((sameAsLast && sinceLastMs < 2000) || (sinceLastMs < 300)) {
@@ -417,13 +550,13 @@ void HikCameraCController::onTcpCommandReceived(QString cameraIp, QString comman
 
         if (m_suppressedOcrLogCount > 0) {
             qInfo(hikCControllerLog).noquote()
-                << QStringLiteral("[HikCameraC][OCR] %1（已抑制 %2 条过快/重复回包）")
-                       .arg(ocrText)
+                << QStringLiteral("[HikCameraC][OCR][%1] %2（已抑制 %3 条过快/重复回包）")
+                       .arg(cameraIp, ocrText)
                        .arg(m_suppressedOcrLogCount);
             m_suppressedOcrLogCount = 0;
         } else {
             qInfo(hikCControllerLog).noquote()
-                << QStringLiteral("[HikCameraC][OCR] %1").arg(ocrText);
+                << QStringLiteral("[HikCameraC][OCR][%1] %2").arg(cameraIp, ocrText);
         }
 
         m_lastOcrText = ocrText;
@@ -431,48 +564,57 @@ void HikCameraCController::onTcpCommandReceived(QString cameraIp, QString comman
         return;
     }
 
-    // 非 OCR 文本：降为 Debug，避免刷屏（必要时再扩展协议）。
-    qDebug(hikCControllerLog).noquote()
-        << QStringLiteral("[HikCameraC][TCP] %1: %2").arg(cameraIp, ocrText);
+    if (ocrText.compare(QStringLiteral("hello"), Qt::CaseInsensitive) != 0 &&
+        ocrText.compare(QStringLiteral("heartbeat"), Qt::CaseInsensitive) != 0) {
+        qDebug(hikCControllerLog).noquote()
+            << QStringLiteral("[HikCameraC][TCP] %1: %2").arg(cameraIp, ocrText);
+    }
 }
 
 void HikCameraCController::onTcpImageDataReceived(QString cameraIp, QByteArray imageData)
 {
-    qInfo(hikCControllerLog) << QStringLiteral("收到图像数据：") << cameraIp
-                             << QStringLiteral(" size=") << imageData.size() << QStringLiteral(" bytes")
-                             << QStringLiteral(" type=") << getCaptureTypeString(m_currentCaptureType);
-    
-    // 保存图像到文件
-    if (saveImageToFile(imageData, m_currentCaptureType)) {
+    const CaptureType type = m_pendingCaptureTypeByIp.value(
+        cameraIp.trimmed(),
+        CaptureType::SurfaceDefect);
+
+    qInfo(hikCControllerLog).noquote()
+        << QStringLiteral("收到图像数据：") << cameraIp
+        << QStringLiteral(" size=") << imageData.size() << QStringLiteral(" bytes")
+        << QStringLiteral(" type=") << getCaptureTypeString(type);
+
+    if (saveImageToFile(imageData, type, cameraIp)) {
         qInfo(hikCControllerLog) << QStringLiteral("图像保存成功");
     } else {
         qWarning(hikCControllerLog) << QStringLiteral("图像保存失败");
     }
-    
-    // 发射图像数据信号
-    emit captureCompleted(m_currentCaptureType, imageData);
+
+    emit captureCompleted(type, cameraIp, imageData);
 }
 
 void HikCameraCController::onTcpError(QString errorMessage)
 {
-    qWarning(hikCControllerLog) << QStringLiteral("TCP 错误：") << errorMessage;
+    qWarning(hikCControllerLog) << QStringLiteral("TCP 提示：") << errorMessage;
+    if (errorMessage.contains(QStringLiteral("心跳超时"))) {
+        return;
+    }
     emit fatalError(VisionErrorCode::DeviceOpenFailed, errorMessage);
 }
 
 void HikCameraCController::onTestCaptureTimer()
 {
-    if (!m_started || !isCameraConnectedToTcp()) {
+    if (!m_started || m_configuredCameraIps.isEmpty()) {
         qWarning(hikCControllerLog) << QStringLiteral("测试采集跳过：未就绪");
         return;
     }
-    
-    qInfo(hikCControllerLog) << "测试采集已触发，类型：NumberRecognition";
-    requestCapture(CaptureType::NumberRecognition);
-}
 
-// ============================================================================
-// FTP 监控器信号槽
-// ============================================================================
+    for (const QString& ip : m_configuredCameraIps) {
+        if (isCameraConnected(ip)) {
+            qInfo(hikCControllerLog).noquote()
+                << QStringLiteral("测试采集已触发，相机=") << ip;
+            requestCapture(CaptureType::NumberRecognition, ip);
+        }
+    }
+}
 
 void HikCameraCController::onFtpMonitorStarted(QString directory)
 {
@@ -486,16 +628,17 @@ void HikCameraCController::onFtpMonitorStopped()
 
 void HikCameraCController::onFtpNewImageDetected(ImageFileInfo imageInfo)
 {
-    // 静默处理，不打印日志
+    Q_UNUSED(imageInfo);
 }
 
 void HikCameraCController::onFtpImageReady(ImageFileInfo imageInfo)
 {
-    // 静默处理，只发射信号
-    emit imageReceived(imageInfo.captureType, imageInfo.filePath, imageInfo.fileSize);
-    
-    // TODO: 这里可以触发后续的图像处理流程
-    // 例如：调用缺陷识别算法、OCR识别等
+    const auto* senderMonitor = qobject_cast<HikSmartCameraFtpMonitor*>(sender());
+    const FtpBinding* binding = findFtpBindingByMonitor(
+        const_cast<HikSmartCameraFtpMonitor*>(senderMonitor));
+    const QString cameraIp = binding != nullptr ? binding->cameraIp : m_primaryCameraIp;
+
+    emit imageReceived(imageInfo.captureType, cameraIp, imageInfo.filePath, imageInfo.fileSize);
 }
 
 void HikCameraCController::onFtpError(QString errorMessage)

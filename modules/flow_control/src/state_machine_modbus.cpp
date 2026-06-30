@@ -11,6 +11,10 @@ using namespace state_machine_internal;
 
 void StateMachine::onModbusConnected()
 {
+    if (m_stopped.load(std::memory_order_acquire)) {
+        return;
+    }
+
     qInfo(LOG_FLOW) << QStringLiteral("Modbus 已连接，流程控制就绪。");
 
     if (m_activeTask.definition != nullptr) {
@@ -41,6 +45,10 @@ void StateMachine::onModbusConnected()
 
 void StateMachine::onModbusDisconnected()
 {
+    if (m_stopped.load(std::memory_order_acquire)) {
+        return;
+    }
+
     qWarning(LOG_FLOW) << QStringLiteral("Modbus 已断开，流程控制暂停。");
     m_pollTimer->stop();
     m_heartbeatTimer->stop();
@@ -320,6 +328,10 @@ void StateMachine::resetPlcOutputRegisters()
 
 void StateMachine::publishIpcStatus()
 {
+    if (m_stopped.load(std::memory_order_acquire)) {
+        return;
+    }
+
     if (!m_modbus || !m_modbus->isConnected()) {
         return;
     }
@@ -347,6 +359,10 @@ void StateMachine::publishIpcStatus()
 
 void StateMachine::publishHeartbeat()
 {
+    if (m_stopped.load(std::memory_order_acquire)) {
+        return;
+    }
+
     if (!m_modbus || !m_modbus->isConnected()) {
         return;
     }
@@ -357,6 +373,10 @@ void StateMachine::publishHeartbeat()
 
 void StateMachine::onProcessTimeout()
 {
+    if (m_stopped.load(std::memory_order_acquire)) {
+        return;
+    }
+
     if (m_activeTask.definition == nullptr) {
         return;
     }

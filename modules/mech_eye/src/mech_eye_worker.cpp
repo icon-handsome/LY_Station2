@@ -175,7 +175,8 @@ void MechEyeWorker::startWorker(const QString& defaultCameraKey)
     if (connectCamera(m_defaultCameraKey, 5000, &errorMessage)) {
         setRuntimeState(
             CameraRuntimeState::Ready,
-            QStringLiteral("相机已连接: %1").arg(m_cameraInfo.serialNumber));
+            QStringLiteral("相机已连接: %1 @ %2")
+                .arg(m_cameraInfo.serialNumber, m_cameraInfo.ipAddress));
         return;
     }
 

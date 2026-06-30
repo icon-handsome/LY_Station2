@@ -17,12 +17,29 @@ void StateMachine::notifyScanStarted(int segmentIndex, quint32 taskId)
 
 void StateMachine::onBundleCaptureFinished(vision::MultiCameraCaptureBundle bundle)
 {
-    if (m_activeTask.definition == nullptr ||
-        !isScanCaptureStage(m_activeTask.definition->stage) ||
-        m_activeTask.completionAnnounced) {
+    if (m_activeTask.definition == nullptr) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("bundleCaptureFinished 忽略：无活动任务 requestId=")
+            << bundle.request.requestId;
+        return;
+    }
+    if (!isScanCaptureStage(m_activeTask.definition->stage)) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("bundleCaptureFinished 忽略：当前阶段非扫描采集 requestId=")
+            << bundle.request.requestId;
+        return;
+    }
+    if (m_activeTask.completionAnnounced) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("bundleCaptureFinished 忽略：任务已收尾 requestId=")
+            << bundle.request.requestId;
         return;
     }
     if (bundle.request.requestId != m_activeTask.captureRequestId) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("bundleCaptureFinished 忽略：requestId 不匹配 active=")
+            << m_activeTask.captureRequestId
+            << QStringLiteral(" bundle=") << bundle.request.requestId;
         return;
     }
 
@@ -37,19 +54,11 @@ void StateMachine::onBundleCaptureFinished(vision::MultiCameraCaptureBundle bund
             bundle.request.segmentIndex,
             bundle.request.taskId,
             bundle);
-        QString persistError;
-        if (!m_scanSegmentCache.persistSegment(bundle.request.segmentIndex, &persistError)) {
-            qWarning(LOG_FLOW).noquote()
-                << triggerLabel
-                << QStringLiteral("：段落盘失败（采集仍成功）")
-                << persistError;
-        }
 
         qInfo(LOG_FLOW).noquote()
             << triggerLabel << QStringLiteral("：采集成功") << bundle.summary()
             << QStringLiteral(" imageCount=") << imageCount
-            << QStringLiteral(" cloudFrameCount=") << cloudFrameCount
-            << QStringLiteral(" runRoot=") << m_scanSegmentCache.runCaptureRoot();
+            << QStringLiteral(" cloudFrameCount=") << cloudFrameCount;
         completeScanSegmentCapture(1, imageCount, cloudFrameCount, protocol::AckState::Completed, true);
         return;
     }

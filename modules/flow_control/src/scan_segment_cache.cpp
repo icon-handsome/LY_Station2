@@ -1,6 +1,7 @@
 #include "scan_tracking/flow_control/scan_segment_cache.h"
 
 #include "scan_tracking/common/capture_cache_paths.h"
+#include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/mech_eye/point_cloud_io.h"
 #include "scan_tracking/vision/hik_mono_io.h"
 
@@ -173,11 +174,24 @@ bool persistScanSegmentBundle(
     }
 
     if (bundle.hikCameraCCaptureOk()) {
+        QString hikLabel = QStringLiteral("hikC");
+        const QString hikIp = bundle.request.hikCameraCIp.trimmed();
+        if (!hikIp.isEmpty()) {
+            const auto* configMgr = scan_tracking::common::ConfigManager::instance();
+            if (configMgr != nullptr) {
+                const auto& visionConfig = configMgr->visionConfig();
+                if (hikIp == visionConfig.telescopicGroup.hikCameraC.ipAddress.trimmed()) {
+                    hikLabel = QStringLiteral("hikC_telescopic");
+                } else if (hikIp == visionConfig.armGroup.hikCameraC.ipAddress.trimmed()) {
+                    hikLabel = QStringLiteral("hikC_arm");
+                }
+            }
+        }
         const QString destPath = scan_tracking::vision::buildSegmentHikMonoPath(
             runRoot,
             segmentIndex,
             taskId,
-            QStringLiteral("hikC"),
+            hikLabel,
             timestamp);
         if (destPath.isEmpty()) {
             recordFailure(QStringLiteral("海康 C 落盘路径无效：段 %1").arg(segmentIndex));

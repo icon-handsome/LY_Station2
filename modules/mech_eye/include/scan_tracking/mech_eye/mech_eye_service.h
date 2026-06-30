@@ -32,8 +32,11 @@ public:
     /* 析构函数，负责安全停止 worker 线程并释放资源 */
     ~MechEyeService() override;
 
-    /* 启动 Mech-Eye 服务线程、初始化元类型并连接信号槽 */
+    /* 启动 Mech-Eye 服务线程、初始化元类型并连接信号槽（从 ConfigManager 读取默认相机 Key） */
     void start();
+
+    /* 启动 Mech-Eye 服务并绑定指定默认相机 Key（双实例场景） */
+    void start(const QString& defaultCameraKey);
 
     /* 停止 Mech-Eye 服务线程并清理当前状态 */
     void stop();

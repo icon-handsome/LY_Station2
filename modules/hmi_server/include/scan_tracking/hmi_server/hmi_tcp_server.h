@@ -87,6 +87,7 @@ public:
     void setStateMachine(flow_control::StateMachine* sm);
     void setModbusService(modbus::ModbusService* svc);
     void setMechEyeService(mech_eye::MechEyeService* svc);
+    void setMechEyeServices(mech_eye::MechEyeService* telescopic, mech_eye::MechEyeService* arm);
     void setVisionPipelineService(vision::VisionPipelineService* svc);
     void setHikCameraServices(vision::HikCxpCameraService* hikA, vision::HikCxpCameraService* hikB,
                               vision::HikCameraService* hikC = nullptr);
@@ -204,10 +205,10 @@ private:
     QJsonObject buildCameraStatusPayload() const;
 
     /// 梅卡 connected 语义（与 buildCameraStatusPayload 一致，采图过程仍视为已连接）
-    bool mechEyeConnected() const;
-
-    /// 海康 C：SDK 已连接或智能相机 TCP 已接入视为在线（与 A/B 的 isConnected 语义对齐显控）
+    bool mechEyeServiceConnected(const mech_eye::MechEyeService* service) const;
+    bool hikCameraCConnected(const QString& cameraIp) const;
     bool hikCameraCConnected() const;
+    mech_eye::MechEyeService* resolveMechEyeService(const QString& cameraKey) const;
 
     /// 同步相机连/断边沿缓存（新客户端接入或拉全量状态后调用，不发送 alarm）
     void syncCameraConnectivityCache();
@@ -308,10 +309,12 @@ private:
 
     /// 相机 connected 边沿缓存（与 status.camera 判定一致，用于连/断 alarm）
     struct CameraConnectivityCache {
-        bool mechEye = false;
+        bool mechEyeTelescopic = false;
+        bool mechEyeArm = false;
         bool hikA = false;
         bool hikB = false;
-        bool hikC = false;
+        bool hikCTelescopic = false;
+        bool hikCArm = false;
         bool valid = false;
     };
     CameraConnectivityCache m_cameraConnectivityCache;
@@ -332,7 +335,8 @@ private:
     // --- 服务依赖指针 ---
     flow_control::StateMachine* m_stateMachine = nullptr;
     modbus::ModbusService* m_modbusService = nullptr;
-    mech_eye::MechEyeService* m_mechEyeService = nullptr;
+    mech_eye::MechEyeService* m_mechEyeTelescopic = nullptr;
+    mech_eye::MechEyeService* m_mechEyeArm = nullptr;
     vision::VisionPipelineService* m_visionPipeline = nullptr;
     vision::HikCxpCameraService* m_hikCameraA = nullptr;
     vision::HikCxpCameraService* m_hikCameraB = nullptr;
