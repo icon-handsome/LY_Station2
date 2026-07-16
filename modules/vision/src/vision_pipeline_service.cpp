@@ -18,7 +18,7 @@ namespace {
 
 Q_LOGGING_CATEGORY(LOG_VISION_PIPELINE, "vision.pipeline")
 
-constexpr int kMechToHikCaptureDelayMs = 1000;
+constexpr int kMechToHikCaptureDelayMs = 2000;
 
 QString captureTypeLabel(CaptureType type)
 {
@@ -210,7 +210,6 @@ quint64 VisionPipelineService::requestCaptureBundle(
     pending.active = true;
     pending.useHikCameraC = useHikCameraC;
     pending.hikCTriggerOnly = useHikCameraC;
-    pending.hikCConcurrent = telescopicConcurrentHikC && useHikCameraC;
     pending.hikCameraCIp = deviceGroup.hikCameraC.ipAddress.trimmed();
     pending.activeMechService = mechService;
     pending.bundle.request = request;
@@ -226,15 +225,11 @@ quint64 VisionPipelineService::requestCaptureBundle(
 
     m_pending = pending;
 
-    if (pending.hikCConcurrent) {
-        triggerHikCameraCConcurrent(true);
+    if (useHikCameraC) {
         setState(
             VisionPipelineState::Capturing,
-            QStringLiteral("伸缩杆联动：梅卡与海康 C 拍照指令已同时发出。"));
-    } else if (useHikCameraC) {
-        setState(
-            VisionPipelineState::Capturing,
-            QStringLiteral("梅卡采集已启动（海康 C 将在梅卡完成后发送 start，不等回图）。"));
+            QStringLiteral("梅卡采集已启动（海康 C 将在梅卡完成后延迟 %1ms 发送 start，不等回图）")
+                .arg(kMechToHikCaptureDelayMs));
     } else {
         setState(
             VisionPipelineState::Capturing,
@@ -371,18 +366,13 @@ void VisionPipelineService::onMechEyeCaptureFinished(scan_tracking::mech_eye::Ca
     m_pending.bundle.mechEyeResult = result;
     m_pending.mechDone = true;
 
-    if (m_pending.useHikCameraC && !m_pending.hikCDone) {
-        triggerHikCameraCConcurrent(true);
-    }
-
-    if (m_pending.useHikCameraC) {
-        finishBundleIfReady();
-        return;
-    }
-
     QPointer<VisionPipelineService> self(this);
     QTimer::singleShot(kMechToHikCaptureDelayMs, this, [self]() {
         if (self == nullptr || !self->m_pending.active) {
+            return;
+        }
+        if (self->m_pending.useHikCameraC) {
+            self->startPendingHikCameraCCapture();
             return;
         }
         self->startPendingHikCapture();

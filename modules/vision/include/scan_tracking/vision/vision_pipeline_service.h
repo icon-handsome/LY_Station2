@@ -38,7 +38,7 @@ public:
         quint32 taskId,
         scan_tracking::mech_eye::CaptureMode mechCaptureMode);
 
-    /// @param telescopicConcurrentHikC true：伸缩杆设备组且梅卡/海康 C 并发触发；false：机械臂设备组且梅卡完成后触发海康 C
+    /// @param telescopicConcurrentHikC true：伸缩杆设备组；false：机械臂设备组。两组均为梅卡完成后延迟再触发海康。
     quint64 requestCaptureBundle(
         int segmentIndex,
         quint32 taskId,
@@ -72,7 +72,6 @@ private:
         bool hikCDone = false;
         bool useHikCameraC = false;
         bool hikCTriggerOnly = false;
-        bool hikCConcurrent = false;
         quint64 mechRequestId = 0;
         quint64 hikARequestId = 0;
         quint64 hikBRequestId = 0;
