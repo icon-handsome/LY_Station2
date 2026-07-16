@@ -58,6 +58,7 @@ scan_tracking_deploy_mech_eye_runtime(scan_tracking)
 scan_tracking_deploy_orbbec_runtime(scan_tracking)
 scan_tracking_deploy_livox_runtime(scan_tracking)
 scan_tracking_deploy_hik_mvs_runtime(scan_tracking)
+scan_tracking_deploy_weld_measure_runtime(scan_tracking)
 
 if(QT_VERSION_MAJOR EQUAL 6)
     qt_finalize_executable(scan_tracking)

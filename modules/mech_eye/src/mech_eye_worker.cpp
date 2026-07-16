@@ -151,8 +151,9 @@ public:
 };
 
 /* 构造函数：创建内部实现对象，但不在这里直接连接相机。 */
-MechEyeWorker::MechEyeWorker(QObject* parent)
+MechEyeWorker::MechEyeWorker(const QString& roleName, QObject* parent)
     : QObject(parent)
+    , m_roleName(roleName.trimmed())
     , m_impl(new Impl())
 {
 }
@@ -181,7 +182,7 @@ void MechEyeWorker::startWorker(const QString& defaultCameraKey)
     }
 
     setRuntimeState(CameraRuntimeState::Error, errorMessage);
-    emit fatalError(CaptureErrorCode::ConnectFailed, errorMessage);
+    emit fatalError(CaptureErrorCode::ConnectFailed, taggedMessage(errorMessage));
 }
 
 /* 停止 worker：发出断开流程并把状态收束到 Stopped。 */
@@ -191,7 +192,7 @@ void MechEyeWorker::stopWorker()
 
     QString errorMessage;
     if (!disconnectCamera(&errorMessage) && !errorMessage.isEmpty()) {
-        emit fatalError(CaptureErrorCode::DisconnectFailed, errorMessage);
+        emit fatalError(CaptureErrorCode::DisconnectFailed, taggedMessage(errorMessage));
     }
 
     setRuntimeState(CameraRuntimeState::Stopped, QStringLiteral("相机服务已停止"));
@@ -397,7 +398,7 @@ void MechEyeWorker::performCapture(const scan_tracking::mech_eye::CaptureRequest
         QString failureMessage = QStringLiteral("采集异常: %1")
             .arg(QString::fromLocal8Bit(exception.what()));
         setRuntimeState(CameraRuntimeState::Error, failureMessage);
-        emit fatalError(CaptureErrorCode::UnknownError, failureMessage);
+        emit fatalError(CaptureErrorCode::UnknownError, taggedMessage(failureMessage));
         emit captureFinished(makeFailureResult(
             normalized,
             CaptureErrorCode::UnknownError,
@@ -409,7 +410,7 @@ void MechEyeWorker::performCapture(const scan_tracking::mech_eye::CaptureRequest
         m_cameraInfo.connected = false;
         const QString failureMessage = QStringLiteral("采集异常: 未知错误");
         setRuntimeState(CameraRuntimeState::Error, failureMessage);
-        emit fatalError(CaptureErrorCode::UnknownError, failureMessage);
+        emit fatalError(CaptureErrorCode::UnknownError, taggedMessage(failureMessage));
         emit captureFinished(makeFailureResult(
             normalized,
             CaptureErrorCode::UnknownError,
@@ -423,7 +424,18 @@ void MechEyeWorker::performCapture(const scan_tracking::mech_eye::CaptureRequest
 void MechEyeWorker::setRuntimeState(CameraRuntimeState newState, const QString& description)
 {
     m_state = newState;
-    emit stateChanged(newState, description);
+    emit stateChanged(newState, taggedMessage(description));
+}
+
+QString MechEyeWorker::taggedMessage(const QString& message) const
+{
+    if (m_roleName.isEmpty() || message.trimmed().isEmpty()) {
+        return message;
+    }
+    if (message.startsWith(QLatin1Char('['))) {
+        return message;
+    }
+    return QStringLiteral("[%1] %2").arg(m_roleName, message);
 }
 
 /* 将 SDK 错误码转换为项目内部错误码，便于上层统一处理。 */
@@ -654,7 +666,7 @@ CaptureResult MechEyeWorker::makeFailureResult(
     result.cameraKey = request.cameraKey;   
     result.mode = request.mode;             
     result.errorCode = errorCode;           
-    result.errorMessage = errorMessage;
+    result.errorMessage = taggedMessage(errorMessage);
     result.cameraInfo = m_cameraInfo;
     result.elapsedMs = elapsedMs;
     return result;
@@ -726,7 +738,7 @@ void MechEyeWorker::printCameraParameters()
     userSet.getEnumValue("PointCloudOutlierRemoval", outlierRemoval);
 
     qInfo(LOG_MECHEYE_WORKER).noquote()
-        << "=== MechEye 相机信息 ===\n"
+        << taggedMessage(QStringLiteral("=== MechEye 相机信息 ===")) << "\n"
         << "  型号:" << m_cameraInfo.model << "\n"
         << "  序列号:" << m_cameraInfo.serialNumber << "\n"
         << "  IP:" << m_cameraInfo.ipAddress << "\n"
@@ -746,7 +758,7 @@ void MechEyeWorker::printCameraParameters()
     // 打印深度相机内参（Nano Ultra 没有独立 2D 纹理相机，只打印深度内参）
     const auto& depIntr = intrinsics.depth;
     qInfo(LOG_MECHEYE_WORKER).noquote()
-        << "=== MechEye 深度相机内参 ===\n"
+        << taggedMessage(QStringLiteral("=== MechEye 深度相机内参 ===")) << "\n"
         << "  fx=" << depIntr.cameraMatrix.fx << " fy=" << depIntr.cameraMatrix.fy << "\n"
         << "  cx=" << depIntr.cameraMatrix.cx << " cy=" << depIntr.cameraMatrix.cy << "\n"
         << "  畸变系数: k1=" << depIntr.cameraDistortion.k1

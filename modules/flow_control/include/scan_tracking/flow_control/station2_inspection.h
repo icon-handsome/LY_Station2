@@ -5,10 +5,18 @@
 
 namespace scan_tracking::flow_control {
 
-/// 基于 ScanSegmentCache 执行第二工位综合检测（当前为占位：校验缓存完整性，未接入缺陷/编号/3D 算法）。
+struct InspectionQuota {
+    int expectedArmCount = 0;
+    int expectedTelescopicCount = 0;
+
+    int total() const { return expectedArmCount + expectedTelescopicCount; }
+};
+
+/// 基于 ScanSegmentCache 执行第二工位焊缝截面测量（WeldMeasure.dll）。
+/// 当双设备配额均满足（机械臂 N + 伸缩杆 M）后才进入算法。
 InspectionResult evaluateStation2Inspection(
     const ScanSegmentCache& cache,
     quint32 taskId,
-    int expectedSegmentCount);
+    const InspectionQuota& quota);
 
 }  // namespace scan_tracking::flow_control

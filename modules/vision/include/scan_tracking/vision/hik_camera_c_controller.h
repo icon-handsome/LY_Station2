@@ -102,6 +102,9 @@ private:
     QString getCaptureTypeString(CaptureType type) const;
     bool isConfiguredCameraIp(const QString& cameraIp) const;
     QString groupLabelForCamera(const QString& cameraIp) const;
+    QString formatConfiguredCameraList() const;
+    void reportConfiguredCameraConnections() const;
+    void scheduleStartupConnectionReport();
     void updateReadyStateFromConnections();
     void scheduleReadyStateUpdate();
     FtpBinding* findFtpBindingByMonitor(HikSmartCameraFtpMonitor* monitor);

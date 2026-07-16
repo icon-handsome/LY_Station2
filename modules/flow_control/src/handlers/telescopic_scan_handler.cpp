@@ -19,7 +19,7 @@ bool TelescopicScanHandler::isEnabled(const common::StationProfile& profile) con
 
 void TelescopicScanHandler::execute(TaskHandlerContext& ctx)
 {
-    executeConfiguredScanCapture(ctx, triggerName(), false);
+    executeConfiguredScanCapture(ctx, triggerName());
 }
 
 }  // namespace scan_tracking::flow_control

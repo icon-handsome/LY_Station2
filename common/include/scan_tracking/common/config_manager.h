@@ -136,20 +136,35 @@ struct HmiConfig {
     quint16 tcpPort = 9900;       ///< HMI 客户端连接端口
 };
 
-/// 扫描路径中的单个点位定义（来自 scan_paths JSON）。
+/// 扫描设备角色（机械臂 / 伸缩杆），与 PLC 触发器一一对应。
+enum class ScanDeviceKind {
+    Arm = 0,         ///< Trig_ScanSegment → 机械臂相机组
+    Telescopic = 1,  ///< Trig_TelescopicScan → 伸缩杆相机组
+};
+
+/// 扫描路径中的单个点位定义（旧版 points[]；新版可省略，改用设备配额）。
 struct ScanPointConfig {
-    int pointIndex = 0;           ///< 全局段号，跨路径唯一，供 Modbus / 状态机引用
+    int pointIndex = 0;           ///< 设备内本地段号（1..N），与 PLC ScanSegmentIndex 一致
     bool needRotation = false;    ///< true → 预留彩色/2D 扩展；Orbbec 主流程采集深度+点云
+};
+
+/// 一条扫描路径下某设备的配额（二维：设备 × 本地索引上限）。
+struct ScanDeviceQuota {
+    ScanDeviceKind device = ScanDeviceKind::Arm;
+    int totalPoints = 0;  ///< 该设备需要采集的点数（本地索引 1..totalPoints）
 };
 
 /// 一条扫描路径的定义（来自 scan_paths JSON 的 scanPaths[] 元素）。
 struct ScanPathConfig {
     int pathId = 0;               ///< 路径 ID，在 JSON 内唯一
     bool enabled = true;          ///< 是否参与实际扫描流程
-    QString segmentKind = QStringLiteral("external");  ///< 段类型标识，如 external / internal
+    QString segmentKind = QStringLiteral("external");  ///< 旧字段；新版以 devices 为准
     QString description;          ///< 人类可读描述
-    int totalPoints = 0;          ///< 声明的点位数量，须与 points 数组长度一致
-    std::vector<ScanPointConfig> points;
+    int totalPoints = 0;          ///< 声明总点数；新版 = 各设备配额之和
+    int armPointCount = 0;        ///< 机械臂配额（可与 devices 互写）
+    int telescopicPointCount = 0; ///< 伸缩杆配额
+    std::vector<ScanDeviceQuota> devices;  ///< 设备配额列表（推荐配置方式）
+    std::vector<ScanPointConfig> points;   ///< 旧版显式点表；新版可空
 };
 
 /// 扫描路径 JSON 文件的根结构（由工位 profile 的 scanPathsConfigPath 指定）。
@@ -210,13 +225,27 @@ public:
     const StationProfile& stationProfile() const;
 
     /// 按全局段号（pointIndex）在已启用路径中查找点位；未找到返回 nullptr。
+    /// @note 新版双设备配额模式下，优先用 isValidDeviceLocalIndex。
     const ScanPointConfig* findScanPointByIndex(int segmentIndex) const;
 
     /// 段号所属路径的 segmentKind；未找到时返回 "external"。
     QString segmentKindForPointIndex(int segmentIndex) const;
 
-    /// 已启用路径中的扫描点位总数（供 scanSegmentTotal / HMI 展示）。
+    /// 已启用路径中的扫描点位总数（各设备配额之和；供 scanSegmentTotal / HMI 展示）。
     int enabledScanPointCount() const;
+
+    /// 已启用路径中机械臂应采集点数。
+    int enabledArmPointCount() const;
+
+    /// 已启用路径中伸缩杆应采集点数。
+    int enabledTelescopicPointCount() const;
+
+    /// 校验某设备本地段号是否在配额范围内（1..totalPoints）。
+    bool isValidDeviceLocalIndex(ScanDeviceKind device, int localIndex) const;
+
+    /// 设备枚举 ↔ JSON / 日志标签。
+    static QString scanDeviceKindToString(ScanDeviceKind device);
+    static bool parseScanDeviceKind(const QString& text, ScanDeviceKind* out);
 
 private:
     ConfigManager();

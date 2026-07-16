@@ -257,14 +257,88 @@ QString ConfigManager::segmentKindForPointIndex(int segmentIndex) const
 
 int ConfigManager::enabledScanPointCount() const
 {
-    // 累加所有已启用路径的 points 数量；JSON 未加载或全禁用时为 0
     int total = 0;
     for (const auto& path : m_scanPathsConfig.scanPaths) {
-        if (path.enabled) {
+        if (!path.enabled) {
+            continue;
+        }
+        const int fromQuota = path.armPointCount + path.telescopicPointCount;
+        if (fromQuota > 0) {
+            total += fromQuota;
+        } else {
             total += static_cast<int>(path.points.size());
         }
     }
     return total;
+}
+
+int ConfigManager::enabledArmPointCount() const
+{
+    int total = 0;
+    for (const auto& path : m_scanPathsConfig.scanPaths) {
+        if (path.enabled) {
+            total += path.armPointCount;
+        }
+    }
+    return total;
+}
+
+int ConfigManager::enabledTelescopicPointCount() const
+{
+    int total = 0;
+    for (const auto& path : m_scanPathsConfig.scanPaths) {
+        if (path.enabled) {
+            total += path.telescopicPointCount;
+        }
+    }
+    return total;
+}
+
+bool ConfigManager::isValidDeviceLocalIndex(ScanDeviceKind device, int localIndex) const
+{
+    if (localIndex <= 0) {
+        return false;
+    }
+    const int expected = (device == ScanDeviceKind::Telescopic)
+                             ? enabledTelescopicPointCount()
+                             : enabledArmPointCount();
+    if (expected > 0) {
+        return localIndex <= expected;
+    }
+    // 旧版仅 points[]：任一段号命中即合法（无法区分设备）
+    return findScanPointByIndex(localIndex) != nullptr;
+}
+
+QString ConfigManager::scanDeviceKindToString(ScanDeviceKind device)
+{
+    switch (device) {
+    case ScanDeviceKind::Telescopic:
+        return QStringLiteral("telescopic");
+    case ScanDeviceKind::Arm:
+    default:
+        return QStringLiteral("arm");
+    }
+}
+
+bool ConfigManager::parseScanDeviceKind(const QString& text, ScanDeviceKind* out)
+{
+    const QString normalized = text.trimmed().toLower();
+    ScanDeviceKind kind = ScanDeviceKind::Arm;
+    if (normalized == QLatin1String("telescopic") ||
+        normalized == QLatin1String("internal") ||
+        normalized.startsWith(QLatin1String("internal_"))) {
+        kind = ScanDeviceKind::Telescopic;
+    } else if (normalized == QLatin1String("arm") ||
+               normalized == QLatin1String("external") ||
+               normalized.isEmpty()) {
+        kind = ScanDeviceKind::Arm;
+    } else {
+        return false;
+    }
+    if (out != nullptr) {
+        *out = kind;
+    }
+    return true;
 }
 
 /**
@@ -330,11 +404,11 @@ void ConfigManager::writeDefaults(QSettings& settings)
     settings.setValue("hikCameraCTcpListenIp", "192.168.8.13");
     settings.setValue("hikCameraCTcpListenPort", 8999);
     settings.setValue("hikCameraCFtpDirectory", "D:/HikCameraFTP");
-    settings.setValue("mechEyeTelescopicKey", "192.168.8.208");
-    settings.setValue("hikCameraCTelescopicIp", "192.168.8.209");
+    settings.setValue("mechEyeTelescopicKey", "192.168.8.203");
+    settings.setValue("hikCameraCTelescopicIp", "192.168.8.204");
     settings.setValue("hikCameraCTelescopicFtpDirectory", "D:/HikCameraFTP/telescopic");
-    settings.setValue("mechEyeArmKey", "192.168.8.203");
-    settings.setValue("hikCameraCArmIp", "192.168.8.204");
+    settings.setValue("mechEyeArmKey", "192.168.8.208");
+    settings.setValue("hikCameraCArmIp", "192.168.8.209");
     settings.setValue("hikCameraCArmFtpDirectory", "D:/HikCameraFTP/arm");
     settings.setValue("hikCxpEnabled", true);
     settings.setValue("hikCxpCaptureTimeoutMs", 5000);
@@ -561,9 +635,9 @@ void ConfigManager::load(const QString& filePath)
     m_visionConfig.telescopicGroup.hikCameraCFtpDirectory = telescopicFtpDir;
 
     const QString armMechKey =
-        settings.value("mechEyeArmKey", QStringLiteral("192.168.8.203")).toString();
+        settings.value("mechEyeArmKey", QStringLiteral("192.168.8.208")).toString();
     const QString armHikIp =
-        settings.value("hikCameraCArmIp", QStringLiteral("192.168.8.204")).toString();
+        settings.value("hikCameraCArmIp", QStringLiteral("192.168.8.209")).toString();
     const QString armFtpDir = settings
                                   .value("hikCameraCArmFtpDirectory", QStringLiteral("D:/HikCameraFTP/arm"))
                                   .toString();
@@ -676,15 +750,12 @@ void ConfigManager::load(const QString& filePath)
 /**
  * @brief 加载扫描路径配置（JSON 格式）
  *
- * 期望的根对象字段：
- * - version, lastModified：元数据
- * - scanPaths[]：每条含 pathId, enabled, segmentKind, description,
- *   totalPoints, points[]（pointIndex, needRotation）
+ * 推荐格式（双设备配额）：
+ * - devices[]：{ device: "arm"|"telescopic", totalPoints: N }
+ * - 或扁平字段 armPointCount / telescopicPointCount
  *
- * 解析完成后调用 validateScanPathsConfig；校验失败仅警告，不阻止加载。
- * 文件缺失或解析失败时保留空的 m_scanPathsConfig。
- *
- * @param jsonFilePath 由 scanPathsConfigPath() 解析得到的 JSON 绝对路径
+ * 兼容旧格式：
+ * - points[] + totalPoints + 可选 segmentKind
  */
 void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
 {
@@ -694,31 +765,30 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
         return;
     }
 
-    // 读取并解析 JSON 文档
     QFile file(jsonFilePath);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         qCritical(LOG_CONFIG) << "无法打开扫描路径配置文件：" << jsonFilePath;
         return;
     }
-    
+
     const QByteArray jsonData = file.readAll();
     file.close();
 
     QJsonParseError parseError;
     const QJsonDocument doc = QJsonDocument::fromJson(jsonData, &parseError);
-    
+
     if (parseError.error != QJsonParseError::NoError) {
         qCritical(LOG_CONFIG) << "扫描路径配置文件 JSON 解析失败："
                               << parseError.errorString()
                               << "位置：" << parseError.offset;
         return;
     }
-    
+
     if (!doc.isObject()) {
         qCritical(LOG_CONFIG) << "扫描路径配置文件格式错误：根节点不是对象";
         return;
     }
-    
+
     const QJsonObject root = doc.object();
 
     m_scanPathsConfig.version = root.value("version").toString("1.0");
@@ -727,31 +797,92 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
     const QJsonArray pathsArray = root.value("scanPaths").toArray();
     m_scanPathsConfig.scanPaths.clear();
     m_scanPathsConfig.scanPaths.reserve(pathsArray.size());
-    
+
     for (const QJsonValue& pathValue : pathsArray) {
         const QJsonObject pathObj = pathValue.toObject();
-        
+
         ScanPathConfig pathConfig;
         pathConfig.pathId = pathObj.value("pathId").toInt();
         pathConfig.enabled = pathObj.value("enabled").toBool(true);
         pathConfig.segmentKind = pathObj.value("segmentKind").toString(QStringLiteral("external"));
         pathConfig.description = pathObj.value("description").toString();
         pathConfig.totalPoints = pathObj.value("totalPoints").toInt();
+        pathConfig.armPointCount = pathObj.value("armPointCount").toInt(0);
+        pathConfig.telescopicPointCount = pathObj.value("telescopicPointCount").toInt(0);
+
+        const QJsonArray devicesArray = pathObj.value("devices").toArray();
+        pathConfig.devices.clear();
+        pathConfig.devices.reserve(devicesArray.size());
+        for (const QJsonValue& deviceValue : devicesArray) {
+            const QJsonObject deviceObj = deviceValue.toObject();
+            ScanDeviceKind kind = ScanDeviceKind::Arm;
+            if (!parseScanDeviceKind(deviceObj.value("device").toString(), &kind)) {
+                qWarning(LOG_CONFIG).noquote()
+                    << QStringLiteral("路径 %1 含未知 device，已忽略：")
+                           .arg(pathConfig.pathId)
+                    << deviceObj.value("device").toString();
+                continue;
+            }
+            ScanDeviceQuota quota;
+            quota.device = kind;
+            quota.totalPoints = deviceObj.value("totalPoints").toInt(0);
+            pathConfig.devices.push_back(quota);
+            if (kind == ScanDeviceKind::Telescopic) {
+                pathConfig.telescopicPointCount = quota.totalPoints;
+            } else {
+                pathConfig.armPointCount = quota.totalPoints;
+            }
+        }
 
         const QJsonArray pointsArray = pathObj.value("points").toArray();
         pathConfig.points.clear();
         pathConfig.points.reserve(pointsArray.size());
-        
+
         for (const QJsonValue& pointValue : pointsArray) {
             const QJsonObject pointObj = pointValue.toObject();
-            
+
             ScanPointConfig pointConfig;
             pointConfig.pointIndex = pointObj.value("pointIndex").toInt();
             pointConfig.needRotation = pointObj.value("needRotation").toBool(false);
-            
+
             pathConfig.points.push_back(pointConfig);
         }
-        
+
+        // 旧版仅 points[]：按 segmentKind 归入对应设备配额
+        if (pathConfig.armPointCount == 0 && pathConfig.telescopicPointCount == 0 &&
+            !pathConfig.points.empty()) {
+            ScanDeviceKind kind = ScanDeviceKind::Arm;
+            parseScanDeviceKind(pathConfig.segmentKind, &kind);
+            const int count = static_cast<int>(pathConfig.points.size());
+            if (kind == ScanDeviceKind::Telescopic) {
+                pathConfig.telescopicPointCount = count;
+            } else {
+                pathConfig.armPointCount = count;
+            }
+            if (pathConfig.devices.empty()) {
+                ScanDeviceQuota quota;
+                quota.device = kind;
+                quota.totalPoints = count;
+                pathConfig.devices.push_back(quota);
+            }
+        }
+
+        // 新版仅配额、无 points：补齐 devices 列表与 totalPoints
+        if (pathConfig.devices.empty()) {
+            if (pathConfig.armPointCount > 0) {
+                pathConfig.devices.push_back(
+                    ScanDeviceQuota{ScanDeviceKind::Arm, pathConfig.armPointCount});
+            }
+            if (pathConfig.telescopicPointCount > 0) {
+                pathConfig.devices.push_back(
+                    ScanDeviceQuota{ScanDeviceKind::Telescopic, pathConfig.telescopicPointCount});
+            }
+        }
+        const int quotaSum = pathConfig.armPointCount + pathConfig.telescopicPointCount;
+        if (quotaSum > 0) {
+            pathConfig.totalPoints = quotaSum;
+        }
+
         m_scanPathsConfig.scanPaths.push_back(pathConfig);
     }
 
@@ -770,8 +901,10 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
         qInfo(LOG_CONFIG).noquote()
             << "  路径" << path.pathId
             << "启用=" << path.enabled
-            << "类型=" << path.segmentKind
-            << "点位数=" << path.points.size();
+            << "机械臂点数=" << path.armPointCount
+            << "伸缩杆点数=" << path.telescopicPointCount
+            << "总点数=" << path.totalPoints
+            << "显式点表=" << path.points.size();
     }
 }
 
@@ -780,20 +913,14 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
  *
  * 规则：
  * - 所有路径的 pathId 互不重复
- * - 每条路径 points.size() 必须等于 totalPoints
- * - 已启用路径内：pointIndex > 0，且全局段号在启用路径间不重复
- *
- * @param errorMessage 可选；失败时写入中文错误描述
- * @return true 表示通过全部检查
+ * - 若存在 points[]：数量须与 totalPoints 一致（旧版），且启用路径内 pointIndex 合法
+ * - 新版设备配额：arm/telescopic 点数均 >= 0，且至少一侧 > 0（启用路径）
  */
 bool ConfigManager::validateScanPathsConfig(QString* errorMessage) const
 {
-    std::vector<int> globalPointIndices;
-
-    // 遍历所有路径，检查 ID 唯一性与点位数量
     std::vector<int> pathIds;
     pathIds.reserve(m_scanPathsConfig.scanPaths.size());
-    
+
     for (const auto& path : m_scanPathsConfig.scanPaths) {
         if (std::find(pathIds.begin(), pathIds.end(), path.pathId) != pathIds.end()) {
             if (errorMessage) {
@@ -803,35 +930,55 @@ bool ConfigManager::validateScanPathsConfig(QString* errorMessage) const
         }
         pathIds.push_back(path.pathId);
 
-        if (static_cast<int>(path.points.size()) != path.totalPoints) {
+        if (path.armPointCount < 0 || path.telescopicPointCount < 0) {
             if (errorMessage) {
-                *errorMessage = QStringLiteral("路径 %1 的点位数量不匹配：配置 %2，实际 %3")
-                    .arg(path.pathId)
-                    .arg(path.totalPoints)
-                    .arg(path.points.size());
+                *errorMessage = QStringLiteral("路径 %1 设备配额不能为负").arg(path.pathId);
             }
             return false;
         }
 
-        // 仅对已启用路径校验全局段号唯一性与正整数约束
-        if (path.enabled) {
+        if (!path.points.empty() &&
+            static_cast<int>(path.points.size()) != path.totalPoints &&
+            path.armPointCount + path.telescopicPointCount == 0) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("路径 %1 的点位数量不匹配：配置 %2，实际 %3")
+                                    .arg(path.pathId)
+                                    .arg(path.totalPoints)
+                                    .arg(path.points.size());
+            }
+            return false;
+        }
+
+        if (path.enabled && path.armPointCount == 0 && path.telescopicPointCount == 0 &&
+            path.points.empty()) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("路径 %1 未配置任何设备点数").arg(path.pathId);
+            }
+            return false;
+        }
+
+        if (path.enabled && !path.points.empty() &&
+            path.armPointCount + path.telescopicPointCount == static_cast<int>(path.points.size())) {
+            // 旧版显式点表：校验 pointIndex
+            std::vector<int> seen;
             for (const auto& point : path.points) {
                 if (point.pointIndex <= 0) {
                     if (errorMessage) {
                         *errorMessage = QStringLiteral("路径 %1 的点位索引无效：%2")
-                            .arg(path.pathId)
-                            .arg(point.pointIndex);
+                                            .arg(path.pathId)
+                                            .arg(point.pointIndex);
                     }
                     return false;
                 }
-                if (std::find(globalPointIndices.begin(), globalPointIndices.end(), point.pointIndex) !=
-                    globalPointIndices.end()) {
+                if (std::find(seen.begin(), seen.end(), point.pointIndex) != seen.end()) {
                     if (errorMessage) {
-                        *errorMessage = QStringLiteral("全局段号重复：%1").arg(point.pointIndex);
+                        *errorMessage = QStringLiteral("路径 %1 段号重复：%2")
+                                            .arg(path.pathId)
+                                            .arg(point.pointIndex);
                     }
                     return false;
                 }
-                globalPointIndices.push_back(point.pointIndex);
+                seen.push_back(point.pointIndex);
             }
         }
     }

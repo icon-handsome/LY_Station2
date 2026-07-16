@@ -185,7 +185,6 @@ inline quint16 plcAnalogToUInt16(quint16 word0, quint16 word1 = 0)
 
 constexpr int kCommandBlockStart = 0;    ///< 命令区起始地址：PLC→IPC的控制指令区域（0 基偏移）
 constexpr int kCommandBlockSize = 51;    ///< 命令区大小：40000~40050（modbusIndex 0~50）
-constexpr int kCommandBlockLogDumpMaxIndex = 50;  ///< 变化日志全量快照上界（含）
 constexpr int kResultBlockStart = 101;   ///< 结果区起始：40101（modbusIndex=101）
 constexpr int kResultBlockSize = 84;     ///< 结果区大小：共84个寄存器
 

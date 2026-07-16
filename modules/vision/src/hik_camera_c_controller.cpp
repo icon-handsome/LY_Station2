@@ -87,11 +87,12 @@ void HikCameraCController::start(const scan_tracking::common::VisionConfig& conf
     setState(HikCameraCState::Initializing, QStringLiteral("海康相机 C 控制器正在初始化（纯TCP模式）"));
 
     qInfo(hikCControllerLog).noquote()
-        << QStringLiteral("HikCameraCController 已启动，相机 IP：")
-        << m_configuredCameraIps.join(QLatin1String(", "));
+        << QStringLiteral("HikCameraCController 已启动，期望相机：")
+        << formatConfiguredCameraList();
 
     initializeTcpServer();
     initializeFtpMonitors();
+    scheduleStartupConnectionReport();
 }
 
 void HikCameraCController::stop()
@@ -302,9 +303,11 @@ bool HikCameraCController::requestCapture(CaptureType type, const QString& camer
         return false;
     }
 
+    const QString label = groupLabelForCamera(normalizedIp);
     if (!isCameraConnected(normalizedIp)) {
         qWarning(hikCControllerLog).noquote()
-            << QStringLiteral("无法请求采集：相机未通过 TCP 连接：") << normalizedIp;
+            << QStringLiteral("无法请求采集：") << label << normalizedIp
+            << QStringLiteral(" 未通过 TCP 连接");
         return false;
     }
 
@@ -313,7 +316,7 @@ bool HikCameraCController::requestCapture(CaptureType type, const QString& camer
 
     qInfo(hikCControllerLog).noquote()
         << QStringLiteral("请求采集 #") << m_captureCounterByIp.value(normalizedIp)
-        << QStringLiteral(" 从相机 ") << normalizedIp
+        << label << normalizedIp
         << QStringLiteral(" 类型：") << getCaptureTypeString(type);
 
     return m_tcpServer->sendStartCaptureToCamera(normalizedIp);
@@ -420,6 +423,43 @@ QString HikCameraCController::groupLabelForCamera(const QString& cameraIp) const
     return QStringLiteral("[海康C]");
 }
 
+QString HikCameraCController::formatConfiguredCameraList() const
+{
+    QStringList parts;
+    for (const QString& ip : m_configuredCameraIps) {
+        parts.append(QStringLiteral("%1 %2").arg(groupLabelForCamera(ip), ip));
+    }
+    return parts.join(QLatin1String(", "));
+}
+
+void HikCameraCController::reportConfiguredCameraConnections() const
+{
+    if (!m_started || m_configuredCameraIps.isEmpty()) {
+        return;
+    }
+
+    for (const QString& ip : m_configuredCameraIps) {
+        const QString label = groupLabelForCamera(ip);
+        if (isCameraConnected(ip)) {
+            qInfo(hikCControllerLog).noquote()
+                << label << ip << QStringLiteral("启动检查：TCP 已连接");
+        } else {
+            qWarning(hikCControllerLog).noquote()
+                << label << ip << QStringLiteral("启动检查：TCP 仍未连接");
+        }
+    }
+}
+
+void HikCameraCController::scheduleStartupConnectionReport()
+{
+    constexpr int kStartupConnectionReportDelayMs = 15000;
+    QTimer::singleShot(kStartupConnectionReportDelayMs, this, [this]() {
+        if (m_started) {
+            reportConfiguredCameraConnections();
+        }
+    });
+}
+
 void HikCameraCController::scheduleReadyStateUpdate()
 {
     QTimer::singleShot(0, this, [this]() {
@@ -438,7 +478,8 @@ void HikCameraCController::updateReadyStateFromConnections()
     QStringList connectedConfigured;
     for (const QString& ip : m_configuredCameraIps) {
         if (isCameraConnected(ip)) {
-            connectedConfigured.append(ip);
+            connectedConfigured.append(
+                QStringLiteral("%1 %2").arg(groupLabelForCamera(ip), ip));
         }
     }
 
@@ -466,7 +507,7 @@ void HikCameraCController::onTcpServerStarted(QString listenIp, quint16 port)
 {
     qInfo(hikCControllerLog) << "TCP 服务器已启动，地址" << listenIp << ":" << port;
     qInfo(hikCControllerLog).noquote()
-        << QStringLiteral("等待智能相机连接：") << m_configuredCameraIps.join(QLatin1String(", "));
+        << QStringLiteral("等待智能相机连接：") << formatConfiguredCameraList();
 }
 
 void HikCameraCController::onTcpServerStopped()
@@ -476,39 +517,37 @@ void HikCameraCController::onTcpServerStopped()
 
 void HikCameraCController::onTcpCameraConnected(QString cameraIp, quint16 cameraPort)
 {
+    const QString label = groupLabelForCamera(cameraIp);
     qInfo(hikCControllerLog).noquote()
-        << QStringLiteral("智能相机已通过 TCP 连接：") << cameraIp << QStringLiteral(":") << cameraPort;
+        << label << cameraIp << QStringLiteral(":") << cameraPort
+        << QStringLiteral(" TCP 已连接");
 
     if (isConfiguredCameraIp(cameraIp)) {
-        qInfo(hikCControllerLog).noquote()
-            << groupLabelForCamera(cameraIp) << cameraIp << QStringLiteral("TCP 已连接");
-
         scheduleReadyStateUpdate();
 
         if (m_testCaptureTimer && m_testCaptureTimer->isActive()) {
             m_testCaptureTimer->stop();
         }
         qInfo(hikCControllerLog).noquote()
-            << QStringLiteral("相机 ") << cameraIp << QStringLiteral(" 已就绪，等待 PLC 触发后再发送 start");
+            << label << cameraIp << QStringLiteral(" 已就绪，等待 PLC 触发后再发送 start");
     } else {
         qWarning(hikCControllerLog).noquote()
             << QStringLiteral("未配置相机 IP 已连接：") << cameraIp
-            << QStringLiteral("（期望：") << m_configuredCameraIps.join(QLatin1String(", "))
+            << QStringLiteral("（期望：") << formatConfiguredCameraList()
             << QStringLiteral("）");
     }
 }
 
 void HikCameraCController::onTcpCameraDisconnected(QString cameraIp)
 {
+    const QString label = groupLabelForCamera(cameraIp);
     qWarning(hikCControllerLog).noquote()
-        << QStringLiteral("智能相机 TCP 连接断开：") << cameraIp;
+        << label << cameraIp << QStringLiteral(" TCP 已断开");
 
     if (isConfiguredCameraIp(cameraIp)) {
-        qInfo(hikCControllerLog).noquote()
-            << groupLabelForCamera(cameraIp) << cameraIp << QStringLiteral("TCP 已断开");
         if (m_started && m_state == HikCameraCState::Ready) {
             qInfo(hikCControllerLog).noquote()
-                << QStringLiteral("相机 ") << cameraIp << QStringLiteral(" TCP 会话结束，等待重连");
+                << label << cameraIp << QStringLiteral(" TCP 会话结束，等待重连");
         }
 
         if (m_testCaptureTimer && m_testCaptureTimer->isActive()) {

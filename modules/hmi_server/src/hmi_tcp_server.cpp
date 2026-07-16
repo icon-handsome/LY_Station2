@@ -1273,6 +1273,7 @@ QJsonObject HmiTcpServer::buildCameraStatusPayload() const
             mechEyeObj[QLatin1String("connected")] = false;
             return mechEyeObj;
         }
+        mechEyeObj[QLatin1String("roleName")] = service->roleName();
         mechEyeObj[QLatin1String("state")] = static_cast<int>(service->state());
         mechEyeObj[QLatin1String("connected")] = mechEyeServiceConnected(service);
         return mechEyeObj;

@@ -14,6 +14,25 @@ Q_LOGGING_CATEGORY(LOG_SCAN_CACHE, "flow_control.scan_cache")
 
 namespace scan_tracking::flow_control {
 
+namespace {
+
+QString deviceTagForPath(common::ScanDeviceKind device)
+{
+    return common::ConfigManager::scanDeviceKindToString(device);
+}
+
+/// 落盘文件名用「设备_本地段号」避免 arm/telescopic 同号冲突。
+int encodeDiskSegmentIndex(common::ScanDeviceKind device, int localIndex)
+{
+    // 机械臂保持 1..N；伸缩杆用 1000+localIndex，仅影响文件名。
+    if (device == common::ScanDeviceKind::Telescopic) {
+        return 1000 + localIndex;
+    }
+    return localIndex;
+}
+
+}  // namespace
+
 void ScanSegmentCache::reset()
 {
     m_entries.clear();
@@ -55,33 +74,43 @@ bool ScanSegmentCache::ensureRunRoot(quint32 taskId, QString* runRootOut, QStrin
 }
 
 void ScanSegmentCache::storeSegment(
-    int segmentIndex,
+    common::ScanDeviceKind device,
+    int localIndex,
     quint32 taskId,
     vision::MultiCameraCaptureBundle bundle)
 {
     ensureRunRoot(taskId);
 
+    ScanSegmentCacheKey key{device, localIndex};
     ScanSegmentCacheEntry entry;
-    entry.segmentIndex = segmentIndex;
+    entry.device = device;
+    entry.segmentIndex = localIndex;
     entry.taskId = taskId;
     entry.runCaptureRoot = m_runCaptureRoot;
     entry.captureTimestamp = m_runTimestamp;
     entry.bundle = std::move(bundle);
-    m_entries.insert(segmentIndex, entry);
+    m_entries.insert(key, entry);
 }
 
-bool ScanSegmentCache::persistSegment(int segmentIndex, QString* errorMessage)
+bool ScanSegmentCache::persistSegment(
+    common::ScanDeviceKind device,
+    int localIndex,
+    QString* errorMessage)
 {
-    const auto iterator = m_entries.find(segmentIndex);
+    const ScanSegmentCacheKey key{device, localIndex};
+    const auto iterator = m_entries.find(key);
     if (iterator == m_entries.end()) {
         if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral("段 %1 不在缓存中。").arg(segmentIndex);
+            *errorMessage = QStringLiteral("%1 段 %2 不在缓存中。")
+                                .arg(deviceTagForPath(device))
+                                .arg(localIndex);
         }
         return false;
     }
 
     return persistScanSegmentBundle(
         iterator->runCaptureRoot,
+        iterator->device,
         iterator->segmentIndex,
         iterator->taskId,
         iterator->captureTimestamp,
@@ -89,24 +118,26 @@ bool ScanSegmentCache::persistSegment(int segmentIndex, QString* errorMessage)
         errorMessage);
 }
 
-const ScanSegmentCacheEntry* ScanSegmentCache::entry(int segmentIndex) const
+const ScanSegmentCacheEntry* ScanSegmentCache::entry(
+    common::ScanDeviceKind device,
+    int localIndex) const
 {
-    const auto iterator = m_entries.constFind(segmentIndex);
+    const auto iterator = m_entries.constFind(ScanSegmentCacheKey{device, localIndex});
     if (iterator == m_entries.constEnd()) {
         return nullptr;
     }
     return &(*iterator);
 }
 
-QVector<int> ScanSegmentCache::cachedSegmentIndices() const
+QVector<ScanSegmentCacheKey> ScanSegmentCache::cachedKeys() const
 {
-    QVector<int> indices;
-    indices.reserve(m_entries.size());
+    QVector<ScanSegmentCacheKey> keys;
+    keys.reserve(m_entries.size());
     for (auto iterator = m_entries.constBegin(); iterator != m_entries.constEnd(); ++iterator) {
-        indices.push_back(iterator.key());
+        keys.push_back(iterator.key());
     }
-    std::sort(indices.begin(), indices.end());
-    return indices;
+    std::sort(keys.begin(), keys.end());
+    return keys;
 }
 
 bool ScanSegmentCache::allCachedBundlesSuccessful() const
@@ -124,8 +155,33 @@ int ScanSegmentCache::cachedSegmentCount() const
     return m_entries.size();
 }
 
+int ScanSegmentCache::cachedCountForDevice(common::ScanDeviceKind device) const
+{
+    int count = 0;
+    for (auto iterator = m_entries.constBegin(); iterator != m_entries.constEnd(); ++iterator) {
+        if (iterator.key().device == device) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+bool ScanSegmentCache::meetsDeviceQuotas(int expectedArmCount, int expectedTelescopicCount) const
+{
+    if (expectedArmCount > 0 &&
+        cachedCountForDevice(common::ScanDeviceKind::Arm) < expectedArmCount) {
+        return false;
+    }
+    if (expectedTelescopicCount > 0 &&
+        cachedCountForDevice(common::ScanDeviceKind::Telescopic) < expectedTelescopicCount) {
+        return false;
+    }
+    return cachedSegmentCount() > 0;
+}
+
 bool persistScanSegmentBundle(
     const QString& runRoot,
+    common::ScanDeviceKind device,
     int segmentIndex,
     quint32 taskId,
     const QString& timestamp,
@@ -141,6 +197,8 @@ bool persistScanSegmentBundle(
 
     bool ok = true;
     QString firstError;
+    const QString deviceLabel = deviceTagForPath(device);
+    const int diskIndex = encodeDiskSegmentIndex(device, segmentIndex);
 
     auto recordFailure = [&](const QString& message) {
         ok = false;
@@ -154,22 +212,26 @@ bool persistScanSegmentBundle(
 
     if (bundle.mechEyeResult.pointCloud.isValid()) {
         const QString plyPath = scan_tracking::mech_eye::buildSegmentPlyPath(
-            runRoot, segmentIndex, taskId, timestamp);
+            runRoot, diskIndex, taskId, timestamp);
         if (plyPath.isEmpty() ||
             !scan_tracking::mech_eye::savePointCloudFrameToPly(
                 bundle.mechEyeResult.pointCloud, plyPath)) {
-            recordFailure(QStringLiteral("Mech-Eye 点云落盘失败：段 %1").arg(segmentIndex));
+            recordFailure(QStringLiteral("%1 段 %2 Mech-Eye 点云落盘失败")
+                              .arg(deviceLabel)
+                              .arg(segmentIndex));
         }
     }
 
     if (bundle.mechEyeResult.success()) {
         const QString pngPath = scan_tracking::mech_eye::buildSegmentMech2DPngPath(
-            runRoot, segmentIndex, taskId, timestamp);
+            runRoot, diskIndex, taskId, timestamp);
         if (pngPath.isEmpty() ||
             !bundle.mechEyeResult.texture2D.isValid() ||
             !scan_tracking::mech_eye::saveGrayTextureFrameToPng(
                 bundle.mechEyeResult.texture2D, pngPath)) {
-            recordFailure(QStringLiteral("Mech-Eye 2D 落盘失败：段 %1").arg(segmentIndex));
+            recordFailure(QStringLiteral("%1 段 %2 Mech-Eye 2D 落盘失败")
+                              .arg(deviceLabel)
+                              .arg(segmentIndex));
         }
     }
 
@@ -189,49 +251,65 @@ bool persistScanSegmentBundle(
         }
         const QString destPath = scan_tracking::vision::buildSegmentHikMonoPath(
             runRoot,
-            segmentIndex,
+            diskIndex,
             taskId,
             hikLabel,
             timestamp);
         if (destPath.isEmpty()) {
-            recordFailure(QStringLiteral("海康 C 落盘路径无效：段 %1").arg(segmentIndex));
+            recordFailure(QStringLiteral("%1 段 %2 海康 C 落盘路径无效")
+                              .arg(deviceLabel)
+                              .arg(segmentIndex));
         } else if (!QFile::exists(bundle.hikCameraCImagePath)) {
-            recordFailure(QStringLiteral("海康 C 源图不存在：段 %1").arg(segmentIndex));
+            recordFailure(QStringLiteral("%1 段 %2 海康 C 源图不存在")
+                              .arg(deviceLabel)
+                              .arg(segmentIndex));
         } else {
             if (QFile::exists(destPath)) {
                 QFile::remove(destPath);
             }
             if (!QFile::copy(bundle.hikCameraCImagePath, destPath)) {
-                recordFailure(QStringLiteral("海康 C 落盘失败：段 %1").arg(segmentIndex));
+                recordFailure(QStringLiteral("%1 段 %2 海康 C 落盘失败")
+                                  .arg(deviceLabel)
+                                  .arg(segmentIndex));
             }
         }
     } else if (!cxpParticipated) {
-        recordFailure(QStringLiteral("海康 C 无有效帧：段 %1").arg(segmentIndex));
+        recordFailure(QStringLiteral("%1 段 %2 海康 C 无有效帧")
+                          .arg(deviceLabel)
+                          .arg(segmentIndex));
     }
 
     if (cxpParticipated) {
         if (bundle.hikCameraAResult.frame.isValid()) {
             const QString bmpPath = scan_tracking::vision::buildSegmentHikMonoPath(
-                runRoot, segmentIndex, taskId, QStringLiteral("hikA"), timestamp);
+                runRoot, diskIndex, taskId, QStringLiteral("hikA"), timestamp);
             if (bmpPath.isEmpty() ||
                 !scan_tracking::vision::saveHikMonoFrameToBmp(
                     bundle.hikCameraAResult.frame, bmpPath)) {
-                recordFailure(QStringLiteral("海康 A 落盘失败：段 %1").arg(segmentIndex));
+                recordFailure(QStringLiteral("%1 段 %2 海康 A 落盘失败")
+                                  .arg(deviceLabel)
+                                  .arg(segmentIndex));
             }
         } else {
-            recordFailure(QStringLiteral("海康 A 无有效帧：段 %1").arg(segmentIndex));
+            recordFailure(QStringLiteral("%1 段 %2 海康 A 无有效帧")
+                              .arg(deviceLabel)
+                              .arg(segmentIndex));
         }
 
         if (bundle.hikCameraBResult.frame.isValid()) {
             const QString bmpPath = scan_tracking::vision::buildSegmentHikMonoPath(
-                runRoot, segmentIndex, taskId, QStringLiteral("hikB"), timestamp);
+                runRoot, diskIndex, taskId, QStringLiteral("hikB"), timestamp);
             if (bmpPath.isEmpty() ||
                 !scan_tracking::vision::saveHikMonoFrameToBmp(
                     bundle.hikCameraBResult.frame, bmpPath)) {
-                recordFailure(QStringLiteral("海康 B 落盘失败：段 %1").arg(segmentIndex));
+                recordFailure(QStringLiteral("%1 段 %2 海康 B 落盘失败")
+                                  .arg(deviceLabel)
+                                  .arg(segmentIndex));
             }
         } else {
-            recordFailure(QStringLiteral("海康 B 无有效帧：段 %1").arg(segmentIndex));
+            recordFailure(QStringLiteral("%1 段 %2 海康 B 无有效帧")
+                              .arg(deviceLabel)
+                              .arg(segmentIndex));
         }
     }
 
@@ -240,12 +318,18 @@ bool persistScanSegmentBundle(
             *errorMessage = firstError;
         }
         qWarning(LOG_SCAN_CACHE).noquote()
-            << QStringLiteral("段 %1 落盘部分失败：").arg(segmentIndex) << firstError;
+            << QStringLiteral("%1 段 %2 落盘部分失败：")
+                   .arg(deviceLabel)
+                   .arg(segmentIndex)
+            << firstError;
         return false;
     }
 
     qInfo(LOG_SCAN_CACHE).noquote()
-        << QStringLiteral("段 %1 已落盘至 %2").arg(segmentIndex).arg(runRoot);
+        << QStringLiteral("%1 段 %2 已落盘至 %3")
+               .arg(deviceLabel)
+               .arg(segmentIndex)
+               .arg(runRoot);
     return true;
 }
 

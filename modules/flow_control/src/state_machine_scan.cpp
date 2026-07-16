@@ -50,15 +50,30 @@ void StateMachine::onBundleCaptureFinished(vision::MultiCameraCaptureBundle bund
     countBundleFrames(bundle, &imageCount, &cloudFrameCount);
 
     if (bundle.success()) {
+        const auto device =
+            m_activeTask.definition->stage == protocol::Stage::TelescopicScan
+                ? common::ScanDeviceKind::Telescopic
+                : common::ScanDeviceKind::Arm;
         m_scanSegmentCache.storeSegment(
+            device,
             bundle.request.segmentIndex,
             bundle.request.taskId,
             bundle);
 
+        const auto* configMgr = common::ConfigManager::instance();
+        const int armExpected = configMgr != nullptr ? configMgr->enabledArmPointCount() : 0;
+        const int telescopicExpected =
+            configMgr != nullptr ? configMgr->enabledTelescopicPointCount() : 0;
         qInfo(LOG_FLOW).noquote()
             << triggerLabel << QStringLiteral("：采集成功") << bundle.summary()
             << QStringLiteral(" imageCount=") << imageCount
-            << QStringLiteral(" cloudFrameCount=") << cloudFrameCount;
+            << QStringLiteral(" cloudFrameCount=") << cloudFrameCount
+            << QStringLiteral(" cache arm=")
+            << m_scanSegmentCache.cachedCountForDevice(common::ScanDeviceKind::Arm)
+            << QStringLiteral("/") << armExpected
+            << QStringLiteral(" telescopic=")
+            << m_scanSegmentCache.cachedCountForDevice(common::ScanDeviceKind::Telescopic)
+            << QStringLiteral("/") << telescopicExpected;
         completeScanSegmentCapture(1, imageCount, cloudFrameCount, protocol::AckState::Completed, true);
         return;
     }

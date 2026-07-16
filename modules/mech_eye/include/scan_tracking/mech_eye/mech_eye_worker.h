@@ -27,9 +27,10 @@ class MechEyeWorker : public QObject {
 
 public:
     /* 构造函数
+     * @param roleName 逻辑角色名（如 "梅卡-伸缩杆" / "梅卡-机械臂"），用于日志与状态区分
      * @param parent Qt 父对象指针
      */
-    explicit MechEyeWorker(QObject* parent = nullptr);
+    explicit MechEyeWorker(const QString& roleName = QString(), QObject* parent = nullptr);
 
     /* 析构函数，负责在对象销毁前断开相机并释放内部实现 */
     ~MechEyeWorker() override;
@@ -77,6 +78,9 @@ private:
      * @param description 状态说明
      */
     void setRuntimeState(CameraRuntimeState newState, const QString& description = {});
+
+    /* 为消息加上角色前缀，便于区分双设备组 */
+    QString taggedMessage(const QString& message) const;
 
     /* 将 SDK 错误码映射为项目内部错误码
      * @param sdkErrorCode SDK 返回值
@@ -135,6 +139,7 @@ private:
     /* 连接成功后打印相机基础参数（曝光、增益、分辨率等） */
     void printCameraParameters();
 
+    QString m_roleName;
     QString m_defaultCameraKey;
     CameraRuntimeState m_state = CameraRuntimeState::Idle;
     CameraInfoSnapshot m_cameraInfo;

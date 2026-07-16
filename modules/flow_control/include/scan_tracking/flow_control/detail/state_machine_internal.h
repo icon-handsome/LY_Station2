@@ -25,12 +25,6 @@ constexpr quint16 kInspectionResTimeoutNg = 6;
 
 QString formatPlcRegisterValueForLog(int modbusIndex, quint16 rawValue);
 QString formatPlcRegisterChangeForLog(int modbusIndex, quint16 oldValue, quint16 newValue);
-QString formatCommandBlockSnapshotForLog(
-    const QVector<quint16>& commandBlock,
-    int startIndex,
-    int endIndexInclusive,
-    const char* const* registerNames,
-    int registerNameCount);
 QVector<quint16> floatToCdabRegisters(float value);
 
 PoseSourceResult parsePoseSource(

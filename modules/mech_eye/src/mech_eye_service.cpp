@@ -32,8 +32,9 @@ void MechEyeService::registerMetaTypes()
 }
 
 /* 构造函数 */
-MechEyeService::MechEyeService(QObject* parent)
+MechEyeService::MechEyeService(const QString& roleName, QObject* parent)
     : QObject(parent)
+    , m_roleName(roleName.trimmed())
 {
 }
 
@@ -89,7 +90,7 @@ void MechEyeService::start(const QString& defaultCameraKey)
     }
 
     m_workerThread = new QThread();
-    m_worker = new MechEyeWorker();
+    m_worker = new MechEyeWorker(m_roleName);
 
     // SDK 对象必须停留在 worker 线程，主线程只负责投递请求和接收结果。
     m_worker->moveToThread(m_workerThread);
@@ -110,7 +111,10 @@ void MechEyeService::start(const QString& defaultCameraKey)
     connect(m_worker, &MechEyeWorker::fatalError,
             this, &MechEyeService::onWorkerFatalError, Qt::QueuedConnection);
 
-    m_workerThread->setObjectName(QStringLiteral("MechEyeWorkerThread"));
+    m_workerThread->setObjectName(
+        m_roleName.isEmpty()
+            ? QStringLiteral("MechEyeWorkerThread")
+            : QStringLiteral("MechEyeWorker-%1").arg(m_roleName));
     m_workerThread->start();
 
     m_started = true;

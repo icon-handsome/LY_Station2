@@ -10,6 +10,14 @@ namespace flow_control {
 
 struct InspectionMeasurement {
     int qualityCode = 0;
+    double mismatchMm = 0.0;
+    double reinforcementMm = 0.0;
+    double angularityMm = 0.0;
+    double includedAngleDeg = 0.0;
+    double leftUndercutMm = 0.0;
+    double rightUndercutMm = 0.0;
+    double maxUndercutMm = 0.0;
+    int measuredSegmentCount = 0;
 };
 
 struct InspectionResult {

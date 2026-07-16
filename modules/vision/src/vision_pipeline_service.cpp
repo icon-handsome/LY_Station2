@@ -292,15 +292,24 @@ void VisionPipelineService::triggerHikCameraCConcurrent(bool triggerOnly)
     m_pending.bundle.hikCameraCTriggerOk = sent;
     m_pending.bundle.hikCameraCImagePath.clear();
 
+    const QString hikCGroup =
+        (m_pending.hikCameraCIp == m_config.telescopicGroup.hikCameraC.ipAddress.trimmed())
+            ? QStringLiteral("[海康C-伸缩杆]")
+            : (m_pending.hikCameraCIp == m_config.armGroup.hikCameraC.ipAddress.trimmed())
+                  ? QStringLiteral("[海康C-机械臂]")
+                  : QStringLiteral("[海康C]");
+
     if (!sent) {
         qWarning(LOG_VISION_PIPELINE).noquote()
-            << QStringLiteral("[VisionPipeline] 海康 C start 发送失败（TCP 未连接或未就绪） IP=")
+            << QStringLiteral("[VisionPipeline]") << hikCGroup
+            << QStringLiteral(" start 发送失败（TCP 未连接或未就绪） IP=")
             << m_pending.hikCameraCIp;
         return;
     }
 
     qInfo(LOG_VISION_PIPELINE).noquote()
-        << QStringLiteral("[VisionPipeline] 海康 C start 已发送 requestId=")
+        << QStringLiteral("[VisionPipeline]") << hikCGroup
+        << QStringLiteral(" start 已发送 requestId=")
         << m_pending.bundle.request.requestId
         << QStringLiteral(" IP=") << m_pending.hikCameraCIp;
 }

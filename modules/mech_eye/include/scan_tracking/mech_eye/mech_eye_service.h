@@ -25,12 +25,16 @@ class MechEyeService : public QObject {
 
 public:
     /* 构造函数
+     * @param roleName 逻辑角色名（如 "梅卡-伸缩杆" / "梅卡-机械臂"），用于日志与状态区分
      * @param parent Qt 父对象指针
      */
-    explicit MechEyeService(QObject* parent = nullptr);
+    explicit MechEyeService(const QString& roleName = QString(), QObject* parent = nullptr);
 
     /* 析构函数，负责安全停止 worker 线程并释放资源 */
     ~MechEyeService() override;
+
+    /* 获取逻辑角色名 */
+    QString roleName() const { return m_roleName; }
 
     /* 启动 Mech-Eye 服务线程、初始化元类型并连接信号槽（从 ConfigManager 读取默认相机 Key） */
     void start();
@@ -115,6 +119,7 @@ private:
     QThread* m_workerThread = nullptr;
     MechEyeWorker* m_worker = nullptr;
 
+    QString m_roleName;
     QString m_defaultCameraKey;
     int m_defaultCaptureTimeoutMs = 5000;
     quint64 m_nextRequestId = 1;

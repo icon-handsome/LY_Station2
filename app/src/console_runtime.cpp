@@ -215,31 +215,33 @@ void ConsoleRuntime::initModules()
     const QString telescopicMechKey = visionConfigForMech.telescopicGroup.mechEye.cameraKey;
     const QString armMechKey = visionConfigForMech.armGroup.mechEye.cameraKey;
 
-    mechEyeTelescopicService_ = std::make_unique<scan_tracking::mech_eye::MechEyeService>();
-    mechEyeArmService_ = std::make_unique<scan_tracking::mech_eye::MechEyeService>();
+    mechEyeTelescopicService_ = std::make_unique<scan_tracking::mech_eye::MechEyeService>(
+        QStringLiteral("梅卡-伸缩杆"));
+    mechEyeArmService_ = std::make_unique<scan_tracking::mech_eye::MechEyeService>(
+        QStringLiteral("梅卡-机械臂"));
 
-    const auto connectMechEyeLogs = [this](scan_tracking::mech_eye::MechEyeService* service,
-                                       const char* label) {
+    const auto connectMechEyeLogs = [this](scan_tracking::mech_eye::MechEyeService* service) {
         if (service == nullptr) {
             return;
         }
+        // 角色名已写入 description / message（如 [梅卡-伸缩杆]），此处不再重复加前缀
         QObject::connect(
             service,
             &scan_tracking::mech_eye::MechEyeService::stateChanged,
             this,
-            [label](scan_tracking::mech_eye::CameraRuntimeState state, const QString& description) {
-                qInfo(appLog) << label << QStringLiteral("状态 =") << static_cast<int>(state) << description;
+            [](scan_tracking::mech_eye::CameraRuntimeState state, const QString& description) {
+                qInfo(appLog) << QStringLiteral("状态 =") << static_cast<int>(state) << description;
             });
         QObject::connect(
             service,
             &scan_tracking::mech_eye::MechEyeService::fatalError,
             this,
-            [label](scan_tracking::mech_eye::CaptureErrorCode code, const QString& message) {
-                qCritical(appLog) << label << QStringLiteral("致命错误：") << static_cast<int>(code) << message;
+            [](scan_tracking::mech_eye::CaptureErrorCode code, const QString& message) {
+                qCritical(appLog) << QStringLiteral("致命错误：") << static_cast<int>(code) << message;
             });
     };
-    connectMechEyeLogs(mechEyeTelescopicService_.get(), "[梅卡-伸缩杆]");
-    connectMechEyeLogs(mechEyeArmService_.get(), "[梅卡-机械臂]");
+    connectMechEyeLogs(mechEyeTelescopicService_.get());
+    connectMechEyeLogs(mechEyeArmService_.get());
 
     mechEyeTelescopicService_->start(telescopicMechKey);
     mechEyeArmService_->start(armMechKey);
@@ -459,7 +461,11 @@ void ConsoleRuntime::initModules()
         });
 
     hikCameraCController_->start(visionConfig);
-    qInfo(appLog) << QStringLiteral("海康 C 相机控制器已启动（TCP 通信模式）。");
+    qInfo(appLog).noquote()
+        << QStringLiteral("海康 C 相机控制器已启动（TCP 通信模式）：伸缩杆=")
+        << visionConfig.telescopicGroup.hikCameraC.ipAddress
+        << QStringLiteral(" 机械臂=")
+        << visionConfig.armGroup.hikCameraC.ipAddress;
 
 
     // 统一视觉编排层负责把“1 份点云 + 2 份矩阵”收口为一个算法输入包。

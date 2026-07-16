@@ -39,27 +39,6 @@ QString formatPlcRegisterChangeForLog(int modbusIndex, quint16 oldValue, quint16
         .arg(formatPlcRegisterValueForLog(modbusIndex, newValue));
 }
 
-QString formatCommandBlockSnapshotForLog(
-    const QVector<quint16>& commandBlock,
-    int startIndex,
-    int endIndexInclusive,
-    const char* const* registerNames,
-    int registerNameCount)
-{
-    QStringList lines;
-    for (int index = startIndex; index <= endIndexInclusive; ++index) {
-        const char* name =
-            (registerNames != nullptr && index >= 0 && index < registerNameCount)
-            ? registerNames[index]
-            : "?";
-        lines << QStringLiteral("  [%1] %2: %3")
-                     .arg(protocol::registers::holdingRegisterAddress(index))
-                     .arg(QString::fromLatin1(name != nullptr ? name : "?"))
-                     .arg(formatPlcRegisterValueForLog(index, commandBlock.value(index)));
-    }
-    return lines.join(QStringLiteral("\n"));
-}
-
 QVector<quint16> floatToCdabRegisters(float value)
 {
     quint32 raw = 0;

@@ -136,15 +136,11 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
                                       qMin(values.size(), protocol::registers::kCommandBlockSize));
 
         QStringList changedFields;
-        bool changedInLogDumpRange = false;
         for (int index = 0; index < compareCount; ++index) {
             const quint16 oldValue = previousCommandBlock.value(index);
             const quint16 newValue = values.value(index);
             if (oldValue == newValue) {
                 continue;
-            }
-            if (index <= protocol::registers::kCommandBlockLogDumpMaxIndex) {
-                changedInLogDumpRange = true;
             }
             const char* name = (index < kNameCount) ? kRegisterNames[index] : "?";
             changedFields << QStringLiteral("  [%1] %2: %3")
@@ -154,17 +150,8 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
         }
         if (!changedFields.isEmpty()) {
             qInfo(LOG_FLOW).noquote()
-                << QStringLiteral("=== PLC 寄存器变化 ===") << "\n" << changedFields.join(QStringLiteral("\n"));
-            if (changedInLogDumpRange) {
-                qInfo(LOG_FLOW).noquote()
-                    << QStringLiteral("=== 命令块全量 [40000-40050] ===") << "\n"
-                    << formatCommandBlockSnapshotForLog(
-                           values,
-                           protocol::registers::kCommandBlockStart,
-                           protocol::registers::kCommandBlockLogDumpMaxIndex,
-                           kRegisterNames,
-                           kNameCount);
-            }
+                << QStringLiteral("=== PLC 寄存器变化 ===") << "\n"
+                << changedFields.join(QStringLiteral("\n"));
         }
     }
 

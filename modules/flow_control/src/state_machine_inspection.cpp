@@ -23,10 +23,15 @@ int StateMachine::resolveExpectedScanSegmentCount() const
 InspectionResult StateMachine::evaluateCachedInspection(quint32 taskId) const
 {
     const quint32 effectiveTaskId = taskId != 0 ? taskId : m_scanSegmentCache.runTaskId();
-    return evaluateStation2Inspection(
-        m_scanSegmentCache,
-        effectiveTaskId,
-        resolveExpectedScanSegmentCount());
+    InspectionQuota quota;
+    if (const auto* configMgr = common::ConfigManager::instance()) {
+        quota.expectedArmCount = configMgr->enabledArmPointCount();
+        quota.expectedTelescopicCount = configMgr->enabledTelescopicPointCount();
+        if (quota.total() <= 0) {
+            quota.expectedArmCount = resolveExpectedScanSegmentCount();
+        }
+    }
+    return evaluateStation2Inspection(m_scanSegmentCache, effectiveTaskId, quota);
 }
 
 InspectionResult StateMachine::evaluateInspectionForActiveTask() const
