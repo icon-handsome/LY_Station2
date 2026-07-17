@@ -32,6 +32,9 @@ target_link_libraries(scan_tracking
         scan_tracking_tfmini_plus
         scan_tracking_vision
         scan_tracking_thickness_measure
+        scan_tracking_inner_surface_measure
+        scan_tracking_undercut_length_measure
+        scan_tracking_length_volume_measure
         scan_tracking_modbus
         scan_tracking_flow_control
         scan_tracking_hmi_server
@@ -61,6 +64,9 @@ scan_tracking_deploy_livox_runtime(scan_tracking)
 scan_tracking_deploy_hik_mvs_runtime(scan_tracking)
 scan_tracking_deploy_weld_measure_runtime(scan_tracking)
 scan_tracking_deploy_thickness_measure_runtime(scan_tracking)
+scan_tracking_deploy_inner_surface_measure_runtime(scan_tracking)
+scan_tracking_deploy_undercut_length_measure_runtime(scan_tracking)
+scan_tracking_deploy_length_volume_measure_runtime(scan_tracking)
 
 if(QT_VERSION_MAJOR EQUAL 6)
     qt_finalize_executable(scan_tracking)
