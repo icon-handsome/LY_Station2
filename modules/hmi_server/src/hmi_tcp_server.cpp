@@ -596,6 +596,11 @@ void HmiTcpServer::handleCmdGetConfig(const QJsonObject& message)
         trackingObj[QLatin1String("scanSegmentTotal")] = scanPointTotal > 0
             ? scanPointTotal
             : cfgMgr->trackingConfig().scanSegmentTotal;
+        trackingObj[QLatin1String("activePathId")] = cfgMgr->activePathId();
+        trackingObj[QLatin1String("activePathName")] = cfgMgr->activePathName();
+        trackingObj[QLatin1String("activePathAlgorithm")] = cfgMgr->activePathAlgorithm();
+        trackingObj[QLatin1String("armPointCount")] = cfgMgr->enabledArmPointCount();
+        trackingObj[QLatin1String("telescopicPointCount")] = cfgMgr->enabledTelescopicPointCount();
     }
     configPayload[QLatin1String("tracking")] = trackingObj;
 
@@ -1021,15 +1026,25 @@ QJsonObject HmiTcpServer::buildPlcStatusPayload() const
             payload[QLatin1String("telescopicScanSegmentIndex")] = telescopicSegmentIndex;
             // 兼容旧字段：默认回传机械臂段号（AO47）
             payload[QLatin1String("scanSegmentIndex")] = armSegmentIndex;
-            // scanSegmentTotal 从 scan_paths 已启用点位数获取，空配置时回退 Tracking.scanSegmentTotal
+            // scanSegmentTotal / 路径配额：来自 scan_paths 活跃路径（activePathId）
             const auto* cfgMgr = scan_tracking::common::ConfigManager::instance();
             if (cfgMgr != nullptr) {
                 const int scanPointTotal = cfgMgr->enabledScanPointCount();
                 payload[QLatin1String("scanSegmentTotal")] = scanPointTotal > 0
                     ? scanPointTotal
                     : cfgMgr->trackingConfig().scanSegmentTotal;
+                payload[QLatin1String("activePathId")] = cfgMgr->activePathId();
+                payload[QLatin1String("activePathName")] = cfgMgr->activePathName();
+                payload[QLatin1String("activePathAlgorithm")] = cfgMgr->activePathAlgorithm();
+                payload[QLatin1String("armPointCount")] = cfgMgr->enabledArmPointCount();
+                payload[QLatin1String("telescopicPointCount")] = cfgMgr->enabledTelescopicPointCount();
             } else {
                 payload[QLatin1String("scanSegmentTotal")] = 0;
+                payload[QLatin1String("activePathId")] = 0;
+                payload[QLatin1String("activePathName")] = QString();
+                payload[QLatin1String("activePathAlgorithm")] = QString();
+                payload[QLatin1String("armPointCount")] = 0;
+                payload[QLatin1String("telescopicPointCount")] = 0;
             }
             if (cb.size() > regs::kRobotStatusWord) {
                 payload[QLatin1String("robotStatusWord")] = cb.value(regs::kRobotStatusWord);
@@ -1485,6 +1500,14 @@ void HmiTcpServer::connectStateMachineSignals()
         QJsonObject payload;
         payload[QLatin1String("segmentIndex")] = segmentIndex;
         payload[QLatin1String("taskId")] = static_cast<int>(taskId);
+        if (const auto* cfgMgr = scan_tracking::common::ConfigManager::instance()) {
+            payload[QLatin1String("pathId")] = cfgMgr->activePathId();
+            payload[QLatin1String("pathName")] = cfgMgr->activePathName();
+            const QString purpose = cfgMgr->pointPurpose(segmentIndex);
+            if (!purpose.isEmpty()) {
+                payload[QLatin1String("purpose")] = purpose;
+            }
+        }
         sendToClient(buildEnvelope(QLatin1String(msg_type::kEventScanStarted), nextEventId(), payload));
     }, Qt::UniqueConnection);
 
@@ -1496,6 +1519,10 @@ void HmiTcpServer::connectStateMachineSignals()
         payload[QLatin1String("resultCode")] = resultCode; // 1 表示成功
         payload[QLatin1String("imageCount")] = imageCount;
         payload[QLatin1String("cloudFrameCount")] = cloudFrameCount;
+        if (const auto* cfgMgr = scan_tracking::common::ConfigManager::instance()) {
+            payload[QLatin1String("pathId")] = cfgMgr->activePathId();
+            payload[QLatin1String("pathName")] = cfgMgr->activePathName();
+        }
         sendToClient(buildEnvelope(QLatin1String(msg_type::kEventScanFinished), nextEventId(), payload));
     }, Qt::UniqueConnection);
 
@@ -1808,6 +1835,19 @@ QJsonObject HmiTcpServer::buildInspectionFinishedPayload(const flow_control::Ins
     flow_control::appendInspectionMeasurementFields(payload, result.measurement);
     payload[QLatin1String("message")] = result.message;
     payload[QLatin1String("sourcePointCount")] = result.sourcePointCount;
+    payload[QLatin1String("pathId")] = result.pathId;
+    payload[QLatin1String("pathName")] = result.pathName;
+    payload[QLatin1String("algorithm")] = result.algorithm;
+    if (!result.measurement.codeValue.isEmpty()) {
+        payload[QLatin1String("codeValue")] = result.measurement.codeValue;
+    }
+    if (result.pathId <= 0) {
+        if (const auto* cfgMgr = scan_tracking::common::ConfigManager::instance()) {
+            payload[QLatin1String("pathId")] = cfgMgr->activePathId();
+            payload[QLatin1String("pathName")] = cfgMgr->activePathName();
+            payload[QLatin1String("algorithm")] = cfgMgr->activePathAlgorithm();
+        }
+    }
 
     return payload;
 }

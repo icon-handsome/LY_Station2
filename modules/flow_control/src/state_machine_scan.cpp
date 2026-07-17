@@ -64,8 +64,10 @@ void StateMachine::onBundleCaptureFinished(vision::MultiCameraCaptureBundle bund
         const int armExpected = configMgr != nullptr ? configMgr->enabledArmPointCount() : 0;
         const int telescopicExpected =
             configMgr != nullptr ? configMgr->enabledTelescopicPointCount() : 0;
+        const int pathId = configMgr != nullptr ? configMgr->activePathId() : 0;
         qInfo(LOG_FLOW).noquote()
             << triggerLabel << QStringLiteral("：采集成功") << bundle.summary()
+            << QStringLiteral(" pathId=") << pathId
             << QStringLiteral(" imageCount=") << imageCount
             << QStringLiteral(" cloudFrameCount=") << cloudFrameCount
             << QStringLiteral(" cache arm=")

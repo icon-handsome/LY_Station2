@@ -1,14 +1,62 @@
 {
-  "version": "1.1",
-  "lastModified": "2026-07-16",
+  "version": "1.2",
+  "lastModified": "2026-07-17",
+  "activePathId": 1,
   "scanPaths": [
     {
       "pathId": 1,
       "enabled": true,
-      "description": "path1 cross-scan: arm=10 telescopic=7 independent counters",
+      "name": "straight_weld",
+      "algorithm": "weld_section",
+      "description": "直焊缝检测：AO47(臂)×10 + AO48(伸缩杆)×7",
       "devices": [
         { "device": "arm", "totalPoints": 10 },
         { "device": "telescopic", "totalPoints": 7 }
+      ]
+    },
+    {
+      "pathId": 2,
+      "enabled": false,
+      "name": "code_read",
+      "algorithm": "code_read",
+      "description": "编号检测：AO47(臂)×1",
+      "devices": [
+        { "device": "arm", "totalPoints": 1 }
+      ]
+    },
+    {
+      "pathId": 3,
+      "enabled": false,
+      "name": "thickness_inner_surface",
+      "algorithm": "thickness_inner_surface",
+      "description": "厚度+内表面：AO47×12；1/2/7/8=厚度内外对，3-6/9-12=内表面成对平均",
+      "devices": [
+        { "device": "arm", "totalPoints": 12 }
+      ],
+      "points": [
+        { "pointIndex": 1, "purpose": "thickness_inner", "needRotation": false },
+        { "pointIndex": 2, "purpose": "thickness_outer", "needRotation": false },
+        { "pointIndex": 3, "purpose": "inner_surface", "needRotation": false },
+        { "pointIndex": 4, "purpose": "inner_surface", "needRotation": false },
+        { "pointIndex": 5, "purpose": "inner_surface", "needRotation": false },
+        { "pointIndex": 6, "purpose": "inner_surface", "needRotation": false },
+        { "pointIndex": 7, "purpose": "thickness_inner", "needRotation": false },
+        { "pointIndex": 8, "purpose": "thickness_outer", "needRotation": false },
+        { "pointIndex": 9, "purpose": "inner_surface", "needRotation": false },
+        { "pointIndex": 10, "purpose": "inner_surface", "needRotation": false },
+        { "pointIndex": 11, "purpose": "inner_surface", "needRotation": false },
+        { "pointIndex": 12, "purpose": "inner_surface", "needRotation": false }
+      ]
+    },
+    {
+      "pathId": 5,
+      "enabled": false,
+      "name": "ring_weld",
+      "algorithm": "weld_section",
+      "description": "环缝检测：AO47(臂)×18 + AO48(伸缩杆)×18",
+      "devices": [
+        { "device": "arm", "totalPoints": 18 },
+        { "device": "telescopic", "totalPoints": 18 }
       ]
     }
   ]

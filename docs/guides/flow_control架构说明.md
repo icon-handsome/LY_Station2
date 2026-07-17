@@ -78,7 +78,7 @@ StateMachine::onBundleCaptureFinished → ScanSegmentCache 落盘 → completeSc
 | `PoseCheckHandler` | `pose_check_handler.cpp` | 占位 OK（LB 已移除） |
 | `SelfCheckHandler` | `self_check_handler.cpp` | Modbus + MechEye + Vision 就绪检查 |
 | `StationMaterialCheckHandler` | `station_material_check_handler.cpp` | 占位 OK |
-| `CodeReadHandler` | `code_read_handler.cpp` | 占位 Res=9 |
+| `CodeReadHandler` | `code_read_handler.cpp` | 海康 C 编号 OCR（`NumberRecognition`） |
 | `ResultResetHandler` | `result_reset_handler.cpp` | 清空段缓存与安全字 |
 
 ---

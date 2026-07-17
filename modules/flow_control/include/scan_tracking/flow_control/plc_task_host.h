@@ -76,6 +76,9 @@ public:
     virtual InspectionResult evaluateInspectionForActiveTask() const = 0;
     virtual void finishInspection(const InspectionResult& result) = 0;
 
+    /// 向机械臂侧海康智能 C 发起编号识别，等待 OCR TCP 回包后写 PLC / 完成任务。
+    virtual void startCodeReadCapture() = 0;
+
     virtual void resetScanSegmentCache() = 0;
     virtual void resetSafetyInterlockState() = 0;
 

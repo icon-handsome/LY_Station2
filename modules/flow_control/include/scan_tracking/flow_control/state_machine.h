@@ -115,6 +115,7 @@ public:
 
     InspectionResult evaluateInspectionForActiveTask() const override;
     void finishInspection(const InspectionResult& result) override;
+    void startCodeReadCapture() override;
 
     void resetScanSegmentCache() override;
     void resetSafetyInterlockState() override;
@@ -163,6 +164,7 @@ private slots:
     void onVisionPipelineFatalError(vision::VisionErrorCode code, QString message);
     void onBundleCaptureFinished(vision::MultiCameraCaptureBundle bundle);
     void onProcessTimeout();
+    void onHikOcrTextReceived(QString cameraIp, QString text);
 
 private:
     struct InspectionSummary {
@@ -197,6 +199,9 @@ private:
     void writeInspectionResult(const InspectionSummary& summary);
     int resolveExpectedScanSegmentCount() const;
 
+    bool isActiveCodeReadTrigger() const;
+    void finishCodeRead(quint16 resultCode, const QString& codeValue, const QString& message = QString());
+
     quint32 readTaskId(const QVector<quint16>& commandBlock) const;
     quint16 resolveScanSegmentIndex(const QVector<quint16>& commandBlock,
                                     protocol::Stage stage) const;
@@ -214,6 +219,8 @@ private:
     protocol::IpcState m_ipcState = protocol::IpcState::Uninitialized;
     protocol::Stage m_currentStage = protocol::Stage::Idle;
     ActiveTaskState m_activeTask;
+    bool m_codeReadPending = false;
+    QString m_codeReadCameraIp;
     quint16 m_heartbeatCounter = 0;
     quint16 m_alarmLevel = 0;
     quint16 m_alarmCode = 0;

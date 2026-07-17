@@ -106,6 +106,15 @@ StateMachine::StateMachine(
             &StateMachine::onBundleCaptureFinished,
             Qt::DirectConnection);
     }
+
+    if (m_hikCameraCController != nullptr) {
+        connect(
+            m_hikCameraCController,
+            &vision::HikCameraCController::ocrTextReceived,
+            this,
+            &StateMachine::onHikOcrTextReceived,
+            Qt::QueuedConnection);
+    }
 }
 
 StateMachine::~StateMachine()
@@ -217,6 +226,8 @@ void StateMachine::executeActiveTask()
 void StateMachine::clearActiveTask()
 {
     m_activeTask = {};
+    m_codeReadPending = false;
+    m_codeReadCameraIp.clear();
 }
 
 modbus::ModbusService* StateMachine::modbusService() const

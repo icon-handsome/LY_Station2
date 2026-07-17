@@ -580,9 +580,15 @@ void HikCameraCController::onTcpCommandReceived(QString cameraIp, QString comman
         && ocrText.compare(QStringLiteral("heartbeat"), Qt::CaseInsensitive) != 0) {
         const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
 
-        const bool sameAsLast = (!m_lastOcrText.isEmpty() && ocrText == m_lastOcrText);
-        const qint64 sinceLastMs = (m_lastOcrLogMs > 0) ? (nowMs - m_lastOcrLogMs) : INT64_MAX;
-        if ((sameAsLast && sinceLastMs < 2000) || (sinceLastMs < 300)) {
+        // 先通知业务层，再做日志节流（避免抑制影响读码握手）。
+        m_lastOcrText = ocrText;
+        m_lastOcrCameraIp = cameraIp.trimmed();
+        emit ocrTextReceived(m_lastOcrCameraIp, ocrText);
+
+        const qint64 sinceLastLogMs = (m_lastOcrLogMs > 0) ? (nowMs - m_lastOcrLogMs) : INT64_MAX;
+        const bool sameAsLastLogged =
+            !m_lastLoggedOcrText.isEmpty() && ocrText == m_lastLoggedOcrText;
+        if ((sameAsLastLogged && sinceLastLogMs < 2000) || sinceLastLogMs < 300) {
             ++m_suppressedOcrLogCount;
             return;
         }
@@ -598,7 +604,7 @@ void HikCameraCController::onTcpCommandReceived(QString cameraIp, QString comman
                 << QStringLiteral("[HikCameraC][OCR][%1] %2").arg(cameraIp, ocrText);
         }
 
-        m_lastOcrText = ocrText;
+        m_lastLoggedOcrText = ocrText;
         m_lastOcrLogMs = nowMs;
         return;
     }

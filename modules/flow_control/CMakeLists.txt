@@ -57,4 +57,6 @@ target_link_libraries(scan_tracking_flow_control
         scan_tracking_mech_eye
         scan_tracking_vision
         scan_tracking_weld_measure
+        scan_tracking_thickness_measure
+        scan_tracking_inner_surface_measure
 )

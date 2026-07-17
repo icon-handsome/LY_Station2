@@ -146,6 +146,7 @@ enum class ScanDeviceKind {
 struct ScanPointConfig {
     int pointIndex = 0;           ///< 设备内本地段号（1..N）；臂读 AO47/40015，伸缩杆读 AO48/40016
     bool needRotation = false;    ///< true → 预留彩色/2D 扩展；Orbbec 主流程采集深度+点云
+    QString purpose;              ///< 点位用途：thickness / inner_surface 等；空表示未指定
 };
 
 /// 一条扫描路径下某设备的配额（二维：设备 × 本地索引上限）。
@@ -157,19 +158,22 @@ struct ScanDeviceQuota {
 /// 一条扫描路径的定义（来自 scan_paths JSON 的 scanPaths[] 元素）。
 struct ScanPathConfig {
     int pathId = 0;               ///< 路径 ID，在 JSON 内唯一
-    bool enabled = true;          ///< 是否参与实际扫描流程
+    bool enabled = true;          ///< 无 activePathId 时参与配额汇总；有 activePathId 时仅作文档/回退
+    QString name;                 ///< 稳定短名，如 straight_weld / code_read
+    QString algorithm;            ///< 检测算法：weld_section / code_read / thickness_inner_surface；空则按 name 推断
     QString segmentKind = QStringLiteral("external");  ///< 旧字段；新版以 devices 为准
     QString description;          ///< 人类可读描述
     int totalPoints = 0;          ///< 声明总点数；新版 = 各设备配额之和
     int armPointCount = 0;        ///< 机械臂配额（可与 devices 互写）
     int telescopicPointCount = 0; ///< 伸缩杆配额
     std::vector<ScanDeviceQuota> devices;  ///< 设备配额列表（推荐配置方式）
-    std::vector<ScanPointConfig> points;   ///< 旧版显式点表；新版可空
+    std::vector<ScanPointConfig> points;   ///< 显式点表（可带 purpose）；新版配额模式下可空
 };
 
 /// 扫描路径 JSON 文件的根结构（由工位 profile 的 scanPathsConfigPath 指定）。
 struct ScanPathsConfig {
     std::vector<ScanPathConfig> scanPaths;
+    int activePathId = 0;   ///< >0 时运行时配额/校验仅使用该 pathId（方案 A：改配置切换）
     QString version;        ///< JSON 文件版本
     QString lastModified;   ///< 最后修改时间（字符串，来自 JSON 元数据）
 };
@@ -224,23 +228,44 @@ public:
     /// 合并后的工位 profile（含 feature 开关与 scan_paths 文件路径）。
     const StationProfile& stationProfile() const;
 
-    /// 按全局段号（pointIndex）在已启用路径中查找点位；未找到返回 nullptr。
+    /// 按 pathId 查找路径；未找到返回 nullptr。
+    const ScanPathConfig* findScanPathById(int pathId) const;
+
+    /// 当前活跃路径：优先 JSON activePathId；未配置或找不到时回退第一条 enabled 路径。
+    const ScanPathConfig* activeScanPath() const;
+
+    /// 活跃路径 pathId；无可用路径时返回 0。
+    int activePathId() const;
+
+    /// 活跃路径 name；无则空串。
+    QString activePathName() const;
+
+    /// 活跃路径算法标识（已归一化）；无则空串。
+    QString activePathAlgorithm() const;
+
+    /// 将 path.algorithm / path.name 归一为算法标识（weld_section 等）。
+    static QString resolvePathAlgorithm(const ScanPathConfig& path);
+
+    /// 按全局段号（pointIndex）在活跃路径（或已启用路径）中查找点位；未找到返回 nullptr。
     /// @note 新版双设备配额模式下，优先用 isValidDeviceLocalIndex。
     const ScanPointConfig* findScanPointByIndex(int segmentIndex) const;
+
+    /// 活跃路径中某本地段号的 purpose；未配置返回空串。
+    QString pointPurpose(int pointIndex) const;
 
     /// 段号所属路径的 segmentKind；未找到时返回 "external"。
     QString segmentKindForPointIndex(int segmentIndex) const;
 
-    /// 已启用路径中的扫描点位总数（各设备配额之和；供 scanSegmentTotal / HMI 展示）。
+    /// 活跃路径点位总数（有 activePathId 时）；否则为所有 enabled 路径配额之和。
     int enabledScanPointCount() const;
 
-    /// 已启用路径中机械臂应采集点数。
+    /// 活跃路径机械臂应采集点数（无 activePathId 时汇总 enabled）。
     int enabledArmPointCount() const;
 
-    /// 已启用路径中伸缩杆应采集点数。
+    /// 活跃路径伸缩杆应采集点数（无 activePathId 时汇总 enabled）。
     int enabledTelescopicPointCount() const;
 
-    /// 校验某设备本地段号是否在配额范围内（1..totalPoints）。
+    /// 校验某设备本地段号是否在（活跃路径）配额范围内（1..totalPoints）。
     bool isValidDeviceLocalIndex(ScanDeviceKind device, int localIndex) const;
 
     /// 设备枚举 ↔ JSON / 日志标签。

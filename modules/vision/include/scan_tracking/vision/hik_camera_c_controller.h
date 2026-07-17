@@ -58,6 +58,10 @@ public:
     bool requestCapture(CaptureType type, const QString& cameraIp);
     bool requestCapture(CaptureType type = CaptureType::SurfaceDefect);
 
+    /// 最近一次有效 OCR 文本（不含 hello/heartbeat）。
+    QString lastOcrText() const { return m_lastOcrText; }
+    QString lastOcrCameraIp() const { return m_lastOcrCameraIp; }
+
     /* 启用周期性自动拍照（联调/冒烟，默认 10s 间隔） */
     void enableTestMode(bool enable, int intervalMs = 10000);
 
@@ -66,6 +70,8 @@ signals:
     void fatalError(scan_tracking::vision::VisionErrorCode code, QString message);
     void captureCompleted(CaptureType type, QString cameraIp, QByteArray imageData);
     void imageReceived(CaptureType type, QString cameraIp, QString filePath, qint64 fileSize);
+    /// 智能相机 TCP 回包解析出的编号/OCR 文本（已去掉 X/PX 前缀与末尾分号）。
+    void ocrTextReceived(QString cameraIp, QString text);
 
 private slots:
     void onTcpServerStarted(QString listenIp, quint16 port);
@@ -123,6 +129,8 @@ private:
     QHash<QString, int> m_captureCounterByIp;
 
     QString m_lastOcrText;
+    QString m_lastOcrCameraIp;
+    QString m_lastLoggedOcrText;
     qint64 m_lastOcrLogMs = 0;
     int m_suppressedOcrLogCount = 0;
 };

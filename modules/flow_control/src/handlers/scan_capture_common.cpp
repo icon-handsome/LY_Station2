@@ -37,7 +37,8 @@ void executeConfiguredScanCapture(TaskHandlerContext& ctx, const char* triggerLa
                                      : configMgr->enabledArmPointCount();
             qWarning(LOG_FLOW).noquote()
                 << QString::fromUtf8(triggerLabel)
-                << QStringLiteral("：%1 本地段号 %2 超出配额 1..%3。")
+                << QStringLiteral("：pathId=%1 %2 本地段号 %3 超出配额 1..%4。")
+                       .arg(configMgr->activePathId())
                        .arg(common::ConfigManager::scanDeviceKindToString(device))
                        .arg(localIndex)
                        .arg(expected);
@@ -67,13 +68,18 @@ void executeConfiguredScanCapture(TaskHandlerContext& ctx, const char* triggerLa
     ctx.host.setTaskProgress(20);
     ctx.host.publishIpcStatus();
     ctx.host.notifyScanStarted(localIndex, taskId);
+    const int pathId = configMgr != nullptr ? configMgr->activePathId() : 0;
+    const QString purpose =
+        configMgr != nullptr ? configMgr->pointPurpose(localIndex) : QString();
     qInfo(LOG_FLOW).noquote()
-        << QString::fromUtf8(triggerLabel) << QStringLiteral("：已发起组合采集 本地段号=")
-        << localIndex
+        << QString::fromUtf8(triggerLabel) << QStringLiteral("：已发起组合采集")
+        << QStringLiteral(" pathId=") << pathId
+        << QStringLiteral(" 本地段号=") << localIndex
         << QStringLiteral(" requestId=") << requestId
         << QStringLiteral(" mechMode=2D+3D")
         << QStringLiteral(" device=")
-        << common::ConfigManager::scanDeviceKindToString(device);
+        << common::ConfigManager::scanDeviceKindToString(device)
+        << (purpose.isEmpty() ? QString() : QStringLiteral(" purpose=") + purpose);
 }
 
 }  // namespace scan_tracking::flow_control

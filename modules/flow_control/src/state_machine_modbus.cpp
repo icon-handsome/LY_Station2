@@ -229,6 +229,7 @@ void StateMachine::processTrigger(const protocol::TriggerDefinition& trigger, co
     m_activeTask.inspectionPathId = 0;
 
     if (const auto* cfgMgr = common::ConfigManager::instance()) {
+        m_activeTask.inspectionPathId = cfgMgr->activePathId();
         const int configuredTotal = cfgMgr->enabledScanPointCount();
         m_activeTask.scanSegmentTotal = configuredTotal > 0
             ? configuredTotal
@@ -241,8 +242,10 @@ void StateMachine::processTrigger(const protocol::TriggerDefinition& trigger, co
 
     qInfo(LOG_FLOW).noquote()
         << QStringLiteral("已接受触发") << protocol::triggerName(trigger)
+        << QStringLiteral(" pathId=") << m_activeTask.inspectionPathId
         << QStringLiteral(" 超时s=") << m_activeTask.timeoutSeconds
-        << QStringLiteral(" 段号=") << m_activeTask.scanSegmentIndex;
+        << QStringLiteral(" 段号=") << m_activeTask.scanSegmentIndex
+        << QStringLiteral("/") << m_activeTask.scanSegmentTotal;
 
     setAlarm(0, 0, QString());
     setState(AppState::Scanning);
@@ -378,6 +381,10 @@ void StateMachine::onProcessTimeout()
 
     if (isScanCaptureStage(m_activeTask.definition->stage)) {
         completeScanSegmentCapture(6, 0, 0, protocol::AckState::Failed, false);
+        return;
+    }
+    if (m_codeReadPending || isActiveCodeReadTrigger()) {
+        finishCodeRead(2, QString(), QStringLiteral("编号识别超时。"));
         return;
     }
     if (m_activeTask.definition->stage == protocol::Stage::Inspection) {

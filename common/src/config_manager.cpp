@@ -224,9 +224,95 @@ const HmiConfig& ConfigManager::hmiConfig() const { return m_hmiConfig; }
 const ScanPathsConfig& ConfigManager::scanPathsConfig() const { return m_scanPathsConfig; }
 const StationProfile& ConfigManager::stationProfile() const { return m_stationProfile; }
 
+const ScanPathConfig* ConfigManager::findScanPathById(int pathId) const
+{
+    if (pathId <= 0) {
+        return nullptr;
+    }
+    for (const auto& path : m_scanPathsConfig.scanPaths) {
+        if (path.pathId == pathId) {
+            return &path;
+        }
+    }
+    return nullptr;
+}
+
+const ScanPathConfig* ConfigManager::activeScanPath() const
+{
+    if (m_scanPathsConfig.activePathId > 0) {
+        if (const ScanPathConfig* byId = findScanPathById(m_scanPathsConfig.activePathId)) {
+            return byId;
+        }
+    }
+    for (const auto& path : m_scanPathsConfig.scanPaths) {
+        if (path.enabled) {
+            return &path;
+        }
+    }
+    return nullptr;
+}
+
+int ConfigManager::activePathId() const
+{
+    if (const ScanPathConfig* path = activeScanPath()) {
+        return path->pathId;
+    }
+    return 0;
+}
+
+QString ConfigManager::activePathName() const
+{
+    if (const ScanPathConfig* path = activeScanPath()) {
+        return path->name;
+    }
+    return {};
+}
+
+QString ConfigManager::resolvePathAlgorithm(const ScanPathConfig& path)
+{
+    const QString explicitAlgo = path.algorithm.trimmed().toLower();
+    if (!explicitAlgo.isEmpty()) {
+        return explicitAlgo;
+    }
+
+    const QString name = path.name.trimmed().toLower();
+    if (name == QLatin1String("straight_weld") || name == QLatin1String("ring_weld") ||
+        name.contains(QLatin1String("weld"))) {
+        return QStringLiteral("weld_section");
+    }
+    if (name == QLatin1String("code_read") || name.contains(QLatin1String("code"))) {
+        return QStringLiteral("code_read");
+    }
+    if (name == QLatin1String("thickness_inner_surface") ||
+        name.contains(QLatin1String("thickness")) ||
+        name.contains(QLatin1String("inner_surface"))) {
+        return QStringLiteral("thickness_inner_surface");
+    }
+    return {};
+}
+
+QString ConfigManager::activePathAlgorithm() const
+{
+    if (const ScanPathConfig* path = activeScanPath()) {
+        return resolvePathAlgorithm(*path);
+    }
+    return {};
+}
+
 const ScanPointConfig* ConfigManager::findScanPointByIndex(int segmentIndex) const
 {
-    // 仅搜索 enabled 路径；返回指向内部 vector 元素的指针，生命周期与 ConfigManager 相同
+    if (const ScanPathConfig* active = activeScanPath()) {
+        for (const auto& point : active->points) {
+            if (point.pointIndex == segmentIndex) {
+                return &point;
+            }
+        }
+        // 活跃路径无显式点表时，不跨路径回退（配额模式）
+        if (!active->points.empty() || m_scanPathsConfig.activePathId > 0) {
+            return nullptr;
+        }
+    }
+
     for (const auto& path : m_scanPathsConfig.scanPaths) {
         if (!path.enabled) {
             continue;
@@ -240,8 +326,27 @@ const ScanPointConfig* ConfigManager::findScanPointByIndex(int segmentIndex) con
     return nullptr;
 }
 
+QString ConfigManager::pointPurpose(int pointIndex) const
+{
+    if (const ScanPointConfig* point = findScanPointByIndex(pointIndex)) {
+        return point->purpose;
+    }
+    return {};
+}
+
 QString ConfigManager::segmentKindForPointIndex(int segmentIndex) const
 {
+    if (const ScanPathConfig* active = activeScanPath()) {
+        for (const auto& point : active->points) {
+            if (point.pointIndex == segmentIndex) {
+                return active->segmentKind;
+            }
+        }
+        if (m_scanPathsConfig.activePathId > 0) {
+            return active->segmentKind;
+        }
+    }
+
     for (const auto& path : m_scanPathsConfig.scanPaths) {
         if (!path.enabled) {
             continue;
@@ -257,6 +362,17 @@ QString ConfigManager::segmentKindForPointIndex(int segmentIndex) const
 
 int ConfigManager::enabledScanPointCount() const
 {
+    if (m_scanPathsConfig.activePathId > 0) {
+        if (const ScanPathConfig* active = findScanPathById(m_scanPathsConfig.activePathId)) {
+            const int fromQuota = active->armPointCount + active->telescopicPointCount;
+            if (fromQuota > 0) {
+                return fromQuota;
+            }
+            return static_cast<int>(active->points.size());
+        }
+        return 0;
+    }
+
     int total = 0;
     for (const auto& path : m_scanPathsConfig.scanPaths) {
         if (!path.enabled) {
@@ -274,6 +390,13 @@ int ConfigManager::enabledScanPointCount() const
 
 int ConfigManager::enabledArmPointCount() const
 {
+    if (m_scanPathsConfig.activePathId > 0) {
+        if (const ScanPathConfig* active = findScanPathById(m_scanPathsConfig.activePathId)) {
+            return active->armPointCount;
+        }
+        return 0;
+    }
+
     int total = 0;
     for (const auto& path : m_scanPathsConfig.scanPaths) {
         if (path.enabled) {
@@ -285,6 +408,13 @@ int ConfigManager::enabledArmPointCount() const
 
 int ConfigManager::enabledTelescopicPointCount() const
 {
+    if (m_scanPathsConfig.activePathId > 0) {
+        if (const ScanPathConfig* active = findScanPathById(m_scanPathsConfig.activePathId)) {
+            return active->telescopicPointCount;
+        }
+        return 0;
+    }
+
     int total = 0;
     for (const auto& path : m_scanPathsConfig.scanPaths) {
         if (path.enabled) {
@@ -750,9 +880,11 @@ void ConfigManager::load(const QString& filePath)
 /**
  * @brief 加载扫描路径配置（JSON 格式）
  *
- * 推荐格式（双设备配额）：
+ * 推荐格式（双设备配额 + 活跃路径）：
+ * - activePathId：当前运行路径（方案 A）
  * - devices[]：{ device: "arm"|"telescopic", totalPoints: N }
  * - 或扁平字段 armPointCount / telescopicPointCount
+ * - points[].purpose：可选，供后续算法路由
  *
  * 兼容旧格式：
  * - points[] + totalPoints + 可选 segmentKind
@@ -793,6 +925,7 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
 
     m_scanPathsConfig.version = root.value("version").toString("1.0");
     m_scanPathsConfig.lastModified = root.value("lastModified").toString();
+    m_scanPathsConfig.activePathId = root.value("activePathId").toInt(0);
 
     const QJsonArray pathsArray = root.value("scanPaths").toArray();
     m_scanPathsConfig.scanPaths.clear();
@@ -804,6 +937,8 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
         ScanPathConfig pathConfig;
         pathConfig.pathId = pathObj.value("pathId").toInt();
         pathConfig.enabled = pathObj.value("enabled").toBool(true);
+        pathConfig.name = pathObj.value("name").toString();
+        pathConfig.algorithm = pathObj.value("algorithm").toString();
         pathConfig.segmentKind = pathObj.value("segmentKind").toString(QStringLiteral("external"));
         pathConfig.description = pathObj.value("description").toString();
         pathConfig.totalPoints = pathObj.value("totalPoints").toInt();
@@ -844,6 +979,7 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
             ScanPointConfig pointConfig;
             pointConfig.pointIndex = pointObj.value("pointIndex").toInt();
             pointConfig.needRotation = pointObj.value("needRotation").toBool(false);
+            pointConfig.purpose = pointObj.value("purpose").toString();
 
             pathConfig.points.push_back(pointConfig);
         }
@@ -895,12 +1031,24 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
     qInfo(LOG_CONFIG).noquote()
         << "扫描路径配置："
         << "版本=" << m_scanPathsConfig.version
-        << "路径数=" << m_scanPathsConfig.scanPaths.size();
+        << "activePathId=" << m_scanPathsConfig.activePathId
+        << "路径数=" << m_scanPathsConfig.scanPaths.size()
+        << "活跃配额 臂=" << enabledArmPointCount()
+        << "伸缩杆=" << enabledTelescopicPointCount()
+        << "合计=" << enabledScanPointCount();
 
     for (const auto& path : m_scanPathsConfig.scanPaths) {
+        const bool isActive = (m_scanPathsConfig.activePathId > 0)
+                                  ? (path.pathId == m_scanPathsConfig.activePathId)
+                                  : path.enabled;
         qInfo(LOG_CONFIG).noquote()
             << "  路径" << path.pathId
+            << (path.name.isEmpty() ? QString() : QStringLiteral(" name=") + path.name)
+            << (resolvePathAlgorithm(path).isEmpty()
+                    ? QString()
+                    : QStringLiteral(" algorithm=") + resolvePathAlgorithm(path))
             << "启用=" << path.enabled
+            << "活跃=" << isActive
             << "机械臂点数=" << path.armPointCount
             << "伸缩杆点数=" << path.telescopicPointCount
             << "总点数=" << path.totalPoints
@@ -915,6 +1063,7 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
  * - 所有路径的 pathId 互不重复
  * - 若存在 points[]：数量须与 totalPoints 一致（旧版），且启用路径内 pointIndex 合法
  * - 新版设备配额：arm/telescopic 点数均 >= 0，且至少一侧 > 0（启用路径）
+ * - activePathId > 0 时必须能在 scanPaths 中找到对应 pathId
  */
 bool ConfigManager::validateScanPathsConfig(QString* errorMessage) const
 {
@@ -949,7 +1098,11 @@ bool ConfigManager::validateScanPathsConfig(QString* errorMessage) const
             return false;
         }
 
-        if (path.enabled && path.armPointCount == 0 && path.telescopicPointCount == 0 &&
+        // 有 activePathId 时，非活跃路径允许暂不配点数；活跃路径必须有配额
+        const bool mustHaveQuota = (m_scanPathsConfig.activePathId > 0)
+                                       ? (path.pathId == m_scanPathsConfig.activePathId)
+                                       : path.enabled;
+        if (mustHaveQuota && path.armPointCount == 0 && path.telescopicPointCount == 0 &&
             path.points.empty()) {
             if (errorMessage) {
                 *errorMessage = QStringLiteral("路径 %1 未配置任何设备点数").arg(path.pathId);
@@ -957,9 +1110,12 @@ bool ConfigManager::validateScanPathsConfig(QString* errorMessage) const
             return false;
         }
 
-        if (path.enabled && !path.points.empty() &&
+        if (!path.points.empty() &&
             path.armPointCount + path.telescopicPointCount == static_cast<int>(path.points.size())) {
-            // 旧版显式点表：校验 pointIndex
+            // 显式点表：校验 pointIndex（活跃或 enabled 路径）
+            if (!mustHaveQuota && m_scanPathsConfig.activePathId > 0) {
+                continue;
+            }
             std::vector<int> seen;
             for (const auto& point : path.points) {
                 if (point.pointIndex <= 0) {
@@ -981,6 +1137,15 @@ bool ConfigManager::validateScanPathsConfig(QString* errorMessage) const
                 seen.push_back(point.pointIndex);
             }
         }
+    }
+
+    if (m_scanPathsConfig.activePathId > 0 &&
+        findScanPathById(m_scanPathsConfig.activePathId) == nullptr) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("activePathId=%1 在 scanPaths 中不存在")
+                                .arg(m_scanPathsConfig.activePathId);
+        }
+        return false;
     }
 
     return true;
