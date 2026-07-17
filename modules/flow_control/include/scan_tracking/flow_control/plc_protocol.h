@@ -199,8 +199,8 @@ constexpr int kTaskIdHigh = modbusIndexFromPlcAddress(40011);
 constexpr int kTaskIdLow = modbusIndexFromPlcAddress(40012);
 constexpr int kProductType = modbusIndexFromPlcAddress(40013);
 constexpr int kRecipeId = modbusIndexFromPlcAddress(40014);
-constexpr int kScanSegmentIndex = modbusIndexFromPlcAddress(40015);       ///< 地址表 40015
-constexpr int kScanSegmentIndexRobot = modbusIndexFromPlcAddress(40016);  ///< 机械臂/PLC 实际下发段号
+constexpr int kArmScanSegmentIndex = modbusIndexFromPlcAddress(40015);        ///< AO47：机械臂相机段号（单字）
+constexpr int kTelescopicScanSegmentIndex = modbusIndexFromPlcAddress(40016); ///< AO48：伸缩杆相机段号（单字）
 constexpr int kRequestTimeoutSeconds = modbusIndexFromPlcAddress(40017);
 constexpr int kRobotStatusWord = modbusIndexFromPlcAddress(40018);        ///< 机械臂状态字（PLC 转发埃斯顿 Robot 40004）
 
@@ -267,18 +267,16 @@ inline Pose6f readRobotTcpPoseFromCommandBlock(const QVector<quint16>& commandBl
     };
 }
 
-/// 从 40015/40016 解析段号：优先非零的 40015，否则读 40016（机械臂经 PLC 转发）
-inline quint16 resolveScanSegmentIndexFromBlock(const QVector<quint16>& commandBlock)
+/// 按触发阶段从对应单字寄存器解析段号：
+/// - ScanSegment → 40015（AO47，机械臂）
+/// - TelescopicScan → 40016（AO48，伸缩杆）
+/// 其他阶段默认读机械臂段号（仅用于监视/兜底）。
+inline quint16 resolveScanSegmentIndexFromBlock(const QVector<quint16>& commandBlock, Stage stage)
 {
-    const quint16 raw40015 = commandBlock.value(kScanSegmentIndex);
-    const quint16 raw40016 = commandBlock.value(kScanSegmentIndexRobot);
-    if (raw40015 != 0) {
-        return plcAnalogToUInt16(raw40015, 0);
-    }
-    if (raw40016 != 0) {
-        return plcAnalogToUInt16(raw40016, 0);
-    }
-    return 0;
+    const int modbusIndex = (stage == Stage::TelescopicScan)
+        ? kTelescopicScanSegmentIndex
+        : kArmScanSegmentIndex;
+    return plcAnalogToUInt16(commandBlock.value(modbusIndex), 0);
 }
 
 // ==================== 结果区寄存器（IPC → PLC）====================

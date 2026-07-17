@@ -144,7 +144,7 @@ enum class ScanDeviceKind {
 
 /// 扫描路径中的单个点位定义（旧版 points[]；新版可省略，改用设备配额）。
 struct ScanPointConfig {
-    int pointIndex = 0;           ///< 设备内本地段号（1..N），与 PLC ScanSegmentIndex 一致
+    int pointIndex = 0;           ///< 设备内本地段号（1..N）；臂读 AO47/40015，伸缩杆读 AO48/40016
     bool needRotation = false;    ///< true → 预留彩色/2D 扩展；Orbbec 主流程采集深度+点云
 };
 

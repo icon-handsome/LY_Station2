@@ -15,7 +15,8 @@ namespace state_machine_internal {
 QString formatPlcRegisterValueForLog(int modbusIndex, quint16 rawValue)
 {
     namespace regs = protocol::registers;
-    if (modbusIndex == regs::kScanSegmentIndex || modbusIndex == regs::kScanSegmentIndexRobot) {
+    if (modbusIndex == regs::kArmScanSegmentIndex ||
+        modbusIndex == regs::kTelescopicScanSegmentIndex) {
         const quint16 decoded = regs::plcAnalogToUInt16(rawValue, 0);
         if (rawValue != decoded) {
             return QStringLiteral("%1 (原始PLC字=%2)").arg(decoded).arg(rawValue);

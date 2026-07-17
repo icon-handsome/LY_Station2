@@ -107,7 +107,10 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
         qInfo(LOG_FLOW).noquote()
             << QStringLiteral("命令块快照：")
             << "Flow_Enable=" << values.value(regs::kFlowEnable)
-            << "ScanSegmentIndex=" << protocol::registers::resolveScanSegmentIndexFromBlock(values)
+            << "ArmScanSegmentIndex(AO47)="
+            << regs::plcAnalogToUInt16(values.value(regs::kArmScanSegmentIndex), 0)
+            << "TelescopicScanSegmentIndex(AO48)="
+            << regs::plcAnalogToUInt16(values.value(regs::kTelescopicScanSegmentIndex), 0)
             << "Trig_ScanSegment=" << values.value(regs::modbusIndexFromPlcAddress(40023))
             << "Trig_TelescopicScan=" << values.value(regs::kTrigTelescopicScan)
             << "Trig_Inspection=" << values.value(regs::modbusIndexFromPlcAddress(40024))
@@ -120,7 +123,7 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
             "Reserved_0", "PLC_Heartbeat", "PLC_SystemState", "Station_WorkMode", "Flow_Enable",
             "Safety_Status_Word", "Cmd_StartAuto", "Cmd_Pause", "Cmd_Stop", "Cmd_Reset",
             "Cmd_ClearAlarms", "TaskId_H", "TaskId_L", "ProductType", "RecipeId",
-            "ScanSegmentIndex", "ScanSegmentIndex_Robot", "RequestTimeout_s", "Robot_Status_Word",
+            "ArmScanSegmentIndex_AO47", "TelescopicScanSegmentIndex_AO48", "RequestTimeout_s", "Robot_Status_Word",
             "Reserved_CmdExt_19", "Trig_LoadGrasp", "Trig_StationMaterialCheck", "Trig_PoseCheck",
             "Trig_ScanSegment", "Trig_Inspection", "Trig_UnloadCalc", "Trig_SelfCheck",
             "Trig_CodeRead", "Trig_ResultReset",
@@ -222,7 +225,7 @@ void StateMachine::processTrigger(const protocol::TriggerDefinition& trigger, co
             ? timeoutDecoded
             : static_cast<quint16>(trigger.defaultTimeoutSeconds);
     }
-    m_activeTask.scanSegmentIndex = resolveScanSegmentIndex(commandBlock);
+    m_activeTask.scanSegmentIndex = resolveScanSegmentIndex(commandBlock, trigger.stage);
     m_activeTask.inspectionPathId = 0;
 
     if (const auto* cfgMgr = common::ConfigManager::instance()) {
@@ -569,9 +572,10 @@ quint32 StateMachine::readTaskId(const QVector<quint16>& commandBlock) const
     return (high << 16) | low;
 }
 
-quint16 StateMachine::resolveScanSegmentIndex(const QVector<quint16>& commandBlock) const
+quint16 StateMachine::resolveScanSegmentIndex(const QVector<quint16>& commandBlock,
+                                              protocol::Stage stage) const
 {
-    return protocol::registers::resolveScanSegmentIndexFromBlock(commandBlock);
+    return protocol::registers::resolveScanSegmentIndexFromBlock(commandBlock, stage);
 }
 
 }  // namespace scan_tracking::flow_control

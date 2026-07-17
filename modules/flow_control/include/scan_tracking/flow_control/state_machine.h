@@ -198,7 +198,8 @@ private:
     int resolveExpectedScanSegmentCount() const;
 
     quint32 readTaskId(const QVector<quint16>& commandBlock) const;
-    quint16 resolveScanSegmentIndex(const QVector<quint16>& commandBlock) const;
+    quint16 resolveScanSegmentIndex(const QVector<quint16>& commandBlock,
+                                    protocol::Stage stage) const;
 
     modbus::ModbusService* m_modbus = nullptr;
     mech_eye::MechEyeService* m_mechEyeTelescopic = nullptr;

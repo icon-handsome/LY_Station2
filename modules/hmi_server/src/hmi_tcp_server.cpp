@@ -1000,7 +1000,7 @@ QJsonObject HmiTcpServer::buildPlcStatusPayload() const
     if (m_stateMachine) {
         namespace regs = flow_control::protocol::registers;
         const auto& cb = m_stateMachine->lastCommandBlock();
-        if (cb.size() > regs::kScanSegmentIndex) {
+        if (cb.size() > regs::kArmScanSegmentIndex) {
             payload[QLatin1String("plcHeartbeat")]    = cb.value(regs::kPlcHeartbeat);
             payload[QLatin1String("plcSystemState")]  = cb.value(regs::kPlcSystemState);
             payload[QLatin1String("workMode")]        = cb.value(regs::kStationWorkMode);
@@ -1011,8 +1011,16 @@ QJsonObject HmiTcpServer::buildPlcStatusPayload() const
                 static_cast<quint32>(cb.value(regs::kTaskIdLow)));
             payload[QLatin1String("productType")]     = cb.value(regs::kProductType);
             payload[QLatin1String("recipeId")]        = cb.value(regs::kRecipeId);
-            payload[QLatin1String("scanSegmentIndex")] = static_cast<int>(
-                regs::resolveScanSegmentIndexFromBlock(cb));
+            const int armSegmentIndex = static_cast<int>(
+                regs::plcAnalogToUInt16(cb.value(regs::kArmScanSegmentIndex), 0));
+            const int telescopicSegmentIndex = (cb.size() > regs::kTelescopicScanSegmentIndex)
+                ? static_cast<int>(
+                      regs::plcAnalogToUInt16(cb.value(regs::kTelescopicScanSegmentIndex), 0))
+                : 0;
+            payload[QLatin1String("armScanSegmentIndex")] = armSegmentIndex;
+            payload[QLatin1String("telescopicScanSegmentIndex")] = telescopicSegmentIndex;
+            // 兼容旧字段：默认回传机械臂段号（AO47）
+            payload[QLatin1String("scanSegmentIndex")] = armSegmentIndex;
             // scanSegmentTotal 从 scan_paths 已启用点位数获取，空配置时回退 Tracking.scanSegmentTotal
             const auto* cfgMgr = scan_tracking::common::ConfigManager::instance();
             if (cfgMgr != nullptr) {
