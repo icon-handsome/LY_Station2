@@ -50,6 +50,8 @@ third_party/*
 !third_party/Thicknessmeasurement/**
 !third_party/weld_measure/
 !third_party/weld_measure/**
+!third_party/thickness_measure/
+!third_party/thickness_measure/**
 third_party/Po_Kou_Ce_Liang/x64/
 # Hole: standalone VS2013 local build output only
 third_party/Hole/build_vs2013/
