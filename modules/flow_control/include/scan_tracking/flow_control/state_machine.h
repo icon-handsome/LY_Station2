@@ -119,6 +119,7 @@ public:
 
     void resetScanSegmentCache() override;
     void resetSafetyInterlockState() override;
+    void maybeAdvancePathOnNewCycleStart(int localIndex) override;
 
     void notifyLoadGraspFinished(quint16 resultCode, const PoseSourceResult& pose) override;
     void notifyUnloadCalcFinished(quint16 resultCode, const PoseSourceResult& pose) override;
@@ -201,6 +202,10 @@ private:
 
     bool isActiveCodeReadTrigger() const;
     void finishCodeRead(quint16 resultCode, const QString& codeValue, const QString& message = QString());
+    /// 当前路径检测成功后：清空段缓存/扫描完成寄存器，并自动切到下一条启用路径（不依赖 PLC ResultReset）。
+    void prepareNextScanPathAfterSuccess();
+    /// 当前活跃路径的臂+伸缩杆缓存是否已齐套。
+    bool isActivePathQuotaComplete() const;
 
     quint32 readTaskId(const QVector<quint16>& commandBlock) const;
     quint16 resolveScanSegmentIndex(const QVector<quint16>& commandBlock,

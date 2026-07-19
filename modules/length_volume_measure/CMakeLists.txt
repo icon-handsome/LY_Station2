@@ -23,3 +23,20 @@ target_link_libraries(scan_tracking_length_volume_measure
 )
 
 target_compile_features(scan_tracking_length_volume_measure PUBLIC cxx_std_17)
+
+add_executable(scan_tracking_length_volume_measure_smoke
+    tests/length_volume_measure_smoke_runner.cpp
+)
+
+target_link_libraries(scan_tracking_length_volume_measure_smoke
+    PRIVATE
+        Qt5::Core
+        scan_tracking_length_volume_measure
+)
+
+set_target_properties(scan_tracking_length_volume_measure_smoke PROPERTIES
+    AUTOMOC ON
+    FOLDER "tests"
+)
+
+scan_tracking_deploy_length_volume_measure_runtime(scan_tracking_length_volume_measure_smoke)

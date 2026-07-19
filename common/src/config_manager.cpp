@@ -260,6 +260,73 @@ int ConfigManager::activePathId() const
     return 0;
 }
 
+QVector<int> ConfigManager::enabledPathIds() const
+{
+    QVector<int> ids;
+    ids.reserve(static_cast<int>(m_scanPathsConfig.scanPaths.size()));
+    for (const auto& path : m_scanPathsConfig.scanPaths) {
+        if (path.enabled && path.pathId > 0) {
+            ids.push_back(path.pathId);
+        }
+    }
+    return ids;
+}
+
+bool ConfigManager::setActivePathId(int pathId)
+{
+    if (pathId <= 0) {
+        qWarning(LOG_CONFIG).noquote()
+            << QStringLiteral("setActivePathId：非法 pathId=") << pathId;
+        return false;
+    }
+    if (findScanPathById(pathId) == nullptr) {
+        qWarning(LOG_CONFIG).noquote()
+            << QStringLiteral("setActivePathId：pathId=") << pathId
+            << QStringLiteral(" 不在 scanPaths 中");
+        return false;
+    }
+
+    const int previous = m_scanPathsConfig.activePathId;
+    m_scanPathsConfig.activePathId = pathId;
+    if (previous != pathId) {
+        const ScanPathConfig* path = findScanPathById(pathId);
+        qInfo(LOG_CONFIG).noquote()
+            << QStringLiteral("活跃扫描路径已切换：") << previous << QStringLiteral(" -> ") << pathId
+            << QStringLiteral(" name=") << (path != nullptr ? path->name : QString())
+            << QStringLiteral(" algorithm=")
+            << (path != nullptr ? resolvePathAlgorithm(*path) : QString())
+            << QStringLiteral(" arm=") << (path != nullptr ? path->armPointCount : 0)
+            << QStringLiteral(" telescopic=")
+            << (path != nullptr ? path->telescopicPointCount : 0);
+    }
+    return true;
+}
+
+int ConfigManager::advanceToNextEnabledPath()
+{
+    const QVector<int> ids = enabledPathIds();
+    if (ids.isEmpty()) {
+        qWarning(LOG_CONFIG) << QStringLiteral("advanceToNextEnabledPath：无 enabled 路径可切换");
+        return 0;
+    }
+
+    const int current = activePathId();
+    int currentIndex = ids.indexOf(current);
+    if (currentIndex < 0) {
+        // 当前不在 enabled 列表（或聚合模式），落到第一条
+        if (!setActivePathId(ids.front())) {
+            return 0;
+        }
+        return ids.front();
+    }
+
+    const int nextId = ids.at((currentIndex + 1) % ids.size());
+    if (!setActivePathId(nextId)) {
+        return 0;
+    }
+    return nextId;
+}
+
 QString ConfigManager::activePathName() const
 {
     if (const ScanPathConfig* path = activeScanPath()) {

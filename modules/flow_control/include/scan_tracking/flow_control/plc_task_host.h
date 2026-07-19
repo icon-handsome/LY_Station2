@@ -82,6 +82,9 @@ public:
     virtual void resetScanSegmentCache() = 0;
     virtual void resetSafetyInterlockState() = 0;
 
+    /// 当前路径扫描已齐套且 PLC 再次下发本地段号 1 时：清缓存并切到下一路（不依赖 Inspection/ResultReset）。
+    virtual void maybeAdvancePathOnNewCycleStart(int localIndex) = 0;
+
     virtual void notifyLoadGraspFinished(quint16 resultCode, const PoseSourceResult& pose) = 0;
     virtual void notifyUnloadCalcFinished(quint16 resultCode, const PoseSourceResult& pose) = 0;
     virtual void notifyPoseCheckFinished(

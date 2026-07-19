@@ -178,7 +178,7 @@ InspectionResult rejectUnsupportedAlgorithm(const InspectionQuota& quota)
     result.sourcePointCount = quota.total();
     result.message =
         QStringLiteral("pathId=%1 (%2) algorithm=%3 尚未接入 Trig_Inspection，"
-                       "请切换 activePathId 至焊缝路径（1/5）或等待后续轮次。")
+                       "请先完成该路径算法接入，或禁用该路径后继续。")
             .arg(quota.pathId)
             .arg(quota.pathName.isEmpty() ? QStringLiteral("-") : quota.pathName)
             .arg(quota.algorithm.isEmpty() ? QStringLiteral("(empty)") : quota.algorithm);

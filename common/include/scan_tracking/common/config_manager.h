@@ -173,7 +173,7 @@ struct ScanPathConfig {
 /// 扫描路径 JSON 文件的根结构（由工位 profile 的 scanPathsConfigPath 指定）。
 struct ScanPathsConfig {
     std::vector<ScanPathConfig> scanPaths;
-    int activePathId = 0;   ///< >0 时运行时配额/校验仅使用该 pathId（方案 A：改配置切换）
+    int activePathId = 0;   ///< >0 时运行时配额/校验仅使用该 pathId；可由 setActivePathId 热切换
     QString version;        ///< JSON 文件版本
     QString lastModified;   ///< 最后修改时间（字符串，来自 JSON 元数据）
 };
@@ -236,6 +236,15 @@ public:
 
     /// 活跃路径 pathId；无可用路径时返回 0。
     int activePathId() const;
+
+    /// 运行时切换活跃路径（不改 JSON 文件）。pathId 须存在于 scanPaths；成功返回 true。
+    bool setActivePathId(int pathId);
+
+    /// 按 JSON 顺序切到下一条 enabled 路径（到末尾则回到第一条）。返回新 pathId；无可切路径返回 0。
+    int advanceToNextEnabledPath();
+
+    /// 按 JSON 顺序收集全部 enabled 路径的 pathId。
+    QVector<int> enabledPathIds() const;
 
     /// 活跃路径 name；无则空串。
     QString activePathName() const;

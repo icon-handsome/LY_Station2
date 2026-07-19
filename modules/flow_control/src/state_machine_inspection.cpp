@@ -88,12 +88,79 @@ void StateMachine::finishInspection(const InspectionResult& result)
         << QStringLiteral(" qualityCode=") << result.measurement.qualityCode
         << QStringLiteral(" segments=") << result.sourcePointCount
         << QStringLiteral(" message=") << result.message;
+
+    // 检测成功后由 IPC 自清缓存并切下一条路径；不依赖 PLC Trig_ResultReset / pathId。
+    if (result.resultCode == 1) {
+        prepareNextScanPathAfterSuccess();
+    }
 }
 
 bool StateMachine::isActiveCodeReadTrigger() const
 {
     return m_activeTask.definition != nullptr &&
            std::strcmp(m_activeTask.definition->name, "Trig_CodeRead") == 0;
+}
+
+void StateMachine::prepareNextScanPathAfterSuccess()
+{
+    // PLC 不做 ResultReset：检测成功 / 开下一路时 IPC 自行清段缓存与扫描完成寄存器，再切路径。
+    // 故意保留本次 Inspection 结果寄存器，供 PLC/HMI 读取。
+    resetScanSegmentCache();
+    if (isModbusConnected()) {
+        clearScanSegmentDoneRegisters();
+    }
+
+    auto* cfgMgr = common::ConfigManager::instance();
+    if (cfgMgr == nullptr) {
+        return;
+    }
+
+    const int fromPathId = cfgMgr->activePathId();
+    const QString fromName = cfgMgr->activePathName();
+    const int toPathId = cfgMgr->advanceToNextEnabledPath();
+    if (toPathId <= 0) {
+        qWarning(LOG_FLOW) << QStringLiteral("已清缓存，但无下一条启用路径可切换。");
+        return;
+    }
+
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("已自动清缓存并切换扫描路径：")
+        << fromPathId << QStringLiteral("(") << fromName << QStringLiteral(")")
+        << QStringLiteral(" -> ") << toPathId
+        << QStringLiteral("(") << cfgMgr->activePathName() << QStringLiteral(")")
+        << QStringLiteral(" algorithm=") << cfgMgr->activePathAlgorithm()
+        << QStringLiteral(" 配额 arm=") << cfgMgr->enabledArmPointCount()
+        << QStringLiteral(" telescopic=") << cfgMgr->enabledTelescopicPointCount()
+        << QStringLiteral("；PLC 可直接按新路径从段号 1 继续采集。");
+}
+
+bool StateMachine::isActivePathQuotaComplete() const
+{
+    const auto* cfgMgr = common::ConfigManager::instance();
+    if (cfgMgr == nullptr) {
+        return false;
+    }
+    return m_scanSegmentCache.meetsDeviceQuotas(
+        cfgMgr->enabledArmPointCount(), cfgMgr->enabledTelescopicPointCount());
+}
+
+void StateMachine::maybeAdvancePathOnNewCycleStart(int localIndex)
+{
+    if (localIndex != 1) {
+        return;
+    }
+    if (!isActivePathQuotaComplete()) {
+        return;
+    }
+
+    const int fromPathId =
+        common::ConfigManager::instance() != nullptr
+            ? common::ConfigManager::instance()->activePathId()
+            : 0;
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("检测到 pathId=") << fromPathId
+        << QStringLiteral(" 已齐套且 PLC 再次下发段号 1：按新路径周期自动切换（无需 Inspection/ResultReset）。");
+    prepareNextScanPathAfterSuccess();
 }
 
 void StateMachine::startCodeReadCapture()
@@ -218,6 +285,10 @@ void StateMachine::finishCodeRead(quint16 resultCode, const QString& codeValue, 
         << QStringLiteral("Trig_CodeRead：已完成 Res=") << resultCode
         << QStringLiteral(" code=") << codeValue
         << QStringLiteral(" message=") << effectiveMessage;
+
+    if (resultCode == 1) {
+        prepareNextScanPathAfterSuccess();
+    }
 }
 
 }  // namespace scan_tracking::flow_control

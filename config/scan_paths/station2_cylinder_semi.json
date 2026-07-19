@@ -1,6 +1,6 @@
 {
   "version": "1.2",
-  "lastModified": "2026-07-17",
+  "lastModified": "2026-07-19",
   "activePathId": 1,
   "scanPaths": [
     {
@@ -8,15 +8,15 @@
       "enabled": true,
       "name": "straight_weld",
       "algorithm": "weld_section",
-      "description": "直焊缝检测：AO47(臂)×10 + AO48(伸缩杆)×7",
+      "description": "直焊缝检测：AO47(臂)×11 + AO48(伸缩杆)×7",
       "devices": [
-        { "device": "arm", "totalPoints": 10 },
+        { "device": "arm", "totalPoints": 11 },
         { "device": "telescopic", "totalPoints": 7 }
       ]
     },
     {
       "pathId": 2,
-      "enabled": false,
+      "enabled": true,
       "name": "code_read",
       "algorithm": "code_read",
       "description": "编号检测：AO47(臂)×1",
@@ -26,7 +26,7 @@
     },
     {
       "pathId": 3,
-      "enabled": false,
+      "enabled": true,
       "name": "thickness_inner_surface",
       "algorithm": "thickness_inner_surface",
       "description": "厚度+内表面：AO47×12；1/2/7/8=厚度内外对，3-6/9-12=内表面成对平均",
@@ -50,7 +50,7 @@
     },
     {
       "pathId": 5,
-      "enabled": false,
+      "enabled": true,
       "name": "ring_weld",
       "algorithm": "weld_section",
       "description": "环缝检测：AO47(臂)×18 + AO48(伸缩杆)×18",

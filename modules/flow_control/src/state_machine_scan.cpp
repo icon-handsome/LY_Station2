@@ -60,6 +60,21 @@ void StateMachine::onBundleCaptureFinished(vision::MultiCameraCaptureBundle bund
             bundle.request.taskId,
             bundle);
 
+        // 按运行实例（taskId）唯一目录落盘本段全部 3D+2D 数据（Mech PLY 为 binary）。
+        QString persistError;
+        if (!m_scanSegmentCache.persistSegment(
+                device, bundle.request.segmentIndex, &persistError)) {
+            qWarning(LOG_FLOW).noquote()
+                << triggerLabel << QStringLiteral("：采集成功但落盘失败")
+                << persistError
+                << QStringLiteral(" runRoot=")
+                << m_scanSegmentCache.runCaptureRoot();
+        } else {
+            qInfo(LOG_FLOW).noquote()
+                << triggerLabel << QStringLiteral("：已落盘至")
+                << m_scanSegmentCache.runCaptureRoot();
+        }
+
         const auto* configMgr = common::ConfigManager::instance();
         const int armExpected = configMgr != nullptr ? configMgr->enabledArmPointCount() : 0;
         const int telescopicExpected =
@@ -76,6 +91,14 @@ void StateMachine::onBundleCaptureFinished(vision::MultiCameraCaptureBundle bund
             << QStringLiteral(" telescopic=")
             << m_scanSegmentCache.cachedCountForDevice(common::ScanDeviceKind::Telescopic)
             << QStringLiteral("/") << telescopicExpected;
+
+        if (m_scanSegmentCache.meetsDeviceQuotas(armExpected, telescopicExpected)) {
+            qInfo(LOG_FLOW).noquote()
+                << QStringLiteral("pathId=") << pathId
+                << QStringLiteral(" 扫描齐套。可 Trig_Inspection；若 PLC 直接再发段号 1，"
+                                  "IPC 将自动清缓存并切换到下一条启用路径。");
+        }
+
         completeScanSegmentCapture(1, imageCount, cloudFrameCount, protocol::AckState::Completed, true);
         return;
     }

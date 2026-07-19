@@ -14,6 +14,9 @@ void executeConfiguredScanCapture(TaskHandlerContext& ctx, const char* triggerLa
     const int localIndex = ctx.activeTask.scanSegmentIndex;
     const quint32 taskId = ctx.activeTask.taskId;
 
+    // PLC 不发 ResultReset/也可能不发 Inspection：上一路径齐套后再次下发段号 1，视为开下一路。
+    ctx.host.maybeAdvancePathOnNewCycleStart(localIndex);
+
     auto* vision = ctx.host.visionPipelineService();
     if (vision == nullptr || !vision->isStarted()) {
         qWarning(LOG_FLOW).noquote()
