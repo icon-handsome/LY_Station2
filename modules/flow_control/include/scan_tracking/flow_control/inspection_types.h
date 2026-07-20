@@ -28,6 +28,11 @@ struct InspectionMeasurement {
     double innerRoundness = 0.0;
     int innerSurfacePairCount = 0;
     int innerSurfaceSuccessCount = 0;
+    // length_volume
+    double lengthMm = 0.0;
+    double volumeLiters = 0.0;
+    double volumeRadiusMm = 0.0;
+    double fittedOuterRadiusMm = 0.0;
     QString codeValue;
 };
 

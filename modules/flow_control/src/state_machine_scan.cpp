@@ -77,6 +77,10 @@ void StateMachine::onBundleCaptureFinished(vision::MultiCameraCaptureBundle bund
             << bundle.request.requestId;
         return;
     }
+    if (m_activeTask.definition->stage == protocol::Stage::SelfCheck) {
+        finishSelfCheckCapture(bundle);
+        return;
+    }
     if (!isScanCaptureStage(m_activeTask.definition->stage)) {
         qWarning(LOG_FLOW).noquote()
             << QStringLiteral("bundleCaptureFinished 忽略：当前阶段非扫描采集 requestId=")
@@ -174,9 +178,20 @@ void StateMachine::onVisionPipelineFatalError(vision::VisionErrorCode code, QStr
         << static_cast<int>(code)
         << message;
 
-    if (m_activeTask.definition == nullptr ||
-        !isScanCaptureStage(m_activeTask.definition->stage) ||
-        m_activeTask.completionAnnounced) {
+    if (m_activeTask.definition == nullptr || m_activeTask.completionAnnounced) {
+        return;
+    }
+
+    if (m_activeTask.definition->stage == protocol::Stage::SelfCheck) {
+        setAlarm(3, 723, message);
+        constexpr quint16 kFailCapture = 1u << 4;
+        writeSelfCheckFailWords({kFailCapture});
+        completeActiveTask(2, protocol::AckState::Failed, false);
+        notifySelfCheckFinished(2, kFailCapture);
+        return;
+    }
+
+    if (!isScanCaptureStage(m_activeTask.definition->stage)) {
         return;
     }
 

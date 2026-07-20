@@ -1,6 +1,7 @@
 #include "scan_tracking/flow_control/station2_inspection.h"
 
 #include "scan_tracking/inner_surface_measure/inner_surface_measure_service.h"
+#include "scan_tracking/length_volume_measure/length_volume_measure_service.h"
 #include "scan_tracking/thickness_measure/thickness_measure_service.h"
 #include "scan_tracking/weld_measure/weld_measure_service.h"
 
@@ -787,6 +788,163 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
     return result;
 }
 
+scan_tracking::length_volume_measure::LengthVolumeMeasureService&
+sharedLengthVolumeMeasureService()
+{
+    static scan_tracking::length_volume_measure::LengthVolumeMeasureService service;
+    return service;
+}
+
+bool ensureLengthVolumeMeasureReady(QString* errorMessage)
+{
+    auto& service = sharedLengthVolumeMeasureService();
+    if (service.isReady()) {
+        return true;
+    }
+
+    scan_tracking::length_volume_measure::LengthVolumeMeasureError error;
+    if (!service.initializeFromIni(QString(), &error)) {
+        if (errorMessage != nullptr) {
+            *errorMessage = error.message;
+        }
+        return false;
+    }
+    return true;
+}
+
+double resolveVolumeRadiusMm(const InspectionQuota& quota)
+{
+    if (const auto* cfgMgr = common::ConfigManager::instance()) {
+        if (const common::ScanPathConfig* path = cfgMgr->findScanPathById(quota.pathId)) {
+            if (path->volumeRadiusMm > 0.0) {
+                return path->volumeRadiusMm;
+            }
+        }
+    }
+    // 与 smoke 默认一致；现场应在 scan_paths JSON 配置 volumeRadiusMm（通常=内径/2）
+    return 600.0;
+}
+
+InspectionResult evaluateLengthVolumeInspection(
+    const ScanSegmentCache& cache,
+    quint32 taskId,
+    const InspectionQuota& quota)
+{
+    InspectionResult result;
+    fillPathMeta(&result, quota);
+    result.sourcePointCount = quota.total() > 0 ? quota.total() : cache.cachedSegmentCount();
+
+    if (cache.cachedSegmentCount() == 0) {
+        result.resultCode = 3;
+        result.message = QStringLiteral("pathId=%1：无扫描段缓存，请先完成机械臂外表面采集。")
+                             .arg(quota.pathId);
+        return result;
+    }
+
+    const quint32 cacheTaskId = cache.runTaskId();
+    if (taskId != 0 && cacheTaskId != 0 && cacheTaskId != taskId) {
+        result.resultCode = 3;
+        result.message = QStringLiteral("pathId=%1：缓存 taskId=%2 与当前任务 taskId=%3 不一致。")
+                             .arg(quota.pathId)
+                             .arg(cacheTaskId)
+                             .arg(taskId);
+        return result;
+    }
+
+    const int armCached = cache.cachedCountForDevice(common::ScanDeviceKind::Arm);
+    const int telescopicCached =
+        cache.cachedCountForDevice(common::ScanDeviceKind::Telescopic);
+    if (!cache.meetsDeviceQuotas(quota.expectedArmCount, quota.expectedTelescopicCount)) {
+        result.resultCode = 3;
+        result.ngReasonWord0 = kNgReasonIncompleteSegments;
+        result.message = incompleteQuotaMessage(armCached, telescopicCached, quota);
+        return result;
+    }
+
+    QVector<SegmentCloud> clouds;
+    if (!loadQuotaSegmentClouds(cache, quota, &clouds, &result)) {
+        fillPathMeta(&result, quota);
+        return result;
+    }
+    if (clouds.isEmpty()) {
+        result.resultCode = 3;
+        result.ngReasonWord0 = kNgReasonIncompleteSegments;
+        result.message = QStringLiteral("pathId=%1：无可用机械臂点云段。").arg(quota.pathId);
+        return result;
+    }
+
+    std::vector<float> mergedXyz;
+    size_t mergedCount = 0;
+    for (const SegmentCloud& cloud : clouds) {
+        mergedXyz.insert(mergedXyz.end(), cloud.xyz.begin(), cloud.xyz.end());
+        mergedCount += static_cast<size_t>(cloud.finiteCount);
+    }
+    if (mergedCount == 0 || mergedXyz.empty()) {
+        result.resultCode = 2;
+        result.ngReasonWord0 = kNgReasonPointCloudInvalid;
+        result.measurement.qualityCode = 2;
+        result.measureItemCount = 1;
+        result.message = QStringLiteral("pathId=%1：合并点云为空。").arg(quota.pathId);
+        return result;
+    }
+
+    QString initError;
+    if (!ensureLengthVolumeMeasureReady(&initError)) {
+        result.resultCode = 2;
+        result.ngReasonWord0 = kNgReasonAlgorithmFailed;
+        result.measurement.qualityCode = 2;
+        result.measureItemCount = 1;
+        result.message = QStringLiteral("pathId=%1 长度容积测量初始化失败：%2")
+                             .arg(quota.pathId)
+                             .arg(initError);
+        return result;
+    }
+
+    const double volumeRadiusMm = resolveVolumeRadiusMm(quota);
+    qInfo(LOG_STATION2_INSPECTION).noquote()
+        << QStringLiteral("开始长度容积测量 pathId=") << quota.pathId
+        << QStringLiteral(" name=") << quota.pathName
+        << QStringLiteral(" 段数=") << clouds.size()
+        << QStringLiteral(" 合并点数=") << static_cast<qulonglong>(mergedCount)
+        << QStringLiteral(" volumeRadiusMm=") << volumeRadiusMm;
+
+    scan_tracking::length_volume_measure::LengthVolumeMeasurement measurement;
+    scan_tracking::length_volume_measure::LengthVolumeMeasureError error;
+    if (!sharedLengthVolumeMeasureService().measure(
+            mergedXyz.data(), mergedCount, volumeRadiusMm, &measurement, &error) ||
+        !measurement.valid) {
+        result.resultCode = 2;
+        result.ngReasonWord0 = kNgReasonAlgorithmFailed;
+        result.measurement.qualityCode = 2;
+        result.measureItemCount = 1;
+        result.message = QStringLiteral("pathId=%1 长度容积测量失败：%2")
+                             .arg(quota.pathId)
+                             .arg(error.message.isEmpty() ? QStringLiteral("测量无效")
+                                                         : error.message);
+        return result;
+    }
+
+    result.resultCode = 1;
+    result.measureItemCount = 2;
+    result.measurement.qualityCode = 1;
+    result.measurement.measuredSegmentCount = clouds.size();
+    result.measurement.lengthMm = measurement.lengthMm;
+    result.measurement.volumeLiters = measurement.volumeLiters;
+    result.measurement.volumeRadiusMm = measurement.volumeRadiusMm;
+    result.measurement.fittedOuterRadiusMm = measurement.fittedOuterRadiusMm;
+    result.message = QStringLiteral(
+                         "pathId=%1 长度容积 OK：length=%2 mm, volume=%3 L, "
+                         "radius=%4 mm, fittedOuter=%5 mm, segments=%6")
+                         .arg(quota.pathId)
+                         .arg(measurement.lengthMm, 0, 'f', 3)
+                         .arg(measurement.volumeLiters, 0, 'f', 3)
+                         .arg(measurement.volumeRadiusMm, 0, 'f', 3)
+                         .arg(measurement.fittedOuterRadiusMm, 0, 'f', 3)
+                         .arg(clouds.size());
+    qInfo(LOG_STATION2_INSPECTION).noquote() << result.message;
+    return result;
+}
+
 }  // namespace
 
 InspectionResult evaluateStation2Inspection(
@@ -819,6 +977,21 @@ InspectionResult evaluateStation2Inspection(
     }
     if (effective.algorithm == QLatin1String("thickness_inner_surface")) {
         return evaluateThicknessInnerSurfaceInspection(cache, taskId, effective);
+    }
+    if (effective.algorithm == QLatin1String("length_volume")) {
+        return evaluateLengthVolumeInspection(cache, taskId, effective);
+    }
+    if (effective.algorithm == QLatin1String("self_check")) {
+        InspectionResult result;
+        result.pathId = effective.pathId;
+        result.pathName = effective.pathName;
+        result.algorithm = effective.algorithm;
+        result.resultCode = 3;
+        result.message = QStringLiteral(
+            "pathId=%1 self_check 由 Trig_SelfCheck 完成（回零校验 + 臂 3D/CXP 采集），"
+            "不走 Inspection。")
+                             .arg(effective.pathId);
+        return result;
     }
     if (effective.algorithm == QLatin1String("code_read")) {
         // 同步评估入口不会发起拍照；由 InspectionHandler 走 startCodeReadCapture。

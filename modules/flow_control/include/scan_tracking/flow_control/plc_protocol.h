@@ -394,7 +394,7 @@ inline const QVector<TriggerDefinition>& triggerDefinitions()
         {"Trig_ScanSegment", registers::modbusIndexFromPlcAddress(40023), registers::kAckScanSegment, registers::kResScanSegment, Stage::ScanSegment, 600},
         {"Trig_Inspection", registers::modbusIndexFromPlcAddress(40024), registers::kAckInspection, registers::kResInspection, Stage::Inspection, 60},
         {"Trig_UnloadCalc", registers::modbusIndexFromPlcAddress(40025), registers::kAckUnloadCalc, registers::kResUnloadCalc, Stage::UnloadCalc, 10},
-        {"Trig_SelfCheck", registers::modbusIndexFromPlcAddress(40026), registers::kAckSelfCheck, registers::kResSelfCheck, Stage::SelfCheck, 10},
+        {"Trig_SelfCheck", registers::modbusIndexFromPlcAddress(40026), registers::kAckSelfCheck, registers::kResSelfCheck, Stage::SelfCheck, 120},
         {"Trig_CodeRead", registers::modbusIndexFromPlcAddress(40027), registers::kAckCodeRead, registers::kResCodeRead, Stage::Inspection, 10},
         {"Trig_ResultReset", registers::modbusIndexFromPlcAddress(40028), registers::kAckResultReset, registers::kResResultReset, Stage::ResultReset, 10},
     };

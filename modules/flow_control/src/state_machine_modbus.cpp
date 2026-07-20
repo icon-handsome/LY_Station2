@@ -383,6 +383,13 @@ void StateMachine::onProcessTimeout()
         completeScanSegmentCapture(6, 0, 0, protocol::AckState::Failed, false);
         return;
     }
+    if (m_activeTask.definition->stage == protocol::Stage::SelfCheck) {
+        constexpr quint16 kFailCapture = 1u << 4;
+        writeSelfCheckFailWords({kFailCapture});
+        completeActiveTask(2, protocol::AckState::Failed, false);
+        notifySelfCheckFinished(2, kFailCapture);
+        return;
+    }
     if (m_codeReadPending || isActiveCodeReadTrigger()) {
         finishCodeRead(2, QString(), QStringLiteral("编号识别超时。"));
         return;

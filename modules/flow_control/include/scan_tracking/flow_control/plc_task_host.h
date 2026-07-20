@@ -79,6 +79,9 @@ public:
     /// 向机械臂侧海康智能 C 发起编号识别，等待 OCR TCP 回包后写 PLC / 完成任务。
     virtual void startCodeReadCapture() = 0;
 
+    /// 自检：在当前位置发起机械臂 Mech+CXP 组合采集（异步，完成后由 StateMachine 收尾）。
+    virtual void startSelfCheckCapture() = 0;
+
     virtual void resetScanSegmentCache() = 0;
     virtual void resetSafetyInterlockState() = 0;
 

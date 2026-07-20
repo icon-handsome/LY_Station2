@@ -4,7 +4,9 @@
 
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/flow_control/station2_inspection.h"
+#include "scan_tracking/mech_eye/mech_eye_types.h"
 #include "scan_tracking/vision/hik_camera_c_controller.h"
+#include "scan_tracking/vision/vision_pipeline_service.h"
 #include "scan_tracking/vision/vision_types.h"
 
 #include <cstring>
@@ -289,6 +291,86 @@ void StateMachine::finishCodeRead(quint16 resultCode, const QString& codeValue, 
     if (resultCode == 1) {
         prepareNextScanPathAfterSuccess();
     }
+}
+
+void StateMachine::startSelfCheckCapture()
+{
+    auto* vision = m_visionPipeline;
+    if (vision == nullptr || !vision->isStarted()) {
+        constexpr quint16 kFailCxpOrVision = 1u << 2;
+        writeSelfCheckFailWords({kFailCxpOrVision});
+        completeActiveTask(2, protocol::AckState::Failed, false);
+        notifySelfCheckFinished(2, kFailCxpOrVision);
+        return;
+    }
+
+    vision::VisionPipelineService::BundleCaptureOptions options;
+    options.useMechEye = true;
+    options.useHikCxp = true;
+    options.useHikSmartC = false;
+
+    const int segmentIndex =
+        m_activeTask.scanSegmentIndex > 0 ? m_activeTask.scanSegmentIndex : 1;
+    const quint64 requestId = vision->requestCaptureBundle(
+        segmentIndex,
+        m_activeTask.taskId,
+        mech_eye::CaptureMode::Capture2DAnd3D,
+        false,
+        options);
+    if (requestId == 0) {
+        constexpr quint16 kFailCapture = 1u << 4;
+        writeSelfCheckFailWords({kFailCapture});
+        completeActiveTask(2, protocol::AckState::Failed, false);
+        notifySelfCheckFinished(2, kFailCapture);
+        return;
+    }
+
+    m_activeTask.captureRequestId = requestId;
+    setTaskProgress(40);
+    publishIpcStatus();
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("自检：已发起组合采集 requestId=") << requestId
+        << QStringLiteral(" 段号=") << segmentIndex
+        << QStringLiteral(" channels=梅卡+CXP");
+}
+
+void StateMachine::finishSelfCheckCapture(const vision::MultiCameraCaptureBundle& bundle)
+{
+    if (m_activeTask.definition == nullptr ||
+        m_activeTask.definition->stage != protocol::Stage::SelfCheck ||
+        m_activeTask.completionAnnounced) {
+        return;
+    }
+    if (bundle.request.requestId != m_activeTask.captureRequestId) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("自检采集完成忽略：requestId 不匹配 active=")
+            << m_activeTask.captureRequestId
+            << QStringLiteral(" bundle=") << bundle.request.requestId;
+        return;
+    }
+
+    constexpr quint16 kFailCapture = 1u << 4;
+    const bool cxpOk = bundle.cxpParticipated() &&
+                       bundle.hikCameraAResult.success() &&
+                       bundle.hikCameraBResult.success();
+    const bool ok = bundle.mechEyeResult.success() && cxpOk;
+
+    if (!ok) {
+        writeSelfCheckFailWords({kFailCapture});
+        completeActiveTask(2, protocol::AckState::Failed, false);
+        notifySelfCheckFinished(2, kFailCapture);
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("自检采集失败：") << bundle.summary()
+            << QStringLiteral(" cxpParticipated=") << bundle.cxpParticipated();
+        return;
+    }
+
+    writeSelfCheckFailWords({0});
+    completeActiveTask(1, protocol::AckState::Completed, true);
+    notifySelfCheckFinished(1, 0);
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("自检采集通过：") << bundle.summary()
+        << QStringLiteral(" 段号=") << m_activeTask.scanSegmentIndex;
 }
 
 }  // namespace scan_tracking::flow_control

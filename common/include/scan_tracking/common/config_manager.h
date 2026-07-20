@@ -173,17 +173,33 @@ struct ScanDeviceQuota {
     int totalPoints = 0;  ///< 该设备需要采集的点数（本地索引 1..totalPoints）
 };
 
+/// 某设备组在本路径上的相机启用矩阵（来自 scan_paths JSON 的 capture.arm / capture.telescopic）。
+struct PathDeviceCaptureConfig {
+    bool mechEye3d = true;   ///< 梅卡 3D（本轮管道仍始终采 Mech；供后续按路径关闭）
+    bool hikSmartC = true;   ///< 海康智能相机 C
+    bool hikCxp = false;     ///< 海康 CXP 双目（仅机械臂有意义；伸缩杆忽略）
+};
+
+/// 路径级采集相机开关；configured=false 表示 JSON 未写 capture，运行时按 algorithm 回退。
+struct PathCaptureConfig {
+    bool configured = false;
+    PathDeviceCaptureConfig arm;
+    PathDeviceCaptureConfig telescopic;
+};
+
 /// 一条扫描路径的定义（来自 scan_paths JSON 的 scanPaths[] 元素）。
 struct ScanPathConfig {
     int pathId = 0;               ///< 路径 ID，在 JSON 内唯一
     bool enabled = true;          ///< 无 activePathId 时参与配额汇总；有 activePathId 时仅作文档/回退
     QString name;                 ///< 稳定短名，如 straight_weld / code_read
-    QString algorithm;            ///< 检测算法：weld_section / code_read / thickness_inner_surface；空则按 name 推断
+    QString algorithm;            ///< 检测算法：weld_section / code_read / thickness_inner_surface / length_volume；空则按 name 推断
     QString segmentKind = QStringLiteral("external");  ///< 旧字段；新版以 devices 为准
     QString description;          ///< 人类可读描述
     int totalPoints = 0;          ///< 声明总点数；新版 = 各设备配额之和
     int armPointCount = 0;        ///< 机械臂配额（可与 devices 互写）
     int telescopicPointCount = 0; ///< 伸缩杆配额
+    double volumeRadiusMm = 0.0;  ///< length_volume：容积半径 (mm)；<=0 时检测侧使用默认回退
+    PathCaptureConfig capture;    ///< 路径级相机启用矩阵
     std::vector<ScanDeviceQuota> devices;  ///< 设备配额列表（推荐配置方式）
     std::vector<ScanPointConfig> points;   ///< 显式点表（可带 purpose）；新版配额模式下可空
 };
@@ -273,6 +289,14 @@ public:
 
     /// 将 path.algorithm / path.name 归一为算法标识（weld_section 等）。
     static QString resolvePathAlgorithm(const ScanPathConfig& path);
+
+    /// 解析路径在指定设备组上的相机开关：优先 JSON capture，否则按 algorithm 回退。
+    static PathDeviceCaptureConfig resolvePathDeviceCapture(
+        const ScanPathConfig& path,
+        ScanDeviceKind device);
+
+    /// 活跃路径在指定设备组上的相机开关；无活跃路径时返回旧管道默认（臂：3D+智能+CXP）。
+    PathDeviceCaptureConfig activeDeviceCapture(ScanDeviceKind device) const;
 
     /// 按全局段号（pointIndex）在活跃路径（或已启用路径）中查找点位；未找到返回 nullptr。
     /// @note 新版双设备配额模式下，优先用 isValidDeviceLocalIndex。

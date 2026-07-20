@@ -356,7 +356,101 @@ QString ConfigManager::resolvePathAlgorithm(const ScanPathConfig& path)
         name.contains(QLatin1String("inner_surface"))) {
         return QStringLiteral("thickness_inner_surface");
     }
+    if (name == QLatin1String("length_volume") ||
+        name.contains(QLatin1String("length_volume")) ||
+        name.contains(QLatin1String("outer_length"))) {
+        return QStringLiteral("length_volume");
+    }
+    if (name == QLatin1String("self_check") || name.contains(QLatin1String("self_check"))) {
+        return QStringLiteral("self_check");
+    }
     return {};
+}
+
+PathDeviceCaptureConfig ConfigManager::resolvePathDeviceCapture(
+    const ScanPathConfig& path,
+    ScanDeviceKind device)
+{
+    if (path.capture.configured) {
+        return device == ScanDeviceKind::Telescopic ? path.capture.telescopic
+                                                    : path.capture.arm;
+    }
+
+    // JSON 未写 capture 时按算法回退，避免焊缝误开 CXP、厚度误开智能相机。
+    const QString algo = resolvePathAlgorithm(path);
+    PathDeviceCaptureConfig cfg;
+    if (algo == QLatin1String("weld_section")) {
+        cfg.mechEye3d = true;
+        cfg.hikSmartC = true;
+        cfg.hikCxp = false;
+        return cfg;
+    }
+    if (algo == QLatin1String("thickness_inner_surface")) {
+        if (device == ScanDeviceKind::Telescopic) {
+            cfg.mechEye3d = false;
+            cfg.hikSmartC = false;
+            cfg.hikCxp = false;
+            return cfg;
+        }
+        cfg.mechEye3d = true;
+        cfg.hikSmartC = false;
+        cfg.hikCxp = true;
+        return cfg;
+    }
+    if (algo == QLatin1String("code_read")) {
+        if (device == ScanDeviceKind::Telescopic) {
+            cfg.mechEye3d = false;
+            cfg.hikSmartC = false;
+            cfg.hikCxp = false;
+            return cfg;
+        }
+        cfg.mechEye3d = false;
+        cfg.hikSmartC = true;
+        cfg.hikCxp = false;
+        return cfg;
+    }
+    if (algo == QLatin1String("length_volume")) {
+        if (device == ScanDeviceKind::Telescopic) {
+            cfg.mechEye3d = false;
+            cfg.hikSmartC = false;
+            cfg.hikCxp = false;
+            return cfg;
+        }
+        cfg.mechEye3d = true;
+        cfg.hikSmartC = false;
+        cfg.hikCxp = true;
+        return cfg;
+    }
+    if (algo == QLatin1String("self_check")) {
+        if (device == ScanDeviceKind::Telescopic) {
+            cfg.mechEye3d = false;
+            cfg.hikSmartC = false;
+            cfg.hikCxp = false;
+            return cfg;
+        }
+        cfg.mechEye3d = true;
+        cfg.hikSmartC = false;
+        cfg.hikCxp = true;
+        return cfg;
+    }
+
+    // 未知算法：保持旧管道默认（臂：3D+智能+CXP；伸缩：3D+智能）
+    cfg.mechEye3d = true;
+    cfg.hikSmartC = true;
+    cfg.hikCxp = (device == ScanDeviceKind::Arm);
+    return cfg;
+}
+
+PathDeviceCaptureConfig ConfigManager::activeDeviceCapture(ScanDeviceKind device) const
+{
+    if (const ScanPathConfig* path = activeScanPath()) {
+        return resolvePathDeviceCapture(*path, device);
+    }
+    PathDeviceCaptureConfig cfg;
+    cfg.mechEye3d = true;
+    cfg.hikSmartC = true;
+    cfg.hikCxp = (device == ScanDeviceKind::Arm);
+    return cfg;
 }
 
 QString ConfigManager::activePathAlgorithm() const
@@ -1047,6 +1141,39 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
         pathConfig.totalPoints = pathObj.value("totalPoints").toInt();
         pathConfig.armPointCount = pathObj.value("armPointCount").toInt(0);
         pathConfig.telescopicPointCount = pathObj.value("telescopicPointCount").toInt(0);
+        pathConfig.volumeRadiusMm = pathObj.value("volumeRadiusMm").toDouble(0.0);
+
+        const QJsonObject captureObj = pathObj.value("capture").toObject();
+        if (!captureObj.isEmpty()) {
+            pathConfig.capture.configured = true;
+            const auto parseDeviceCapture = [](const QJsonObject& obj,
+                                               PathDeviceCaptureConfig* out) {
+                if (obj.isEmpty() || out == nullptr) {
+                    return;
+                }
+                if (obj.contains(QLatin1String("mechEye3d"))) {
+                    out->mechEye3d = obj.value(QLatin1String("mechEye3d")).toBool(out->mechEye3d);
+                }
+                if (obj.contains(QLatin1String("hikSmartC"))) {
+                    out->hikSmartC = obj.value(QLatin1String("hikSmartC")).toBool(out->hikSmartC);
+                }
+                if (obj.contains(QLatin1String("hikCxp"))) {
+                    out->hikCxp = obj.value(QLatin1String("hikCxp")).toBool(out->hikCxp);
+                }
+            };
+            // 未写字段时：臂默认 3D+智能、CXP 关；伸缩默认 3D+智能（与焊缝矩阵一致，避免漏配误开 CXP）
+            pathConfig.capture.arm = PathDeviceCaptureConfig{};
+            pathConfig.capture.arm.mechEye3d = true;
+            pathConfig.capture.arm.hikSmartC = true;
+            pathConfig.capture.arm.hikCxp = false;
+            pathConfig.capture.telescopic = PathDeviceCaptureConfig{};
+            pathConfig.capture.telescopic.mechEye3d = true;
+            pathConfig.capture.telescopic.hikSmartC = true;
+            pathConfig.capture.telescopic.hikCxp = false;
+            parseDeviceCapture(captureObj.value("arm").toObject(), &pathConfig.capture.arm);
+            parseDeviceCapture(
+                captureObj.value("telescopic").toObject(), &pathConfig.capture.telescopic);
+        }
 
         const QJsonArray devicesArray = pathObj.value("devices").toArray();
         pathConfig.devices.clear();
@@ -1144,6 +1271,10 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
         const bool isActive = (m_scanPathsConfig.activePathId > 0)
                                   ? (path.pathId == m_scanPathsConfig.activePathId)
                                   : path.enabled;
+        const PathDeviceCaptureConfig armCap =
+            resolvePathDeviceCapture(path, ScanDeviceKind::Arm);
+        const PathDeviceCaptureConfig telCap =
+            resolvePathDeviceCapture(path, ScanDeviceKind::Telescopic);
         qInfo(LOG_CONFIG).noquote()
             << "  路径" << path.pathId
             << (path.name.isEmpty() ? QString() : QStringLiteral(" name=") + path.name)
@@ -1155,7 +1286,16 @@ void ConfigManager::loadScanPathsConfig(const QString& jsonFilePath)
             << "机械臂点数=" << path.armPointCount
             << "伸缩杆点数=" << path.telescopicPointCount
             << "总点数=" << path.totalPoints
-            << "显式点表=" << path.points.size();
+            << "显式点表=" << path.points.size()
+            << QStringLiteral(" capture源=")
+            << (path.capture.configured ? QStringLiteral("json") : QStringLiteral("algorithm"))
+            << QStringLiteral(" arm[3D=%1 smart=%2 cxp=%3]")
+                   .arg(armCap.mechEye3d)
+                   .arg(armCap.hikSmartC)
+                   .arg(armCap.hikCxp)
+            << QStringLiteral(" telescopic[3D=%1 smart=%2]")
+                   .arg(telCap.mechEye3d)
+                   .arg(telCap.hikSmartC);
     }
 }
 

@@ -27,6 +27,14 @@ void appendInspectionMeasurementFields(QJsonObject& payload, const InspectionMea
     headMetrics[QStringLiteral("roundness_tol")] = measurement.innerRoundness;
     headMetrics[QStringLiteral("innerSurfacePairCount")] = measurement.innerSurfacePairCount;
     headMetrics[QStringLiteral("innerSurfaceSuccessCount")] = measurement.innerSurfaceSuccessCount;
+    headMetrics[QStringLiteral("lengthMm")] = measurement.lengthMm;
+    headMetrics[QStringLiteral("length_mm")] = measurement.lengthMm;
+    headMetrics[QStringLiteral("volumeLiters")] = measurement.volumeLiters;
+    headMetrics[QStringLiteral("volume_liters")] = measurement.volumeLiters;
+    headMetrics[QStringLiteral("volumeRadiusMm")] = measurement.volumeRadiusMm;
+    headMetrics[QStringLiteral("volume_radius_mm")] = measurement.volumeRadiusMm;
+    headMetrics[QStringLiteral("fittedOuterRadiusMm")] = measurement.fittedOuterRadiusMm;
+    headMetrics[QStringLiteral("fitted_outer_radius_mm")] = measurement.fittedOuterRadiusMm;
     if (!measurement.codeValue.isEmpty()) {
         headMetrics[QStringLiteral("codeValue")] = measurement.codeValue;
     }

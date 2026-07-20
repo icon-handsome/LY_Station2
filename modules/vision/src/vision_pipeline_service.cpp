@@ -160,6 +160,22 @@ quint64 VisionPipelineService::requestCaptureBundle(
     scan_tracking::mech_eye::CaptureMode mechCaptureMode,
     bool telescopicConcurrentHikC)
 {
+    // HMI / 旧调用：保持「全局 CXP 开关 + 控制器存在则采智能 C」的旧行为。
+    BundleCaptureOptions options;
+    options.useMechEye = true;
+    options.useHikCxp = true;
+    options.useHikSmartC = true;
+    return requestCaptureBundle(
+        segmentIndex, taskId, mechCaptureMode, telescopicConcurrentHikC, options);
+}
+
+quint64 VisionPipelineService::requestCaptureBundle(
+    int segmentIndex,
+    quint32 taskId,
+    scan_tracking::mech_eye::CaptureMode mechCaptureMode,
+    bool telescopicConcurrentHikC,
+    BundleCaptureOptions options)
+{
     if (!m_started) {
         emit fatalError(VisionErrorCode::NotStarted, QStringLiteral("视觉流水线未启动。"));
         return 0;
@@ -174,7 +190,7 @@ quint64 VisionPipelineService::requestCaptureBundle(
     scan_tracking::mech_eye::MechEyeService* mechService =
         telescopicConcurrentHikC ? m_mechEyeTelescopicService : m_mechEyeArmService;
 
-    if (mechService == nullptr) {
+    if (options.useMechEye && mechService == nullptr) {
         emit fatalError(
             VisionErrorCode::InvalidConfig,
             telescopicConcurrentHikC
@@ -182,20 +198,20 @@ quint64 VisionPipelineService::requestCaptureBundle(
                 : QStringLiteral("机械臂梅卡相机服务不可用。"));
         return 0;
     }
-
-    // 机械臂：可并行 CXP（LB）+ 海康 C；伸缩杆：仅海康 C。
-    const bool useCxp =
-        !telescopicConcurrentHikC && m_config.hikCxpEnabled &&
-        m_hikCameraAService != nullptr && m_hikCameraBService != nullptr;
-    // 机械臂与伸缩杆均可使用海康 C；机械臂另可并行 CXP。
-    const bool useHikCameraC = m_hikCameraCController != nullptr;
-
-    if (!useHikCameraC && !useCxp) {
+    if (!options.useMechEye) {
+        // 本轮段扫仍依赖 Mech；关闭 Mech 的路径（如编号）应走专用采集入口。
         emit fatalError(
             VisionErrorCode::InvalidConfig,
-            QStringLiteral("视觉服务不完整：需要 CXP 双目或海康智能 C。"));
+            QStringLiteral("组合采集当前仍需要梅卡 3D；请使用路径专用采集入口。"));
         return 0;
     }
+
+    // 机械臂：可并行 CXP（LB）+ 海康 C；伸缩杆：仅海康 C。路径开关与全局 hikCxpEnabled 取与。
+    const bool useCxp =
+        options.useHikCxp && !telescopicConcurrentHikC && m_config.hikCxpEnabled &&
+        m_hikCameraAService != nullptr && m_hikCameraBService != nullptr;
+    const bool useHikCameraC =
+        options.useHikSmartC && m_hikCameraCController != nullptr;
 
     MultiCameraCaptureRequest request;
     request.requestId = m_nextRequestId++;
@@ -246,6 +262,7 @@ quint64 VisionPipelineService::requestCaptureBundle(
     m_pending = pending;
 
     QStringList parts;
+    parts << QStringLiteral("梅卡");
     if (useCxp) {
         parts << QStringLiteral("CXP");
     }
@@ -254,9 +271,19 @@ quint64 VisionPipelineService::requestCaptureBundle(
     }
     setState(
         VisionPipelineState::Capturing,
-        QStringLiteral("梅卡采集已启动（%1 将在梅卡完成后延迟 %2ms）")
+        QStringLiteral("梅卡采集已启动（%1；海康通道将在梅卡完成后延迟 %2ms）")
             .arg(parts.join(QStringLiteral("+")))
             .arg(kMechToHikCaptureDelayMs));
+    qInfo(LOG_VISION_PIPELINE).noquote()
+        << QStringLiteral("[VisionPipeline] 组合采集 requestId=%1 segment=%2 device=%3 "
+                          "channels=%4 pathOpts(cxp=%5 smart=%6)")
+               .arg(request.requestId)
+               .arg(segmentIndex)
+               .arg(telescopicConcurrentHikC ? QStringLiteral("telescopic")
+                                             : QStringLiteral("arm"))
+               .arg(parts.join(QLatin1Char('+')))
+               .arg(options.useHikCxp)
+               .arg(options.useHikSmartC);
     return request.requestId;
 }
 

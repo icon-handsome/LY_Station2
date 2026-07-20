@@ -33,6 +33,13 @@ public:
     bool isStarted() const { return m_started; }
     VisionPipelineState state() const { return m_state; }
 
+    /// 组合采集通道开关（路径级矩阵解析后传入；与全局 hikCxpEnabled 取与）。
+    struct BundleCaptureOptions {
+        bool useMechEye = true;    ///< 本轮仍强制需要 Mech 服务；预留按路径关闭
+        bool useHikCxp = true;     ///< 是否采 CXP 双目（伸缩杆侧会被忽略）
+        bool useHikSmartC = true;  ///< 是否触发海康智能相机 C
+    };
+
     quint64 requestCaptureBundle(
         int segmentIndex,
         quint32 taskId,
@@ -44,6 +51,13 @@ public:
         quint32 taskId,
         scan_tracking::mech_eye::CaptureMode mechCaptureMode,
         bool telescopicConcurrentHikC);
+
+    quint64 requestCaptureBundle(
+        int segmentIndex,
+        quint32 taskId,
+        scan_tracking::mech_eye::CaptureMode mechCaptureMode,
+        bool telescopicConcurrentHikC,
+        BundleCaptureOptions options);
 
 signals:
     void bundleCaptureFinished(scan_tracking::vision::MultiCameraCaptureBundle bundle);

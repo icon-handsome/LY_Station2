@@ -56,10 +56,29 @@ void executeConfiguredScanCapture(TaskHandlerContext& ctx, const char* triggerLa
         return;
     }
 
+    const common::PathDeviceCaptureConfig captureCfg =
+        configMgr != nullptr ? configMgr->activeDeviceCapture(device)
+                             : common::PathDeviceCaptureConfig{};
+    if (!captureCfg.mechEye3d && !captureCfg.hikSmartC &&
+        !(device == common::ScanDeviceKind::Arm && captureCfg.hikCxp)) {
+        qWarning(LOG_FLOW).noquote()
+            << QString::fromUtf8(triggerLabel)
+            << QStringLiteral("：pathId=%1 设备 %2 相机矩阵全关，拒绝段扫。")
+                   .arg(configMgr != nullptr ? configMgr->activePathId() : 0)
+                   .arg(common::ConfigManager::scanDeviceKindToString(device));
+        ctx.host.completeScanSegmentCapture(5, 0, 0, protocol::AckState::Failed, false);
+        return;
+    }
+
+    vision::VisionPipelineService::BundleCaptureOptions options;
+    options.useMechEye = captureCfg.mechEye3d;
+    options.useHikCxp = captureCfg.hikCxp;
+    options.useHikSmartC = captureCfg.hikSmartC;
+
     const auto mechCaptureMode = mech_eye::CaptureMode::Capture2DAnd3D;
 
     const quint64 requestId = vision->requestCaptureBundle(
-        localIndex, taskId, mechCaptureMode, useTelescopicGroup);
+        localIndex, taskId, mechCaptureMode, useTelescopicGroup, options);
     if (requestId == 0) {
         qWarning(LOG_FLOW).noquote()
             << QString::fromUtf8(triggerLabel) << QStringLiteral("：发起组合采集失败。");
@@ -82,6 +101,10 @@ void executeConfiguredScanCapture(TaskHandlerContext& ctx, const char* triggerLa
         << QStringLiteral(" mechMode=2D+3D")
         << QStringLiteral(" device=")
         << common::ConfigManager::scanDeviceKindToString(device)
+        << QStringLiteral(" capture[3D=%1 smart=%2 cxp=%3]")
+               .arg(options.useMechEye)
+               .arg(options.useHikSmartC)
+               .arg(options.useHikCxp)
         << (purpose.isEmpty() ? QString() : QStringLiteral(" purpose=") + purpose);
 }
 

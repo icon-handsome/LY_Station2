@@ -1,6 +1,6 @@
 {
-  "version": "1.2",
-  "lastModified": "2026-07-19",
+  "version": "1.5",
+  "lastModified": "2026-07-20",
   "activePathId": 1,
   "scanPaths": [
     {
@@ -8,7 +8,11 @@
       "enabled": true,
       "name": "straight_weld",
       "algorithm": "weld_section",
-      "description": "直焊缝检测：AO47(臂)×11 + AO48(伸缩杆)×7",
+      "description": "直焊缝检测：AO47(臂)×11 + AO48(伸缩杆)×7；启用臂/伸缩 3D+智能，不启用 CXP",
+      "capture": {
+        "arm": { "mechEye3d": true, "hikSmartC": true, "hikCxp": false },
+        "telescopic": { "mechEye3d": true, "hikSmartC": true }
+      },
       "devices": [
         { "device": "arm", "totalPoints": 11 },
         { "device": "telescopic", "totalPoints": 7 }
@@ -19,7 +23,11 @@
       "enabled": true,
       "name": "code_read",
       "algorithm": "code_read",
-      "description": "编号检测：AO47(臂)×1",
+      "description": "编号检测：AO47(臂)×1；主流程走专用编号采集，段扫若触发则仅智能相机",
+      "capture": {
+        "arm": { "mechEye3d": false, "hikSmartC": true, "hikCxp": false },
+        "telescopic": { "mechEye3d": false, "hikSmartC": false }
+      },
       "devices": [
         { "device": "arm", "totalPoints": 1 }
       ]
@@ -29,7 +37,11 @@
       "enabled": true,
       "name": "thickness_inner_surface",
       "algorithm": "thickness_inner_surface",
-      "description": "厚度+内表面：AO47×12；1/2/7/8=厚度内外对，3-6/9-12=内表面成对平均",
+      "description": "厚度+内表面：AO47×12；启用臂 3D+CXP，不启用智能相机与伸缩杆",
+      "capture": {
+        "arm": { "mechEye3d": true, "hikSmartC": false, "hikCxp": true },
+        "telescopic": { "mechEye3d": false, "hikSmartC": false }
+      },
       "devices": [
         { "device": "arm", "totalPoints": 12 }
       ],
@@ -49,14 +61,47 @@
       ]
     },
     {
+      "pathId": 4,
+      "enabled": true,
+      "name": "length_volume",
+      "algorithm": "length_volume",
+      "description": "外表面长度和容积：AO47(臂)×N；启用臂 3D+CXP，不启用智能相机与伸缩杆。点数/volumeRadiusMm 需与现场核对",
+      "volumeRadiusMm": 600.0,
+      "capture": {
+        "arm": { "mechEye3d": true, "hikSmartC": false, "hikCxp": true },
+        "telescopic": { "mechEye3d": false, "hikSmartC": false }
+      },
+      "devices": [
+        { "device": "arm", "totalPoints": 6 }
+      ]
+    },
+    {
       "pathId": 5,
       "enabled": true,
       "name": "ring_weld",
       "algorithm": "weld_section",
-      "description": "环缝检测：AO47(臂)×18 + AO48(伸缩杆)×18",
+      "description": "环缝检测：AO47(臂)×18 + AO48(伸缩杆)×18；启用臂/伸缩 3D+智能，不启用 CXP",
+      "capture": {
+        "arm": { "mechEye3d": true, "hikSmartC": true, "hikCxp": false },
+        "telescopic": { "mechEye3d": true, "hikSmartC": true }
+      },
       "devices": [
         { "device": "arm", "totalPoints": 18 },
         { "device": "telescopic", "totalPoints": 18 }
+      ]
+    },
+    {
+      "pathId": 7,
+      "enabled": true,
+      "name": "self_check",
+      "algorithm": "self_check",
+      "description": "自检：机械臂 2 点位；转盘+伸缩杆须回零；Trig_SelfCheck 采臂 3D+CXP，不用智能相机。PLC 在每点写 AO47=1/2 后触发",
+      "capture": {
+        "arm": { "mechEye3d": true, "hikSmartC": false, "hikCxp": true },
+        "telescopic": { "mechEye3d": false, "hikSmartC": false }
+      },
+      "devices": [
+        { "device": "arm", "totalPoints": 2 }
       ]
     }
   ]
