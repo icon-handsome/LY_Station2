@@ -43,25 +43,39 @@ void ScanSegmentCache::reset()
 
 bool ScanSegmentCache::ensureRunRoot(quint32 taskId, QString* runRootOut, QString* timestampOut)
 {
-    if (taskId == 0) {
-        if (runRootOut != nullptr) {
-            *runRootOut = QString();
-        }
-        if (timestampOut != nullptr) {
-            *timestampOut = QString();
-        }
-        return false;
-    }
-
+    // taskId=0（PLC 未写 TaskId）也必须能落盘。初始 m_runTaskId 同为 0，
+    // 不能仅靠「taskId 变化」判断，否则永远不会创建 run 目录。
     if (m_runTaskId != taskId) {
         m_entries.clear();
         m_runTaskId = taskId;
-        m_runTimestamp = scan_tracking::common::buildCaptureTimestamp();
-        m_runCaptureRoot = scan_tracking::common::buildRunCaptureRoot(taskId, m_runTimestamp);
+        m_runTimestamp.clear();
+        m_runCaptureRoot.clear();
     }
 
     if (m_runCaptureRoot.isEmpty()) {
-        return false;
+        if (m_runTimestamp.isEmpty()) {
+            m_runTimestamp = scan_tracking::common::buildCaptureTimestamp();
+        }
+        m_runTaskId = taskId;
+        m_runCaptureRoot =
+            scan_tracking::common::buildRunCaptureRoot(taskId, m_runTimestamp);
+        if (m_runCaptureRoot.isEmpty()) {
+            qWarning(LOG_SCAN_CACHE).noquote()
+                << QStringLiteral("创建 run 落盘目录失败 taskId=") << taskId
+                << QStringLiteral(" timestamp=") << m_runTimestamp;
+            if (runRootOut != nullptr) {
+                *runRootOut = QString();
+            }
+            if (timestampOut != nullptr) {
+                *timestampOut = m_runTimestamp;
+            }
+            return false;
+        }
+        if (taskId == 0) {
+            qInfo(LOG_SCAN_CACHE).noquote()
+                << QStringLiteral("PLC taskId=0，使用 run_0_* 落盘目录：")
+                << m_runCaptureRoot;
+        }
     }
 
     if (runRootOut != nullptr) {
@@ -79,7 +93,14 @@ void ScanSegmentCache::storeSegment(
     quint32 taskId,
     vision::MultiCameraCaptureBundle bundle)
 {
-    ensureRunRoot(taskId);
+    if (!ensureRunRoot(taskId)) {
+        qWarning(LOG_SCAN_CACHE).noquote()
+            << QStringLiteral("storeSegment：run 目录未就绪，段数据仅保留内存")
+            << QStringLiteral(" device=")
+            << deviceTagForPath(device)
+            << QStringLiteral(" localIndex=") << localIndex
+            << QStringLiteral(" taskId=") << taskId;
+    }
 
     ScanSegmentCacheKey key{device, localIndex};
     ScanSegmentCacheEntry entry;
@@ -190,7 +211,8 @@ bool persistScanSegmentBundle(
 {
     if (runRoot.trimmed().isEmpty()) {
         if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral("run 落盘根目录为空。");
+            *errorMessage = QStringLiteral("run 落盘根目录为空（taskId=%1，请确认 output 可写）。")
+                                .arg(taskId);
         }
         return false;
     }

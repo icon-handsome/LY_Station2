@@ -42,7 +42,8 @@ class ScanSegmentCache {
 public:
     void reset();
 
-    /// 为新 taskId 准备 run 目录；taskId 变化时会先 reset。
+    /// 为当前 taskId 准备 run 目录。taskId 变化时清空段缓存并新建目录；
+    /// taskId=0（PLC 未写）也允许，目录名为 run_0_{timestamp}。
     bool ensureRunRoot(quint32 taskId, QString* runRootOut = nullptr, QString* timestampOut = nullptr);
 
     void storeSegment(

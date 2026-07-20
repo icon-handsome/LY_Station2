@@ -1,9 +1,11 @@
 #include "scan_tracking/common/capture_cache_paths.h"
 
 #include <QCoreApplication>
-#include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
+#include <QLoggingCategory>
+
+Q_LOGGING_CATEGORY(LOG_CAPTURE_PATHS, "common.capture_paths")
 
 namespace scan_tracking::common {
 
@@ -29,6 +31,8 @@ QString ensureDirectoryExists(const QString& directoryPath)
 
     QDir dir;
     if (!dir.mkpath(directoryPath)) {
+        qWarning(LOG_CAPTURE_PATHS).noquote()
+            << QStringLiteral("创建目录失败：") << directoryPath;
         return QString();
     }
     return QDir(directoryPath).absolutePath();
@@ -101,9 +105,22 @@ QString buildCaptureTimestamp()
 QString buildRunCaptureRoot(quint32 taskId, const QString& timestamp)
 {
     const QString ts = timestamp.trimmed().isEmpty() ? buildCaptureTimestamp() : timestamp;
-    const QString outputRoot = QCoreApplication::applicationDirPath() + QStringLiteral("/output");
+    QString appDir = QCoreApplication::applicationDirPath().trimmed();
+    if (appDir.isEmpty()) {
+        appDir = QDir::currentPath();
+        qWarning(LOG_CAPTURE_PATHS).noquote()
+            << QStringLiteral("applicationDirPath 为空，回退到当前工作目录：") << appDir;
+    }
+    const QString outputRoot = QDir(appDir).absoluteFilePath(QStringLiteral("output"));
     const QString runDirName = QStringLiteral("run_%1_%2").arg(taskId).arg(ts);
-    return ensureDirectoryExists(QDir(outputRoot).absoluteFilePath(runDirName));
+    const QString runPath = QDir(outputRoot).absoluteFilePath(runDirName);
+    const QString created = ensureDirectoryExists(runPath);
+    if (created.isEmpty()) {
+        qWarning(LOG_CAPTURE_PATHS).noquote()
+            << QStringLiteral("buildRunCaptureRoot 失败 taskId=") << taskId
+            << QStringLiteral(" path=") << runPath;
+    }
+    return created;
 }
 
 }  // namespace scan_tracking::common

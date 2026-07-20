@@ -67,12 +67,14 @@ void StateMachine::onBundleCaptureFinished(vision::MultiCameraCaptureBundle bund
             qWarning(LOG_FLOW).noquote()
                 << triggerLabel << QStringLiteral("：采集成功但落盘失败")
                 << persistError
+                << QStringLiteral(" taskId=") << bundle.request.taskId
                 << QStringLiteral(" runRoot=")
                 << m_scanSegmentCache.runCaptureRoot();
         } else {
             qInfo(LOG_FLOW).noquote()
                 << triggerLabel << QStringLiteral("：已落盘至")
-                << m_scanSegmentCache.runCaptureRoot();
+                << m_scanSegmentCache.runCaptureRoot()
+                << QStringLiteral(" taskId=") << bundle.request.taskId;
         }
 
         const auto* configMgr = common::ConfigManager::instance();

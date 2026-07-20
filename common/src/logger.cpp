@@ -25,10 +25,11 @@ const char* safeCategoryName(const QMessageLogContext& context)
     return "default";
 }
 
-std::string dailyLogFilePath(const std::string& log_dir, const QDate& date)
+std::string instanceLogFilePath(const std::string& log_dir, const QDateTime& started_at)
 {
     return log_dir + "/scan_tracking_"
-        + date.toString(QStringLiteral("yyyy-MM-dd")).toStdString() + ".txt";
+        + started_at.toString(QStringLiteral("yyyy-MM-dd_HHmmss_zzz")).toStdString()
+        + ".txt";
 }
 
 bool ensureLogDirectory(const std::string& log_dir)
@@ -127,7 +128,7 @@ Logger::Logger(const QString& log_dir)
     if (!ensureLogDirectory(log_dir_)) {
         std::cerr << "严重错误：Logger 无法创建日志目录：" << log_dir_ << "\n";
     }
-    openLogFile(QDate::currentDate());
+    openLogFile();
 }
 
 Logger::~Logger()
@@ -202,32 +203,25 @@ const char* Logger::getLogSeverity(QtMsgType type)
     }
 }
 
-void Logger::openLogFile(const QDate& target_date)
+void Logger::openLogFile()
 {
-    if (!target_date.isValid()) {
-        return;
-    }
-
-    const std::string file_path = dailyLogFilePath(log_dir_, target_date);
+    const QDateTime started_at = QDateTime::currentDateTime();
+    log_file_path_ = instanceLogFilePath(log_dir_, started_at);
 
     if (log_file_ != nullptr) {
         std::fclose(log_file_);
         log_file_ = nullptr;
     }
 
-    log_file_ = std::fopen(file_path.c_str(), "ab");
+    // 每次启动新文件；唯一时间戳避免覆盖历史实例。
+    log_file_ = std::fopen(log_file_path_.c_str(), "wb");
     if (log_file_ == nullptr) {
-        std::cerr << "严重错误：Logger 无法打开目标文件：" << file_path << "\n";
+        std::cerr << "严重错误：Logger 无法打开目标文件：" << log_file_path_ << "\n";
         return;
     }
 
-    std::fseek(log_file_, 0, SEEK_END);
-    if (std::ftell(log_file_) == 0) {
-        std::fwrite(kUtf8Bom, 1, 3, log_file_);
-        std::fflush(log_file_);
-    }
-
-    current_date_ = target_date;
+    std::fwrite(kUtf8Bom, 1, 3, log_file_);
+    std::fflush(log_file_);
 }
 
 void Logger::messageHandler(QtMsgType type, const QMessageLogContext& context, const QString& msg)
@@ -263,10 +257,6 @@ void Logger::log(QtMsgType type, const QMessageLogContext& context, const QStrin
     }
 
     const QDateTime now = QDateTime::currentDateTime();
-    if (now.date() != current_date_) {
-        openLogFile(now.date());
-    }
-
     const std::string time_stamp = now.toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz")).toStdString();
     const std::string suffix = (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg)
         ? sourceLocationSuffix(context)
