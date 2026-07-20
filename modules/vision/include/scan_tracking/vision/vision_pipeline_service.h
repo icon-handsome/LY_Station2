@@ -1,6 +1,6 @@
 #pragma once
 
-// 多相机视觉流水线：Mech-Eye + 海康 CXP 双目，或 Mech-Eye + 海康智能 C（双设备组）。
+// 多相机视觉流水线：Mech-Eye + 海康 CXP 双目 + 海康智能 C（可并行），含 LB 位姿解算。
 
 #include <QtCore/QObject>
 
@@ -38,7 +38,7 @@ public:
         quint32 taskId,
         scan_tracking::mech_eye::CaptureMode mechCaptureMode);
 
-    /// @param telescopicConcurrentHikC true：伸缩杆设备组；false：机械臂设备组。两组均为梅卡完成后延迟再触发海康。
+    /// @param telescopicConcurrentHikC true：伸缩杆设备组；false：机械臂设备组。
     quint64 requestCaptureBundle(
         int segmentIndex,
         quint32 taskId,
@@ -70,6 +70,7 @@ private:
         bool hikADone = false;
         bool hikBDone = false;
         bool hikCDone = false;
+        bool useCxp = false;
         bool useHikCameraC = false;
         bool hikCTriggerOnly = false;
         quint64 mechRequestId = 0;
@@ -88,6 +89,7 @@ private:
     void completeHikCameraCCapture(const QString& imagePath);
     void onHikCameraCCaptureTimeout();
     void finishBundleIfReady();
+    void emitBundleFinished(MultiCameraCaptureBundle bundle);
 
     scan_tracking::mech_eye::MechEyeService* m_mechEyeTelescopicService = nullptr;
     scan_tracking::mech_eye::MechEyeService* m_mechEyeArmService = nullptr;
@@ -95,9 +97,11 @@ private:
     HikCxpCameraService* m_hikCameraBService = nullptr;
     HikCameraCController* m_hikCameraCController = nullptr;
     scan_tracking::common::VisionConfig m_config;
+    scan_tracking::common::LbPoseConfig m_lbPoseConfig;
     PendingCaptureContext m_pending;
     quint64 m_nextRequestId = 1;
     bool m_started = false;
+    bool m_processing = false;
     VisionPipelineState m_state = VisionPipelineState::Idle;
 };
 

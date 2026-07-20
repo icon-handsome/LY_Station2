@@ -20,6 +20,18 @@ set(SCAN_TRACKING_VISION_SOURCES
     include/scan_tracking/vision/vision_pipeline_service.h
 )
 
+if(SCAN_TRACKING_ENABLE_LB_POSE_DETECTION)
+    list(APPEND SCAN_TRACKING_VISION_SOURCES
+        src/lb_pose_detection_adapter.cpp
+        include/scan_tracking/vision/lb_pose_detection_adapter.h
+    )
+else()
+    list(APPEND SCAN_TRACKING_VISION_SOURCES
+        src/lb_pose_detection_adapter_stub.cpp
+        include/scan_tracking/vision/lb_pose_detection_adapter.h
+    )
+endif()
+
 add_library(scan_tracking_vision STATIC ${SCAN_TRACKING_VISION_SOURCES})
 
 set_target_properties(scan_tracking_vision PROPERTIES
@@ -41,6 +53,13 @@ target_link_libraries(scan_tracking_vision
     PRIVATE
         HikMvsSdk::MvCameraControl
 )
+
+if(SCAN_TRACKING_ENABLE_LB_POSE_DETECTION)
+    target_link_libraries(scan_tracking_vision
+        PRIVATE
+            LbPoseDetection::lb_pose_detection
+    )
+endif()
 
 target_compile_features(scan_tracking_vision PUBLIC cxx_std_17)
 
@@ -86,3 +105,6 @@ set_target_properties(scan_tracking_cxp_smoke PROPERTIES
 
 scan_tracking_deploy_hik_mvs_runtime(scan_tracking_cxp_smoke)
 scan_tracking_deploy_mech_eye_runtime(scan_tracking_cxp_smoke)
+if(SCAN_TRACKING_ENABLE_LB_POSE_DETECTION)
+    scan_tracking_deploy_opencv_runtime(scan_tracking_cxp_smoke)
+endif()

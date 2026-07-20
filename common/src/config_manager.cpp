@@ -216,6 +216,7 @@ const CameraConfig& ConfigManager::cameraConfig() const { return m_cameraConfig;
 const VisionConfig& ConfigManager::visionConfig() const { return m_visionConfig; }
 const FlowControlConfig& ConfigManager::flowControlConfig() const { return m_flowControlConfig; }
 const TrackingConfig& ConfigManager::trackingConfig() const { return m_trackingConfig; }
+const LbPoseConfig& ConfigManager::lbPoseConfig() const { return m_lbPoseConfig; }
 const OrbbecGeminiConfig& ConfigManager::orbbecGeminiConfig() const { return m_orbbecGeminiConfig; }
 const LivoxMid360Config& ConfigManager::livoxMid360Config() const { return m_livoxMid360Config; }
 const TfminiPlusConfig& ConfigManager::tfminiPlusConfig() const { return m_tfminiPlusConfig; }
@@ -630,6 +631,15 @@ void ConfigManager::writeDefaults(QSettings& settings)
     settings.setValue("scanSegmentTotal", 3);
     settings.endGroup();
 
+    settings.beginGroup("LbPose");
+    settings.setValue("trackConfigFile", QStringLiteral("third_party/LB/track_config.ini"));
+    settings.setValue("templateFile", QStringLiteral("third_party/LB/S2_Scanner_Template_20260717.txt"));
+    settings.setValue("dataRoot", QStringLiteral("data/LB"));
+    settings.setValue("angleToleranceDeg", 2.0);
+    settings.setValue("lengthTolerance", 0.5);
+    settings.setValue("minPercent", 0.5);
+    settings.endGroup();
+
     settings.beginGroup("OrbbecGemini");
     settings.setValue("orbbecGeminiEnabled", false);
     settings.setValue("orbbecGeminiSdkRoot", QStringLiteral("C:/Program Files/OrbbecSDK 2.8.6"));
@@ -858,6 +868,32 @@ void ConfigManager::load(const QString& filePath)
     // --- [Tracking] ---
     settings.beginGroup("Tracking");
     m_trackingConfig.scanSegmentTotal = settings.value("scanSegmentTotal", 3).toInt();
+    settings.endGroup();
+
+
+    settings.beginGroup("LbPose");
+    m_lbPoseConfig.trackConfigFile = resolveConfigRelativePath(
+        settings.value(
+                    "trackConfigFile",
+                    QStringLiteral("third_party/LB/track_config.ini"))
+            .toString(),
+        m_configFilePath);
+    m_lbPoseConfig.dataRoot = resolveConfigRelativePath(
+        settings.value("dataRoot", QStringLiteral("data/LB")).toString(),
+        m_configFilePath);
+    m_lbPoseConfig.leftPattern = settings.value("leftPattern", "").toString();
+    m_lbPoseConfig.rightPattern = settings.value("rightPattern", "").toString();
+    m_lbPoseConfig.templateFile = resolveConfigRelativePath(
+        settings.value(
+                    "templateFile",
+                    QStringLiteral("third_party/LB/S2_Scanner_Template_20260717.txt"))
+            .toString(),
+        m_configFilePath);
+    const float legacyCosTolerance = settings.value("cosTolerance", 0.015).toFloat();
+    m_lbPoseConfig.angleToleranceDeg =
+        settings.value("angleToleranceDeg", legacyCosTolerance).toFloat();
+    m_lbPoseConfig.lengthTolerance = settings.value("lengthTolerance", 0.5).toFloat();
+    m_lbPoseConfig.minPercent = settings.value("minPercent", 0.5).toFloat();
     settings.endGroup();
 
     // --- [OrbbecGemini] ---

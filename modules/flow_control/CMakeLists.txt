@@ -60,3 +60,10 @@ target_link_libraries(scan_tracking_flow_control
         scan_tracking_thickness_measure
         scan_tracking_inner_surface_measure
 )
+
+if(SCAN_TRACKING_ENABLE_LB_POSE_DETECTION)
+    target_link_libraries(scan_tracking_flow_control
+        PUBLIC
+            scan_tracking_tracking
+    )
+endif()

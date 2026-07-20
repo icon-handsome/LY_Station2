@@ -4,11 +4,13 @@ add_library(scan_tracking_mech_eye STATIC
     src/mech_eye_service.cpp
     src/mech_eye_worker.cpp
     src/point_cloud_io.cpp
+    src/point_cloud_processor.cpp
     src/mech_eye_nano_smoke_test.cpp
     include/scan_tracking/mech_eye/mech_eye_types.h
     include/scan_tracking/mech_eye/mech_eye_service.h
     include/scan_tracking/mech_eye/mech_eye_worker.h
     include/scan_tracking/mech_eye/point_cloud_io.h
+    include/scan_tracking/mech_eye/point_cloud_processor.h
 )
 
 set_target_properties(scan_tracking_mech_eye PROPERTIES
@@ -19,6 +21,7 @@ set_target_properties(scan_tracking_mech_eye PROPERTIES
 target_include_directories(scan_tracking_mech_eye
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/third_party/eigen-3.4.0
 )
 
 target_link_libraries(scan_tracking_mech_eye

@@ -4,11 +4,65 @@
 
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/mech_eye/mech_eye_service.h"
+#include "scan_tracking/mech_eye/point_cloud_processor.h"
 #include "scan_tracking/vision/vision_pipeline_service.h"
 
 namespace scan_tracking::flow_control {
 
 using namespace state_machine_internal;
+
+namespace {
+
+std::array<float, 16> identityMatrix4x4()
+{
+    return {
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f,
+    };
+}
+
+/// LB 成功时用 Rt_global 作为 T0，stereo=I（与第一工位 applySegmentPoseStitching 一致）。
+void applyLbPoseStitchingIfNeeded(vision::MultiCameraCaptureBundle* bundle)
+{
+    if (bundle == nullptr) {
+        return;
+    }
+    const auto& lb = bundle->lbPoseResult;
+    if (!lb.invoked) {
+        return;
+    }
+    if (!lb.success || !lb.poseMatrix.valid) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("LB 位姿失败，跳过点云变换：") << lb.message;
+        return;
+    }
+    if (!bundle->mechEyeResult.pointCloud.isValid()) {
+        qWarning(LOG_FLOW).noquote() << QStringLiteral("LB 成功但 Mech 点云无效，跳过变换。");
+        return;
+    }
+
+    mech_eye::PointCloudFrame stitched;
+    QString stitchMessage;
+    if (!mech_eye::transformPointCloudFrame(
+            bundle->mechEyeResult.pointCloud,
+            lb.poseMatrix.values,
+            identityMatrix4x4(),
+            &stitched,
+            &stitchMessage)) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("点云 LB 变换失败：") << stitchMessage;
+        return;
+    }
+
+    bundle->mechEyeResult.pointCloud = stitched;
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("点云已按 LB Rt_global 变换：") << stitchMessage
+        << QStringLiteral(" framePoints=") << lb.framePointCount;
+}
+
+}  // namespace
 
 void StateMachine::notifyScanStarted(int segmentIndex, quint32 taskId)
 {
@@ -54,6 +108,9 @@ void StateMachine::onBundleCaptureFinished(vision::MultiCameraCaptureBundle bund
             m_activeTask.definition->stage == protocol::Stage::TelescopicScan
                 ? common::ScanDeviceKind::Telescopic
                 : common::ScanDeviceKind::Arm;
+
+        applyLbPoseStitchingIfNeeded(&bundle);
+
         m_scanSegmentCache.storeSegment(
             device,
             bundle.request.segmentIndex,

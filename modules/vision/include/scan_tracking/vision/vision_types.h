@@ -122,6 +122,20 @@ enum class CaptureType {
     NumberRecognition = 2,
 };
 
+/// LB（机械臂扫描段）位姿检测结果，由 runLbPoseDetection 填充
+struct LbPoseResult {
+    bool invoked = false;       ///< 是否已调用 LB 算法（未调用时 success 无意义）
+    bool success = false;       ///< 算法是否成功输出有效位姿
+    QString message;            ///< 失败原因或摘要
+    int leftImageWidth = 0;
+    int leftImageHeight = 0;
+    int rightImageWidth = 0;
+    int rightImageHeight = 0;
+    int framePointCount = 0;    ///< 重建得到的标记点数量
+    PoseMatrix4x4 poseMatrix;   ///< 4×4 Rt 位姿矩阵
+    QString diagnosticText;     ///< LB 诊断明细
+};
+
 struct MultiCameraCaptureRequest {
     quint64 requestId = 0;
     quint32 taskId = 0;
@@ -144,6 +158,7 @@ struct MultiCameraCaptureBundle {
     HikPoseCaptureResult hikCameraBResult;
     QString hikCameraCImagePath;
     bool hikCameraCTriggerOk = false;
+    LbPoseResult lbPoseResult;
 
     bool hikCameraCCaptureOk() const
     {
@@ -155,33 +170,36 @@ struct MultiCameraCaptureBundle {
         return hikCameraCTriggerOk || hikCameraCCaptureOk();
     }
 
+    bool cxpParticipated() const
+    {
+        return !request.hikCameraAKey.isEmpty() || !request.hikCameraBKey.isEmpty();
+    }
+
+    bool hikCParticipated() const
+    {
+        return !request.hikCameraCIp.trimmed().isEmpty();
+    }
+
     bool allCamerasOk() const
     {
         const bool mechOk = mechEyeResult.success();
-        const bool cxpParticipated =
-            !request.hikCameraAKey.isEmpty() || !request.hikCameraBKey.isEmpty();
-        if (cxpParticipated) {
-            return mechOk && hikCameraAResult.success() && hikCameraBResult.success();
+        if (!mechOk) {
+            return false;
         }
-        if (!request.hikCameraCIp.trimmed().isEmpty()) {
-            return mechOk && hikCameraCOk();
+        if (cxpParticipated() &&
+            !(hikCameraAResult.success() && hikCameraBResult.success())) {
+            return false;
         }
-        return mechOk;
+        if (hikCParticipated() && !hikCameraCOk()) {
+            return false;
+        }
+        return true;
     }
 
-    /// 梅卡成功且（未参与海康 C 或海康 C 触发/出图成功）。
+    /// 梅卡成功，且已参与的 CXP / 海康 C 均 OK。LB 成败不计入（便于排查与原始云落盘）。
     bool success() const
     {
-        const bool mechOk = mechEyeResult.success();
-        const bool cxpParticipated =
-            !request.hikCameraAKey.isEmpty() || !request.hikCameraBKey.isEmpty();
-        if (cxpParticipated) {
-            return mechOk || hikCameraAResult.success() || hikCameraBResult.success();
-        }
-        if (!request.hikCameraCIp.trimmed().isEmpty()) {
-            return mechOk && hikCameraCOk();
-        }
-        return mechOk;
+        return allCamerasOk();
     }
 
     QString summary() const
@@ -189,30 +207,35 @@ struct MultiCameraCaptureBundle {
         const auto flag = [](bool ok) {
             return ok ? QStringLiteral("成功") : QStringLiteral("失败");
         };
-        if (!request.hikCameraCIp.trimmed().isEmpty() ||
-            hikCameraCCaptureOk() || hikCameraCTriggerOk ||
-            !hikCameraAResult.logicalName.isEmpty() ||
-            !hikCameraBResult.logicalName.isEmpty()) {
-            const QString hikPart =
-                !request.hikCameraCIp.trimmed().isEmpty()
-                    ? flag(hikCameraCOk())
-                    : QStringLiteral("%1/%2")
+        const auto lbFlag = [](const LbPoseResult& lb) {
+            if (!lb.invoked) {
+                return QStringLiteral("跳过");
+            }
+            return lb.success ? QStringLiteral("成功") : QStringLiteral("失败");
+        };
+        QString hikPart;
+        if (cxpParticipated() && hikCParticipated()) {
+            hikPart = QStringLiteral("CXP=%1/%2 C=%3")
+                          .arg(flag(hikCameraAResult.success()))
+                          .arg(flag(hikCameraBResult.success()))
+                          .arg(flag(hikCameraCOk()));
+        } else if (cxpParticipated()) {
+            hikPart = QStringLiteral("CXP=%1/%2")
                           .arg(flag(hikCameraAResult.success()))
                           .arg(flag(hikCameraBResult.success()));
-            return QStringLiteral(
-                       "组合采集 requestId=%1 taskId=%2 段号=%3 梅卡=%4 海康=%5")
-                .arg(request.requestId)
-                .arg(request.taskId)
-                .arg(request.segmentIndex)
-                .arg(flag(mechEyeResult.success()))
-                .arg(hikPart);
+        } else if (hikCParticipated()) {
+            hikPart = QStringLiteral("C=%1").arg(flag(hikCameraCOk()));
+        } else {
+            hikPart = QStringLiteral("无");
         }
         return QStringLiteral(
-                   "组合采集 requestId=%1 taskId=%2 段号=%3 梅卡=%4")
+                   "组合采集 requestId=%1 taskId=%2 段号=%3 梅卡=%4 海康=%5 LB=%6")
             .arg(request.requestId)
             .arg(request.taskId)
             .arg(request.segmentIndex)
-            .arg(flag(mechEyeResult.success()));
+            .arg(flag(mechEyeResult.success()))
+            .arg(hikPart)
+            .arg(lbFlag(lbPoseResult));
     }
 };
 

@@ -1,5 +1,7 @@
 #include "scan_tracking/vision/vision_pipeline_service.h"
 
+#include <thread>
+
 #include <QtCore/QLoggingCategory>
 #include <QtCore/QDateTime>
 #include <QtCore/QFile>
@@ -10,6 +12,7 @@
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/vision/hik_camera_c_controller.h"
 #include "scan_tracking/vision/hik_cxp_camera_service.h"
+#include "scan_tracking/vision/lb_pose_detection_adapter.h"
 
 namespace scan_tracking {
 namespace vision {
@@ -120,7 +123,11 @@ VisionPipelineService::VisionPipelineService(
 void VisionPipelineService::start(const scan_tracking::common::VisionConfig& config)
 {
     m_config = config;
+    if (const auto* cfg = scan_tracking::common::ConfigManager::instance()) {
+        m_lbPoseConfig = cfg->lbPoseConfig();
+    }
     m_pending = PendingCaptureContext{};
+    m_processing = false;
     m_started = true;
     setState(
         VisionPipelineState::Ready,
@@ -134,6 +141,7 @@ void VisionPipelineService::stop()
     }
 
     m_pending = PendingCaptureContext{};
+    m_processing = false;
     m_started = false;
     setState(VisionPipelineState::Stopped, QStringLiteral("视觉流水线已停止。"));
 }
@@ -156,7 +164,7 @@ quint64 VisionPipelineService::requestCaptureBundle(
         emit fatalError(VisionErrorCode::NotStarted, QStringLiteral("视觉流水线未启动。"));
         return 0;
     }
-    if (m_pending.active) {
+    if (m_pending.active || m_processing) {
         emit fatalError(VisionErrorCode::Busy, QStringLiteral("视觉采集请求正在进行中。"));
         return 0;
     }
@@ -175,13 +183,14 @@ quint64 VisionPipelineService::requestCaptureBundle(
         return 0;
     }
 
+    // 机械臂：可并行 CXP（LB）+ 海康 C；伸缩杆：仅海康 C。
     const bool useCxp =
         !telescopicConcurrentHikC && m_config.hikCxpEnabled &&
         m_hikCameraAService != nullptr && m_hikCameraBService != nullptr;
-    const bool useHikCameraC =
-        m_hikCameraCController != nullptr && (telescopicConcurrentHikC || !useCxp);
+    // 机械臂与伸缩杆均可使用海康 C；机械臂另可并行 CXP。
+    const bool useHikCameraC = m_hikCameraCController != nullptr;
 
-    if (!telescopicConcurrentHikC && !useHikCameraC && !useCxp) {
+    if (!useHikCameraC && !useCxp) {
         emit fatalError(
             VisionErrorCode::InvalidConfig,
             QStringLiteral("视觉服务不完整：需要 CXP 双目或海康智能 C。"));
@@ -198,7 +207,9 @@ quint64 VisionPipelineService::requestCaptureBundle(
     request.mechEyeCameraKey = deviceGroup.mechEye.cameraKey;
     request.mechEyeTimeoutMs =
         m_config.mechCaptureTimeoutMs > 0 ? m_config.mechCaptureTimeoutMs : 5000;
-    request.hikCameraCIp = deviceGroup.hikCameraC.ipAddress;
+    if (useHikCameraC) {
+        request.hikCameraCIp = deviceGroup.hikCameraC.ipAddress;
+    }
     if (useCxp) {
         request.hikCameraAKey = m_config.hikCxpCameraA.cameraKey;
         request.hikCameraBKey = m_config.hikCxpCameraB.cameraKey;
@@ -208,11 +219,20 @@ quint64 VisionPipelineService::requestCaptureBundle(
 
     PendingCaptureContext pending;
     pending.active = true;
+    pending.useCxp = useCxp;
     pending.useHikCameraC = useHikCameraC;
     pending.hikCTriggerOnly = useHikCameraC;
-    pending.hikCameraCIp = deviceGroup.hikCameraC.ipAddress.trimmed();
+    pending.hikCameraCIp = useHikCameraC ? deviceGroup.hikCameraC.ipAddress.trimmed() : QString();
     pending.activeMechService = mechService;
     pending.bundle.request = request;
+    // 未参与的通道视为已完成，避免 finishBundleIfReady 死等。
+    if (!useCxp) {
+        pending.hikADone = true;
+        pending.hikBDone = true;
+    }
+    if (!useHikCameraC) {
+        pending.hikCDone = true;
+    }
 
     pending.mechRequestId = mechService->requestCapture(
         request.mechEyeCameraKey,
@@ -225,23 +245,24 @@ quint64 VisionPipelineService::requestCaptureBundle(
 
     m_pending = pending;
 
-    if (useHikCameraC) {
-        setState(
-            VisionPipelineState::Capturing,
-            QStringLiteral("梅卡采集已启动（海康 C 将在梅卡完成后延迟 %1ms 发送 start，不等回图）")
-                .arg(kMechToHikCaptureDelayMs));
-    } else {
-        setState(
-            VisionPipelineState::Capturing,
-            QStringLiteral("梅卡采集已启动（CXP 将在梅卡完成后延迟 %1ms）")
-                .arg(kMechToHikCaptureDelayMs));
+    QStringList parts;
+    if (useCxp) {
+        parts << QStringLiteral("CXP");
     }
+    if (useHikCameraC) {
+        parts << QStringLiteral("海康C");
+    }
+    setState(
+        VisionPipelineState::Capturing,
+        QStringLiteral("梅卡采集已启动（%1 将在梅卡完成后延迟 %2ms）")
+            .arg(parts.join(QStringLiteral("+")))
+            .arg(kMechToHikCaptureDelayMs));
     return request.requestId;
 }
 
 void VisionPipelineService::startPendingHikCapture()
 {
-    if (!m_pending.active || m_pending.hikARequestId != 0) {
+    if (!m_pending.active || !m_pending.useCxp || m_pending.hikARequestId != 0) {
         return;
     }
 
@@ -380,17 +401,22 @@ void VisionPipelineService::onMechEyeCaptureFinished(scan_tracking::mech_eye::Ca
         if (self == nullptr || !self->m_pending.active) {
             return;
         }
+        // 机械臂路径：并行启动 CXP 与海康 C。
+        if (self->m_pending.useCxp) {
+            self->startPendingHikCapture();
+        }
         if (self->m_pending.useHikCameraC) {
             self->startPendingHikCameraCCapture();
-            return;
         }
-        self->startPendingHikCapture();
+        if (!self->m_pending.useCxp && !self->m_pending.useHikCameraC) {
+            self->finishBundleIfReady();
+        }
     });
 }
 
 void VisionPipelineService::onHikPoseCaptureFinished(scan_tracking::vision::HikPoseCaptureResult result)
 {
-    if (!m_pending.active || m_pending.useHikCameraC) {
+    if (!m_pending.active || !m_pending.useCxp) {
         return;
     }
 
@@ -466,29 +492,75 @@ void VisionPipelineService::setState(VisionPipelineState state, const QString& d
     emit stateChanged(state, description);
 }
 
+void VisionPipelineService::emitBundleFinished(MultiCameraCaptureBundle bundle)
+{
+    m_processing = false;
+    const bool ok = bundle.success();
+    setState(
+        ok ? VisionPipelineState::Ready : VisionPipelineState::Error,
+        ok ? QStringLiteral("视觉组合采集成功完成。")
+           : QStringLiteral("视觉组合采集完成但有错误。"));
+    qInfo(LOG_VISION_PIPELINE).noquote() << bundle.summary()
+        << QStringLiteral(" LB=") << (bundle.lbPoseResult.invoked
+            ? (bundle.lbPoseResult.success ? QStringLiteral("ok") : bundle.lbPoseResult.message)
+            : QStringLiteral("skip"));
+    emit bundleCaptureFinished(bundle);
+}
+
 void VisionPipelineService::finishBundleIfReady()
 {
     if (!m_pending.active || !m_pending.mechDone) {
         return;
     }
-
-    if (m_pending.useHikCameraC) {
-        if (!m_pending.hikCDone) {
-            return;
-        }
-    } else if (!m_pending.hikADone || !m_pending.hikBDone) {
+    if (!m_pending.hikADone || !m_pending.hikBDone || !m_pending.hikCDone) {
         return;
     }
 
-    auto completedBundle = m_pending.bundle;
+    auto bundle = m_pending.bundle;
+    const bool runLb = m_pending.useCxp;
     m_pending = PendingCaptureContext{};
 
-    const bool ok = completedBundle.success();
-    setState(
-        ok ? VisionPipelineState::Ready : VisionPipelineState::Error,
-        ok ? QStringLiteral("视觉组合采集成功完成。")
-           : QStringLiteral("视觉组合采集完成但有错误。"));
-    emit bundleCaptureFinished(completedBundle);
+    if (!runLb) {
+        bundle.lbPoseResult.invoked = false;
+        bundle.lbPoseResult.success = false;
+        bundle.lbPoseResult.message = QStringLiteral("本段未启用 CXP，跳过 LB 位姿检测。");
+        emitBundleFinished(std::move(bundle));
+        return;
+    }
+
+    const bool hikReady =
+        bundle.hikCameraAResult.success() && bundle.hikCameraBResult.success();
+    if (!hikReady) {
+        bundle.lbPoseResult.invoked = false;
+        bundle.lbPoseResult.success = false;
+        bundle.lbPoseResult.message = QStringLiteral("CXP 双目未就绪，跳过 LB 位姿检测。");
+        emitBundleFinished(std::move(bundle));
+        return;
+    }
+
+    m_processing = true;
+    setState(VisionPipelineState::Capturing, QStringLiteral("正在执行 LB 位姿检测…"));
+
+    const auto lbConfig = m_lbPoseConfig;
+    QPointer<VisionPipelineService> self(this);
+    std::thread([self, bundle, lbConfig]() mutable {
+        bundle.lbPoseResult = runLbPoseDetection(
+            bundle.hikCameraAResult.frame,
+            bundle.hikCameraBResult.frame,
+            lbConfig);
+        if (self == nullptr) {
+            return;
+        }
+        QMetaObject::invokeMethod(
+            self,
+            [self, completed = std::move(bundle)]() mutable {
+                if (self == nullptr) {
+                    return;
+                }
+                self->emitBundleFinished(std::move(completed));
+            },
+            Qt::QueuedConnection);
+    }).detach();
 }
 
 }  // namespace vision

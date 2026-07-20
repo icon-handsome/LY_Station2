@@ -1,5 +1,9 @@
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
+if(SCAN_TRACKING_ENABLE_LB_POSE_DETECTION)
+    add_subdirectory(LB)
+endif()
+
 # Large header-only SDK trees: OFF by default to keep VS Solution Explorer lean.
 option(SCAN_TRACKING_SHOW_EIGEN_IN_IDE
     "Expose third_party/eigen-3.4.0 in the IDE (INTERFACE + resource targets)"

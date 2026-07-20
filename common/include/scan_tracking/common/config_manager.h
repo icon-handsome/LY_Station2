@@ -95,6 +95,24 @@ struct TrackingConfig {
     int scanSegmentTotal = 3;  ///< 扫描段总数 fallback（无 scan_paths JSON 时使用）
 };
 
+/// LB 光学双目标记点位姿检测配置，对应 config.ini [LbPose] 节。
+struct LbPoseConfig {
+    /// LB 算法权威配置（标定、GeoHash、Recon 等），对应 third_party/LB/track_config.ini
+    QString trackConfigFile;
+    /// 可选：覆盖 track_config.ini [Paths] template_points
+    QString templateFile;
+    /// 离线/回退：数据根目录与左右图 glob（在线 CXP 采集不使用）
+    QString dataRoot;
+    QString leftPattern;
+    QString rightPattern;
+    /// LB 查询角度容差（度）
+    float angleToleranceDeg = 2.0f;
+    /// LB 查询长度容差（mm）
+    float lengthTolerance = 0.5f;
+    /// LB 最低票数占比
+    float minPercent = 0.5f;
+};
+
 /// Orbbec Gemini 深度相机配置，对应 config.ini [OrbbecGemini] 节。
 struct OrbbecGeminiConfig {
     bool enabled = false;
@@ -215,6 +233,7 @@ public:
     const VisionConfig& visionConfig() const;
     const FlowControlConfig& flowControlConfig() const;
     const TrackingConfig& trackingConfig() const;
+    const LbPoseConfig& lbPoseConfig() const;
     const OrbbecGeminiConfig& orbbecGeminiConfig() const;
     const LivoxMid360Config& livoxMid360Config() const;
     const TfminiPlusConfig& tfminiPlusConfig() const;
@@ -312,6 +331,7 @@ private:
     VisionConfig m_visionConfig;
     FlowControlConfig m_flowControlConfig;
     TrackingConfig m_trackingConfig;
+    LbPoseConfig m_lbPoseConfig;
     OrbbecGeminiConfig m_orbbecGeminiConfig;
     LivoxMid360Config m_livoxMid360Config;
     TfminiPlusConfig m_tfminiPlusConfig;

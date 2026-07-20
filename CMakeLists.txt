@@ -56,6 +56,7 @@ endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(ProjectOptions)
+include(OpenCvBundle)
 include(MechEyeSdk)
 include(OrbbecSdk)
 include(LivoxSdk2)
@@ -65,6 +66,11 @@ include(ThicknessMeasureSdk)
 include(InnerSurfaceMeasureSdk)
 include(UndercutLengthMeasureSdk)
 include(LengthVolumeMeasureSdk)
+
+option(SCAN_TRACKING_ENABLE_LB_POSE_DETECTION
+    "Build and link LB (optical stereo marker) pose detection"
+    ON
+)
 
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core Gui Network SerialPort)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Network SerialPort)
