@@ -9,9 +9,14 @@
 #include "scan_tracking/vision/vision_pipeline_service.h"
 #include "scan_tracking/vision/vision_types.h"
 
+#include <QtCore/QPointer>
+#include <QtCore/QTimer>
+
 #include <cstring>
 
 namespace scan_tracking::flow_control {
+
+using namespace state_machine_internal;
 
 int StateMachine::resolveExpectedScanSegmentCount() const
 {
@@ -136,6 +141,65 @@ void StateMachine::prepareNextScanPathAfterSuccess()
         << QStringLiteral("；PLC 可直接按新路径从段号 1 继续采集。");
 }
 
+bool StateMachine::applyPlcScanPathId(
+    const QVector<quint16>& commandBlock,
+    const QVector<quint16>& previousCommandBlock,
+    bool onlyOnChange)
+{
+    namespace regs = protocol::registers;
+    if (regs::kScanPathId < 0 || regs::kScanPathId >= commandBlock.size()) {
+        return false;
+    }
+
+    const int requested = static_cast<int>(
+        regs::plcAnalogToUInt16(commandBlock.value(regs::kScanPathId), 0));
+    // 0=未指定：沿用当前活跃路径（含 IPC 自动切路结果）。
+    if (requested <= 0) {
+        return false;
+    }
+
+    if (onlyOnChange && !previousCommandBlock.isEmpty() &&
+        regs::kScanPathId < previousCommandBlock.size()) {
+        const int previousRequested = static_cast<int>(
+            regs::plcAnalogToUInt16(previousCommandBlock.value(regs::kScanPathId), 0));
+        if (previousRequested == requested) {
+            return false;
+        }
+    }
+
+    auto* cfgMgr = common::ConfigManager::instance();
+    if (cfgMgr == nullptr) {
+        return false;
+    }
+
+    const int fromPathId = cfgMgr->activePathId();
+    if (fromPathId == requested) {
+        return false;
+    }
+
+    if (!cfgMgr->setActivePathId(requested)) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("PLC ScanPathId(40047)=") << requested
+            << QStringLiteral(" 无效，保持当前 pathId=") << fromPathId;
+        return false;
+    }
+
+    // pathId 变化：清段缓存与扫描 Done，避免旧路径段混入新路径检测。
+    resetScanSegmentCache();
+    if (isModbusConnected()) {
+        clearScanSegmentDoneRegisters();
+    }
+
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("已按 PLC ScanPathId(40047) 切换扫描路径：")
+        << fromPathId << QStringLiteral(" -> ") << requested
+        << QStringLiteral("(") << cfgMgr->activePathName() << QStringLiteral(")")
+        << QStringLiteral(" algorithm=") << cfgMgr->activePathAlgorithm()
+        << QStringLiteral(" 配额 arm=") << cfgMgr->enabledArmPointCount()
+        << QStringLiteral(" telescopic=") << cfgMgr->enabledTelescopicPointCount();
+    return true;
+}
+
 bool StateMachine::isActivePathQuotaComplete() const
 {
     const auto* cfgMgr = common::ConfigManager::instance();
@@ -192,7 +256,23 @@ void StateMachine::startCodeReadCapture()
         return;
     }
 
-    m_codeReadPending = true;
+    const bool scanStage =
+        m_activeTask.definition != nullptr &&
+        isScanCaptureStage(m_activeTask.definition->stage);
+    QString algorithm;
+    if (const auto* cfgMgr = common::ConfigManager::instance()) {
+        algorithm = cfgMgr->activePathAlgorithm();
+    }
+    const bool inspectionCodeRead =
+        m_activeTask.definition != nullptr &&
+        m_activeTask.definition->stage == protocol::Stage::Inspection &&
+        algorithm == QLatin1String("code_read");
+    // 段扫/检测上的编号：发完 start 即放行。须晚于 Ack=Running 一拍，
+    // 否则 PLC 可能抽不到 Ack=1→2 边沿，Trig 一直拉高导致整线卡死。
+    const bool fireAndForget = scanStage || inspectionCodeRead;
+
+    m_codeReadPending = !fireAndForget;
+    m_codeReadSoftPending = fireAndForget;
     m_codeReadCameraIp = cameraIp;
     setTaskProgress(30);
     publishIpcStatus();
@@ -207,44 +287,101 @@ void StateMachine::startCodeReadCapture()
         << QStringLiteral(" trigger=")
         << (m_activeTask.definition != nullptr
                 ? protocol::triggerName(*m_activeTask.definition)
-                : QStringLiteral("-"));
+                : QStringLiteral("-"))
+        << (fireAndForget ? QStringLiteral(" mode=fire_and_forget")
+                          : QStringLiteral(" mode=wait_ocr"));
 
     if (!hik->requestCapture(vision::CaptureType::NumberRecognition, cameraIp)) {
+        m_codeReadSoftPending = false;
         finishCodeRead(
             2,
             QString(),
             QStringLiteral("向海康 C 发送编号拍照失败：%1").arg(cameraIp));
+        return;
+    }
+
+    if (fireAndForget) {
+        QPointer<StateMachine> self(this);
+        QTimer::singleShot(150, this, [self]() {
+            if (self == nullptr) {
+                return;
+            }
+            // OCR 可能已先到并清掉 softPending；只要任务未收尾仍需写 Ack=Completed。
+            if (self->m_activeTask.definition == nullptr ||
+                self->m_activeTask.completionAnnounced) {
+                return;
+            }
+            self->finishCodeRead(
+                1,
+                QString(),
+                QStringLiteral("编号采集已触发（不等待 OCR；回包稍后写寄存器）"));
+        });
     }
 }
 
 void StateMachine::onHikOcrTextReceived(QString cameraIp, QString text)
 {
-    if (!m_codeReadPending) {
+    const QString code = text.trimmed();
+    if (code.isEmpty()) {
+        if (m_codeReadPending) {
+            finishCodeRead(2, QString(), QStringLiteral("OCR 回包为空。"));
+        }
         return;
     }
+
+    if (m_codeReadPending) {
+        if (!m_codeReadCameraIp.isEmpty() && cameraIp.trimmed() != m_codeReadCameraIp) {
+            return;
+        }
+        finishCodeRead(1, code, QStringLiteral("编号识别成功：%1").arg(code));
+        return;
+    }
+
+    if (m_codeReadSoftPending) {
+        applyLateCodeReadOcr(cameraIp, code);
+    }
+}
+
+void StateMachine::applyLateCodeReadOcr(const QString& cameraIp, const QString& codeValue)
+{
     if (!m_codeReadCameraIp.isEmpty() && cameraIp.trimmed() != m_codeReadCameraIp) {
         return;
     }
 
-    const QString code = text.trimmed();
-    if (code.isEmpty()) {
-        finishCodeRead(2, QString(), QStringLiteral("OCR 回包为空。"));
-        return;
-    }
+    m_codeReadSoftPending = false;
+    m_codeReadCameraIp.clear();
 
-    finishCodeRead(1, code, QStringLiteral("编号识别成功：%1").arg(code));
+    if (isModbusConnected()) {
+        writeAsciiPlaceholder(
+            protocol::registers::kCodeValueAscii,
+            protocol::registers::kCodeValueRegisterCount,
+            codeValue);
+    }
+    notifyCodeReadFinished(1, codeValue);
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("编号 OCR 迟到回包已写入寄存器 code=") << codeValue
+        << QStringLiteral(" ip=") << cameraIp;
 }
 
 void StateMachine::finishCodeRead(quint16 resultCode, const QString& codeValue, const QString& message)
 {
     if (m_activeTask.definition == nullptr || m_activeTask.completionAnnounced) {
         m_codeReadPending = false;
-        m_codeReadCameraIp.clear();
+        if (!m_codeReadSoftPending) {
+            m_codeReadCameraIp.clear();
+        }
         return;
     }
 
+    const bool scanStage = isScanCaptureStage(m_activeTask.definition->stage);
+    // fire-and-forget 成功收尾后保留 softPending，供迟到 OCR 写寄存器。
+    const bool keepSoftPending = resultCode == 1 && m_codeReadSoftPending;
+
     m_codeReadPending = false;
-    m_codeReadCameraIp.clear();
+    if (!keepSoftPending) {
+        m_codeReadSoftPending = false;
+        m_codeReadCameraIp.clear();
+    }
 
     const QString effectiveMessage = message.isEmpty()
         ? (resultCode == 1
@@ -252,11 +389,71 @@ void StateMachine::finishCodeRead(quint16 resultCode, const QString& codeValue, 
                : QStringLiteral("编号识别失败"))
         : message;
 
-    if (isModbusConnected()) {
+    if (isModbusConnected() && !codeValue.isEmpty()) {
         writeAsciiPlaceholder(
             protocol::registers::kCodeValueAscii,
             protocol::registers::kCodeValueRegisterCount,
             resultCode == 1 ? codeValue : QString());
+    }
+
+    // Trig_ScanSegment / Trig_TelescopicScan 兼跑编号：回写段扫寄存器，并占位齐套缓存。
+    if (scanStage) {
+        const QString triggerLabel = protocol::triggerName(*m_activeTask.definition);
+        const bool ok = resultCode == 1;
+        bool shouldAdvancePath = false;
+        if (ok) {
+            const auto device =
+                m_activeTask.definition->stage == protocol::Stage::TelescopicScan
+                    ? common::ScanDeviceKind::Telescopic
+                    : common::ScanDeviceKind::Arm;
+            vision::MultiCameraCaptureBundle placeholder;
+            placeholder.request.segmentIndex = m_activeTask.scanSegmentIndex;
+            placeholder.request.taskId = m_activeTask.taskId;
+            m_scanSegmentCache.storeSegment(
+                device,
+                m_activeTask.scanSegmentIndex,
+                m_activeTask.taskId,
+                placeholder);
+
+            const auto* configMgr = common::ConfigManager::instance();
+            const int armExpected =
+                configMgr != nullptr ? configMgr->enabledArmPointCount() : 0;
+            const int telescopicExpected =
+                configMgr != nullptr ? configMgr->enabledTelescopicPointCount() : 0;
+            shouldAdvancePath =
+                m_scanSegmentCache.meetsDeviceQuotas(armExpected, telescopicExpected);
+            if (shouldAdvancePath) {
+                qInfo(LOG_FLOW).noquote()
+                    << QStringLiteral("pathId=")
+                    << (configMgr != nullptr ? configMgr->activePathId() : 0)
+                    << QStringLiteral(" 编号段扫齐套（Done/Ack/Res 保持至 PLC 拉低 Trig）。");
+            }
+        }
+
+        notifyCodeReadFinished(resultCode, codeValue);
+        // PLC 常同时看 DoneIndex + ImageCount/CloudFrameCount；cloud=0 可能被当成无有效应答。
+        completeScanSegmentCapture(
+            ok ? 1 : 7,
+            ok ? 1 : 0,
+            ok ? 1 : 0,
+            ok ? protocol::AckState::Completed : protocol::AckState::Failed,
+            ok);
+
+        qInfo(LOG_FLOW).noquote()
+            << triggerLabel << QStringLiteral("（编号）：已完成 Res=") << (ok ? 1 : 7)
+            << QStringLiteral(" code=") << codeValue
+            << QStringLiteral(" message=") << effectiveMessage
+            << (keepSoftPending ? QStringLiteral(" softOcr=1") : QString());
+
+        // 勿在此处立刻 prepareNextScanPath：会清掉 DoneIndex，PLC 来不及读到扫描应答。
+        // 等 Trig 拉低 finalize 后再切路径。
+        if (shouldAdvancePath) {
+            m_advancePathAfterTriggerRelease = true;
+            qInfo(LOG_FLOW).noquote()
+                << QStringLiteral("编号段扫齐套：保留 Done/Ack/Res 供 PLC 读取，"
+                                  "待 Trig 释放后再自动切下一路。");
+        }
+        return;
     }
 
     // Trig_Inspection + algorithm=code_read：走 Inspection 结果通道，便于 HMI 统一展示

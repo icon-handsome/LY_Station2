@@ -1,6 +1,6 @@
 {
-  "version": "1.5",
-  "lastModified": "2026-07-20",
+  "version": "1.6",
+  "lastModified": "2026-07-21",
   "activePathId": 1,
   "scanPaths": [
     {
@@ -37,13 +37,13 @@
       "enabled": true,
       "name": "thickness_inner_surface",
       "algorithm": "thickness_inner_surface",
-      "description": "厚度+内表面：AO47×12；启用臂 3D+CXP，不启用智能相机与伸缩杆",
+      "description": "厚度+内表面：AO47×13；启用臂 3D+CXP，不启用智能相机与伸缩杆",
       "capture": {
         "arm": { "mechEye3d": true, "hikSmartC": false, "hikCxp": true },
         "telescopic": { "mechEye3d": false, "hikSmartC": false }
       },
       "devices": [
-        { "device": "arm", "totalPoints": 12 }
+        { "device": "arm", "totalPoints": 13 }
       ],
       "points": [
         { "pointIndex": 1, "purpose": "thickness_inner", "needRotation": false },
@@ -57,7 +57,8 @@
         { "pointIndex": 9, "purpose": "inner_surface", "needRotation": false },
         { "pointIndex": 10, "purpose": "inner_surface", "needRotation": false },
         { "pointIndex": 11, "purpose": "inner_surface", "needRotation": false },
-        { "pointIndex": 12, "purpose": "inner_surface", "needRotation": false }
+        { "pointIndex": 12, "purpose": "inner_surface", "needRotation": false },
+        { "pointIndex": 13, "purpose": "inner_surface", "needRotation": false }
       ]
     },
     {

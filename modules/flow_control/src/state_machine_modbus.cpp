@@ -114,6 +114,8 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
             << "Trig_ScanSegment=" << values.value(regs::modbusIndexFromPlcAddress(40023))
             << "Trig_TelescopicScan=" << values.value(regs::kTrigTelescopicScan)
             << "Trig_Inspection=" << values.value(regs::modbusIndexFromPlcAddress(40024))
+            << "ScanPathId="
+            << regs::plcAnalogToUInt16(values.value(regs::kScanPathId), 0)
             << "TaskIdHigh=" << values.value(regs::kTaskIdHigh)
             << "TaskIdLow=" << values.value(regs::kTaskIdLow);
     }
@@ -131,7 +133,7 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
             "RobotTcpZ_w1", "RobotTcpRx_w0", "RobotTcpRx_w1", "RobotTcpRy_w0", "RobotTcpRy_w1",
             "RobotTcpRz_w0", "RobotTcpRz_w1",
             "TelescopicRodStatus", "RollerSetFreqHz", "RollerRunFreqHz", "ElectromagnetStatus",
-            "EstopButtonStatus", "Trig_TelescopicScan", "Reserved_CmdExt_47", "Reserved_CmdExt_48",
+            "EstopButtonStatus", "Trig_TelescopicScan", "ScanPathId", "Reserved_CmdExt_48",
             "Reserved_CmdExt_49", "Reserved_CmdExt_50",
         };
         constexpr int kNameCount = sizeof(kRegisterNames) / sizeof(kRegisterNames[0]);
@@ -160,11 +162,30 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
 
     if (m_activeTask.definition != nullptr && m_activeTask.completionAnnounced) {
         finalizeCompletedTaskIfTriggerReleased(values);
+
+        // 完成时 Trig 已是 0，但中间无 PLC 写事件；本次又看到同触发 0→1，
+        // 视为「已释放 + 新触发」，先收尾旧任务再往下接受。
+        if (m_activeTask.definition != nullptr && m_activeTask.completionAnnounced) {
+            const int trigOffset = m_activeTask.definition->trigOffset;
+            if (trigOffset >= 0 &&
+                trigOffset < previousCommandBlock.size() &&
+                trigOffset < values.size() &&
+                previousCommandBlock.value(trigOffset) == 0 &&
+                values.value(trigOffset) == 1) {
+                qInfo(LOG_FLOW).noquote()
+                    << QStringLiteral("任务已完成且 Trig 重新置位，强制释放旧任务：")
+                    << protocol::triggerName(*m_activeTask.definition);
+                finalizeCompletedTaskIfTriggerReleased(values, true);
+            }
+        }
     }
 
     if (m_activeTask.definition != nullptr) {
         return;
     }
+
+    // 空闲时：仅在 40047 相对上次轮询变化时切路，避免覆盖 IPC 自动切路结果。
+    applyPlcScanPathId(values, previousCommandBlock, true);
 
     if (const protocol::TriggerDefinition* pendingTrigger = selectPendingTrigger(values)) {
         processTrigger(*pendingTrigger, values);
@@ -197,6 +218,9 @@ void StateMachine::processTrigger(const protocol::TriggerDefinition& trigger, co
     if (!m_modbus || !m_modbus->isConnected()) {
         return;
     }
+
+    // Trig 前以 PLC ScanPathId 为准（同一次轮询写 path 再置 Trig 也能生效）。
+    applyPlcScanPathId(commandBlock);
 
     if (const auto* configMgr = common::ConfigManager::instance()) {
         const auto& profile = configMgr->stationProfile();
@@ -380,6 +404,11 @@ void StateMachine::onProcessTimeout()
     m_activeTask.captureRequestId = 0;
 
     if (isScanCaptureStage(m_activeTask.definition->stage)) {
+        // 段扫兼跑编号时，超时需清 OCR 等待态，避免迟到回包误收尾。
+        m_codeReadPending = false;
+        m_codeReadSoftPending = false;
+        m_codeReadCameraIp.clear();
+        m_advancePathAfterTriggerRelease = false;
         completeScanSegmentCapture(6, 0, 0, protocol::AckState::Failed, false);
         return;
     }
@@ -447,22 +476,30 @@ bool StateMachine::completeActiveTask(
         << QStringLiteral("触发已完成") << protocol::triggerName(*m_activeTask.definition)
         << QStringLiteral(" Res=") << resultCode
         << QStringLiteral(" Ack=") << static_cast<int>(finalAckState);
+
+    // PLC 常在采集完成前就把 Trig 拉低；若等下次写寄存器才 finalize，
+    // 下次再置 1 时会因「Trig≠0」无法释放，后续触发全部被忽略。
+    finalizeCompletedTaskIfTriggerReleased(m_lastCommandBlock);
     return true;
 }
 
-void StateMachine::finalizeCompletedTaskIfTriggerReleased(const QVector<quint16>& commandBlock)
+void StateMachine::finalizeCompletedTaskIfTriggerReleased(
+    const QVector<quint16>& commandBlock,
+    bool force)
 {
     if (m_activeTask.definition == nullptr || !m_activeTask.completionAnnounced) {
         return;
     }
 
     const int trigOffset = m_activeTask.definition->trigOffset;
-    if (trigOffset >= commandBlock.size() || commandBlock[trigOffset] != 0) {
+    if (!force && (trigOffset >= commandBlock.size() || commandBlock[trigOffset] != 0)) {
         return;
     }
 
-    qInfo(LOG_FLOW).noquote() << QStringLiteral("PLC 已释放触发：")
-                              << protocol::triggerName(*m_activeTask.definition);
+    qInfo(LOG_FLOW).noquote()
+        << (force ? QStringLiteral("强制释放已完成触发：")
+                  : QStringLiteral("PLC 已释放触发："))
+        << protocol::triggerName(*m_activeTask.definition);
 
     const protocol::TriggerDefinition& definition = *m_activeTask.definition;
     if (definition.stage == protocol::Stage::ScanSegment) {
@@ -491,6 +528,13 @@ void StateMachine::finalizeCompletedTaskIfTriggerReleased(const QVector<quint16>
     m_progress = 0;
     setState(AppState::Ready);
     publishIpcStatus();
+
+    if (m_advancePathAfterTriggerRelease) {
+        m_advancePathAfterTriggerRelease = false;
+        qInfo(LOG_FLOW).noquote()
+            << QStringLiteral("Trig 已释放，执行编号段扫后的自动切路径。");
+        prepareNextScanPathAfterSuccess();
+    }
 }
 
 const protocol::TriggerDefinition* StateMachine::selectPendingTrigger(

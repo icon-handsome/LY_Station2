@@ -245,13 +245,13 @@ bool persistScanSegmentBundle(
     }
 
     if (bundle.mechEyeResult.success()) {
-        const QString pngPath = scan_tracking::mech_eye::buildSegmentMech2DPngPath(
+        const QString pngPath = scan_tracking::mech_eye::buildSegmentMechTexturePngPath(
             runRoot, diskIndex, taskId, timestamp);
         if (pngPath.isEmpty() ||
             !bundle.mechEyeResult.texture2D.isValid() ||
             !scan_tracking::mech_eye::saveGrayTextureFrameToPng(
                 bundle.mechEyeResult.texture2D, pngPath)) {
-            recordFailure(QStringLiteral("%1 段 %2 Mech-Eye 2D 落盘失败")
+            recordFailure(QStringLiteral("%1 段 %2 Mech-Eye 纹理落盘失败")
                               .arg(deviceLabel)
                               .arg(segmentIndex));
         }

@@ -184,9 +184,9 @@ inline quint16 plcAnalogToUInt16(quint16 word0, quint16 word1 = 0)
 // ==================== 寄存器区块定义 ====================
 
 constexpr int kCommandBlockStart = 0;    ///< 命令区起始地址：PLC→IPC的控制指令区域（0 基偏移）
-constexpr int kCommandBlockSize = 51;    ///< 命令区大小：40000~40050（modbusIndex 0~50）
+constexpr int kCommandBlockSize = 51;    ///< 命令区大小：40001~40051（modbusIndex 0~50）
 constexpr int kResultBlockStart = 101;   ///< 结果区起始：40101（modbusIndex=101）
-constexpr int kResultBlockSize = 84;     ///< 结果区大小：共84个寄存器
+constexpr int kResultBlockSize = 85;     ///< 结果区大小：40101~40185（含 ScanPathIdEcho）
 
 // ==================== 命令区寄存器（PLC → IPC）====================
 
@@ -235,8 +235,11 @@ constexpr int kRollerRunFreqHz = modbusIndexFromPlcAddress(40043);
 constexpr int kElectromagnetStatus = modbusIndexFromPlcAddress(40044);
 constexpr int kEstopButtonStatus = modbusIndexFromPlcAddress(40045);
 
-// --- 命令区扩展（v0.3+：伸缩杆触发迁至 40046，原 40019 为预留）---
+// --- 命令区扩展（v0.3+：伸缩杆触发；v0.3.1：扫描路径号）---
 constexpr int kTrigTelescopicScan = modbusIndexFromPlcAddress(40046);
+/// 当前扫描路径号（PLC→IPC，**PLC 必写**）。对应 scan_paths.json 的 pathId，从 1 开始；
+/// 0=未指定（IPC 沿用当前活跃路径）。须在相关 Trig 置 1 前写好。
+constexpr int kScanPathId = modbusIndexFromPlcAddress(40047);
 
 /// 六轴位姿（x/y/z + rx/ry/rz）
 struct Pose6f {
@@ -334,6 +337,9 @@ constexpr int kResTelescopicScan = modbusIndexFromPlcAddress(40181);
 constexpr int kTelescopicScanDoneIndex = modbusIndexFromPlcAddress(40182);
 constexpr int kTelescopicImageCount = modbusIndexFromPlcAddress(40183);
 constexpr int kTelescopicCloudFrameCount = modbusIndexFromPlcAddress(40184);
+
+/// IPC 当前生效扫描路径号回显（可选；供 HMI/调试，**PLC 无需读取**）。
+constexpr int kScanPathIdEcho = modbusIndexFromPlcAddress(40185);
 
 // --- 综合检测（Inspection）---
 constexpr int kAckInspection = modbusIndexFromPlcAddress(40140);

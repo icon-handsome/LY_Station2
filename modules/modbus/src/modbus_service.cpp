@@ -20,12 +20,12 @@ Q_LOGGING_CATEGORY(LOG_MODBUS, "modbus")
 namespace {
 /// 寄存器总大小：覆盖 40001-40200（offset 0-199），足够容纳命令区+结果区+预留
 constexpr int kTotalRegisterCount = 200;
-/// 命令区（PLC 写入）：offset 0-50，覆盖 PLC 40000~40050
+/// 命令区（PLC 写入）：offset 0-50，覆盖 PLC 40001~40051
 constexpr int kCommandBlockStart = 0;
 constexpr int kCommandBlockSize = 51;
-/// 结果区（IPC 写入，PLC 读取）：offset 100-183
+/// 结果区（IPC 写入，PLC 读取）：offset 101-185（40101~40185，含 ScanPathIdEcho）
 constexpr int kResultBlockStart = 101;  // 40101，与 plc_protocol 一致（40000+下标）
-constexpr int kResultBlockSize = 84;
+constexpr int kResultBlockSize = 85;
 }
 
 ModbusService::ModbusService(QObject* parent)

@@ -47,13 +47,13 @@ QString captureCacheMech3DDir(const QString& root)
     return ensureDirectoryExists(QDir(resolved).absoluteFilePath(QStringLiteral("mech_3d")));
 }
 
-QString captureCacheMech2DDir(const QString& root)
+QString captureCacheMechTextureDir(const QString& root)
 {
     const QString resolved = ensureDirectoryExists(resolveCaptureCacheRoot(root));
     if (resolved.isEmpty()) {
         return QString();
     }
-    return ensureDirectoryExists(QDir(resolved).absoluteFilePath(QStringLiteral("mech_2d")));
+    return ensureDirectoryExists(QDir(resolved).absoluteFilePath(QStringLiteral("mech_texture")));
 }
 
 QString captureCacheHikMonoDir(const QString& root)

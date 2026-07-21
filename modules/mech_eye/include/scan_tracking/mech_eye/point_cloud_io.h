@@ -27,8 +27,8 @@ bool loadPointCloudFrameFromPly(const QString& absolutePath, PointCloudFrame* ou
 /// 释放 PointCloudFrame 中的大数组，保留 pointCount/width/height 等元数据
 void releasePointCloudFrameBuffers(PointCloudFrame* frame);
 
-/// 生成分段 Mech 2D PNG 绝对路径（mech_2d 子目录）
-QString buildSegmentMech2DPngPath(
+/// 生成分段 Mech 纹理 PNG 绝对路径（mech_texture 子目录）
+QString buildSegmentMechTexturePngPath(
     const QString& configuredRoot,
     int segmentIndex,
     quint32 taskId,

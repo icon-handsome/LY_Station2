@@ -300,15 +300,15 @@ void releasePointCloudFrameBuffers(PointCloudFrame* frame)
     frame->normalsXYZ.reset();
 }
 
-QString buildSegmentMech2DPngPath(
+QString buildSegmentMechTexturePngPath(
     const QString& configuredRoot,
     int segmentIndex,
     quint32 taskId,
     const QString& timestamp)
 {
-    const QString baseDir = scan_tracking::common::captureCacheMech2DDir(configuredRoot);
+    const QString baseDir = scan_tracking::common::captureCacheMechTextureDir(configuredRoot);
     if (baseDir.isEmpty()) {
-        qWarning(LOG_POINT_CLOUD_IO).noquote() << "无法创建 mech_2d 缓存目录";
+        qWarning(LOG_POINT_CLOUD_IO).noquote() << "无法创建 mech_texture 缓存目录";
         return QString();
     }
 
@@ -344,7 +344,7 @@ bool saveGrayTextureFrameToPng(const GrayTextureFrame& frame, const QString& abs
     }
 
     qInfo(LOG_POINT_CLOUD_IO).noquote()
-        << QStringLiteral("Mech 2D PNG 已保存：") << absolutePath << frame.width << QStringLiteral("x") << frame.height;
+        << QStringLiteral("Mech 纹理 PNG 已保存：") << absolutePath << frame.width << QStringLiteral("x") << frame.height;
     return true;
 }
 

@@ -16,7 +16,8 @@ QString formatPlcRegisterValueForLog(int modbusIndex, quint16 rawValue)
 {
     namespace regs = protocol::registers;
     if (modbusIndex == regs::kArmScanSegmentIndex ||
-        modbusIndex == regs::kTelescopicScanSegmentIndex) {
+        modbusIndex == regs::kTelescopicScanSegmentIndex ||
+        modbusIndex == regs::kScanPathId) {
         const quint16 decoded = regs::plcAnalogToUInt16(rawValue, 0);
         if (rawValue != decoded) {
             return QStringLiteral("%1 (原始PLC字=%2)").arg(decoded).arg(rawValue);

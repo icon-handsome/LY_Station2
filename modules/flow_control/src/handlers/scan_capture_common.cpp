@@ -17,14 +17,6 @@ void executeConfiguredScanCapture(TaskHandlerContext& ctx, const char* triggerLa
     // PLC 不发 ResultReset/也可能不发 Inspection：上一路径齐套后再次下发段号 1，视为开下一路。
     ctx.host.maybeAdvancePathOnNewCycleStart(localIndex);
 
-    auto* vision = ctx.host.visionPipelineService();
-    if (vision == nullptr || !vision->isStarted()) {
-        qWarning(LOG_FLOW).noquote()
-            << QString::fromUtf8(triggerLabel) << QStringLiteral("：视觉流水线不可用。");
-        ctx.host.completeScanSegmentCapture(7, 0, 0, protocol::AckState::Failed, false);
-        return;
-    }
-
     const bool isTelescopicScanTrigger =
         std::strcmp(triggerLabel, "Trig_TelescopicScan") == 0;
     const auto device = isTelescopicScanTrigger
@@ -59,6 +51,36 @@ void executeConfiguredScanCapture(TaskHandlerContext& ctx, const char* triggerLa
     const common::PathDeviceCaptureConfig captureCfg =
         configMgr != nullptr ? configMgr->activeDeviceCapture(device)
                              : common::PathDeviceCaptureConfig{};
+    const QString algorithm =
+        configMgr != nullptr ? configMgr->activePathAlgorithm() : QString();
+
+    // PLC 不便改触发时：编号路径仍可能发 Trig_ScanSegment。
+    // 无梅卡、仅智能相机的路径改走专用 OCR，回写仍用段扫 Ack/Res。
+    const bool redirectToCodeRead =
+        algorithm == QLatin1String("code_read") ||
+        (!captureCfg.mechEye3d && captureCfg.hikSmartC && !captureCfg.hikCxp);
+    if (redirectToCodeRead) {
+        const int pathId = configMgr != nullptr ? configMgr->activePathId() : 0;
+        qInfo(LOG_FLOW).noquote()
+            << QString::fromUtf8(triggerLabel)
+            << QStringLiteral("：pathId=") << pathId
+            << QStringLiteral(" algorithm=") << algorithm
+            << QStringLiteral(" 无梅卡段扫，改走编号专用采集（海康 C OCR）。");
+        ctx.host.setTaskProgress(20);
+        ctx.host.publishIpcStatus();
+        ctx.host.notifyScanStarted(localIndex, taskId);
+        ctx.host.startCodeReadCapture();
+        return;
+    }
+
+    auto* vision = ctx.host.visionPipelineService();
+    if (vision == nullptr || !vision->isStarted()) {
+        qWarning(LOG_FLOW).noquote()
+            << QString::fromUtf8(triggerLabel) << QStringLiteral("：视觉流水线不可用。");
+        ctx.host.completeScanSegmentCapture(7, 0, 0, protocol::AckState::Failed, false);
+        return;
+    }
+
     if (!captureCfg.mechEye3d && !captureCfg.hikSmartC &&
         !(device == common::ScanDeviceKind::Arm && captureCfg.hikCxp)) {
         qWarning(LOG_FLOW).noquote()

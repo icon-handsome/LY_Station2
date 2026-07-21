@@ -185,7 +185,8 @@ private:
     void sendRes(const protocol::TriggerDefinition& definition, quint16 resultCode);
     void resetPlcOutputRegisters();
     void publishHeartbeat();
-    void finalizeCompletedTaskIfTriggerReleased(const QVector<quint16>& commandBlock);
+    /// @param force 为 true 时即使当前 Trig 仍为 1 也收尾（用于完成期间 Trig 已拉低后又重新置位）
+    void finalizeCompletedTaskIfTriggerReleased(const QVector<quint16>& commandBlock, bool force = false);
     void clearActiveTask();
 
     const protocol::TriggerDefinition* selectPendingTrigger(const QVector<quint16>& commandBlock) const;
@@ -203,11 +204,19 @@ private:
 
     bool isActiveCodeReadTrigger() const;
     void finishCodeRead(quint16 resultCode, const QString& codeValue, const QString& message = QString());
+    /// 段扫兼编号已收尾后，迟到的 OCR 只写编号寄存器，不再动 Ack/Res。
+    void applyLateCodeReadOcr(const QString& cameraIp, const QString& codeValue);
     void finishSelfCheckCapture(const vision::MultiCameraCaptureBundle& bundle);
     /// 当前路径检测成功后：清空段缓存/扫描完成寄存器，并自动切到下一条启用路径（不依赖 PLC ResultReset）。
     void prepareNextScanPathAfterSuccess();
     /// 当前活跃路径的臂+伸缩杆缓存是否已齐套。
     bool isActivePathQuotaComplete() const;
+    /// 读取 PLC ScanPathId(40047) 并热切换活跃路径；0=未指定则忽略。
+    /// @param onlyOnChange 为 true 时仅在相对 previousCommandBlock 发生变化时切换（避免覆盖 IPC 自动切路）。
+    /// @return 是否实际切换成功
+    bool applyPlcScanPathId(const QVector<quint16>& commandBlock,
+                            const QVector<quint16>& previousCommandBlock = {},
+                            bool onlyOnChange = false);
 
     quint32 readTaskId(const QVector<quint16>& commandBlock) const;
     quint16 resolveScanSegmentIndex(const QVector<quint16>& commandBlock,
@@ -227,6 +236,10 @@ private:
     protocol::Stage m_currentStage = protocol::Stage::Idle;
     ActiveTaskState m_activeTask;
     bool m_codeReadPending = false;
+    /// 段扫触发编号后已 Ack，仍接受迟到 OCR 写寄存器。
+    bool m_codeReadSoftPending = false;
+    /// 编号段扫齐套后，等 PLC 拉低 Trig 再切下一路（避免过早清 Done 导致 PLC 认为无应答）。
+    bool m_advancePathAfterTriggerRelease = false;
     QString m_codeReadCameraIp;
     quint16 m_heartbeatCounter = 0;
     quint16 m_alarmLevel = 0;

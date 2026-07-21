@@ -16,8 +16,8 @@ QString ensureDirectoryExists(const QString& directoryPath);
 /// Mech-Eye 3D 点云：<root>/mech_3d
 QString captureCacheMech3DDir(const QString& root);
 
-/// Mech-Eye 2D 灰度图：<root>/mech_2d
-QString captureCacheMech2DDir(const QString& root);
+/// Mech-Eye 深度纹理灰度图（非独立 2D 相机）：<root>/mech_texture
+QString captureCacheMechTextureDir(const QString& root);
 
 /// 海康 Mono 根目录：<root>/hik_mono
 QString captureCacheHikMonoDir(const QString& root);
