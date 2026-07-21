@@ -2,7 +2,6 @@
 
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QObject>
-#include <QtCore/QSet>
 #include <QtCore/QTimer>
 #include <QtCore/QVector>
 #include <QtCore/QtGlobal>
@@ -247,8 +246,6 @@ private:
     bool m_advancePathAfterTriggerRelease = false;
     /// 强制收尾后，该 Trig 必须先回到 0 才允许再次接受（防止 Trig 一直为 1 时重复触发）。
     int m_blockTrigUntilIdleOffset = -1;
-    /// 忙碌时错过的 0→1 上升沿；空闲后若 Trig 仍为 1 则补接受（臂/伸缩杆并行常见）。
-    QSet<int> m_latchedTrigRisingOffsets;
     QString m_codeReadCameraIp;
     quint16 m_heartbeatCounter = 0;
     quint16 m_alarmLevel = 0;

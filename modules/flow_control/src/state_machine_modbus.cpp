@@ -9,6 +9,13 @@ namespace scan_tracking::flow_control {
 
 using namespace state_machine_internal;
 
+namespace {
+
+/// 忙碌期间锁存的 Trig 上升沿（bit=trigOffset）。放文件静态，避免改 StateMachine 布局。
+quint64 g_latchedTrigRisingMask = 0;
+
+}  // namespace
+
 void StateMachine::onModbusConnected()
 {
     if (m_stopped.load(std::memory_order_acquire)) {
@@ -27,7 +34,7 @@ void StateMachine::onModbusConnected()
     // 重连后丢弃旧命令块，首帧只建快照；避免把 PLC 仍拉高的 Trig 当成新触发。
     m_lastCommandBlock.clear();
     m_blockTrigUntilIdleOffset = -1;
-    m_latchedTrigRisingOffsets.clear();
+    g_latchedTrigRisingMask = 0;
     m_advancePathAfterTriggerRelease = false;
     m_codeReadPending = false;
     m_codeReadSoftPending = false;
@@ -193,16 +200,18 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
     if (!previousCommandBlock.isEmpty()) {
         for (const auto& trigger : protocol::triggerDefinitions()) {
             if (trigger.trigOffset < 0 ||
+                trigger.trigOffset >= 64 ||
                 trigger.trigOffset >= values.size() ||
                 trigger.trigOffset >= previousCommandBlock.size()) {
                 continue;
             }
             const quint16 prev = previousCommandBlock.value(trigger.trigOffset);
             const quint16 curr = values.value(trigger.trigOffset);
+            const quint64 bit = 1ull << static_cast<unsigned>(trigger.trigOffset);
             if (curr == 0) {
-                m_latchedTrigRisingOffsets.remove(trigger.trigOffset);
+                g_latchedTrigRisingMask &= ~bit;
             } else if (prev == 0 && curr == 1) {
-                m_latchedTrigRisingOffsets.insert(trigger.trigOffset);
+                g_latchedTrigRisingMask |= bit;
             }
         }
     }
@@ -242,7 +251,9 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
 
     if (const protocol::TriggerDefinition* pendingTrigger =
             selectPendingTrigger(values, previousCommandBlock)) {
-        m_latchedTrigRisingOffsets.remove(pendingTrigger->trigOffset);
+        if (pendingTrigger->trigOffset >= 0 && pendingTrigger->trigOffset < 64) {
+            g_latchedTrigRisingMask &= ~(1ull << static_cast<unsigned>(pendingTrigger->trigOffset));
+        }
         processTrigger(*pendingTrigger, values);
     }
 }
@@ -620,7 +631,8 @@ const protocol::TriggerDefinition* StateMachine::selectPendingTrigger(
         const bool risingEdge =
             previousCommandBlock.value(trigger.trigOffset) == 0;
         const bool latchedWhileBusy =
-            m_latchedTrigRisingOffsets.contains(trigger.trigOffset);
+            trigger.trigOffset >= 0 && trigger.trigOffset < 64 &&
+            (g_latchedTrigRisingMask & (1ull << static_cast<unsigned>(trigger.trigOffset))) != 0;
         // 本拍 0→1，或忙碌期间已锁存且空闲后 Trig 仍保持为 1。
         if (!risingEdge && !latchedWhileBusy) {
             continue;
