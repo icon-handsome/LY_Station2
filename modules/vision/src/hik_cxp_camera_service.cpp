@@ -115,6 +115,9 @@ void logDiscoveredCxpDevices(const MV_CC_DEVICE_INFO_LIST& deviceList)
     }
 }
 
+/// 与工位一对齐：A/B 并行枚举不安全，全局串行化 SDK 调用。
+QMutex g_cxpSdkMutex;
+
 }  // namespace
 
 class HikCxpCameraService::Impl {
@@ -497,6 +500,10 @@ bool HikCxpCameraService::ensureConnected(const QString& preferredCameraKey, QSt
 
 bool HikCxpCameraService::openMatchedDevice(const QString& preferredCameraKey, QString* errorMessage)
 {
+    // 与工位一相同：EnumDevices(MV_GENTL_CXP_DEVICE) → CreateHandle → OpenDevice。
+    // 依赖 GENICAM_GENTL64_PATH 指向含 MvFGProducerCXP.cti 的目录（ensureHikGenTlEnvironment）。
+    QMutexLocker sdkLocker(&g_cxpSdkMutex);
+
     if (m_impl == nullptr || !m_impl->sdkReady) {
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("MVS SDK 尚未初始化。");
@@ -504,14 +511,32 @@ bool HikCxpCameraService::openMatchedDevice(const QString& preferredCameraKey, Q
         return false;
     }
 
-    closeDevice();
+    if (m_impl->handle != nullptr) {
+        MV_CC_StopGrabbing(m_impl->handle);
+        MV_CC_CloseDevice(m_impl->handle);
+        MV_CC_DestroyHandle(m_impl->handle);
+        m_impl->handle = nullptr;
+        m_impl->connected = false;
+        m_impl->grabbing = false;
+    }
 
     MV_CC_DEVICE_INFO_LIST deviceList{};
     const int enumResult = MV_CC_EnumDevices(MV_GENTL_CXP_DEVICE, &deviceList);
     if (enumResult != MV_OK) {
         if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral("枚举 CXP 相机失败，错误码=0x%1")
-                                .arg(static_cast<quint32>(enumResult), 8, 16, QLatin1Char('0'));
+            const quint32 code = static_cast<quint32>(enumResult);
+            QString hint;
+            if (code == 0x800000FFu) {
+                const QByteArray gentl = qgetenv("GENICAM_GENTL64_PATH");
+                hint = QStringLiteral(
+                    "（MV_E_UNKNOW：GenTL/CXP 枚举失败。GENICAM_GENTL64_PATH=%1；"
+                    "请确认存在 MvFGProducerCXP.cti，并与工位一一样用 start.bat 启动）")
+                           .arg(gentl.isEmpty() ? QStringLiteral("<空>")
+                                                : QString::fromLocal8Bit(gentl));
+            }
+            *errorMessage = QStringLiteral("枚举 CXP 相机失败，错误码=0x%1%2")
+                                .arg(code, 8, 16, QLatin1Char('0'))
+                                .arg(hint);
         }
         return false;
     }
@@ -632,6 +657,7 @@ void HikCxpCameraService::closeDevice()
     if (m_impl == nullptr) {
         return;
     }
+    QMutexLocker sdkLocker(&g_cxpSdkMutex);
     QMutexLocker locker(&m_impl->mutex);
     if (m_impl->handle != nullptr) {
         MV_CC_StopGrabbing(m_impl->handle);

@@ -24,6 +24,15 @@ void StateMachine::onModbusConnected()
         clearActiveTask();
     }
 
+    // 重连后丢弃旧命令块，首帧只建快照；避免把 PLC 仍拉高的 Trig 当成新触发。
+    m_lastCommandBlock.clear();
+    m_blockTrigUntilIdleOffset = -1;
+    m_latchedTrigRisingOffsets.clear();
+    m_advancePathAfterTriggerRelease = false;
+    m_codeReadPending = false;
+    m_codeReadSoftPending = false;
+    m_codeReadCameraIp.clear();
+
     m_isPollingPlc = false;
     resetModbusFailureCounter();
     m_consecutiveModbusFailures = 0;
@@ -180,6 +189,35 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
         }
     }
 
+    // 任意 Trig 的 0→1：忙碌时也锁存，避免臂扫进行中错过伸缩杆上升沿后永久丢触发。
+    if (!previousCommandBlock.isEmpty()) {
+        for (const auto& trigger : protocol::triggerDefinitions()) {
+            if (trigger.trigOffset < 0 ||
+                trigger.trigOffset >= values.size() ||
+                trigger.trigOffset >= previousCommandBlock.size()) {
+                continue;
+            }
+            const quint16 prev = previousCommandBlock.value(trigger.trigOffset);
+            const quint16 curr = values.value(trigger.trigOffset);
+            if (curr == 0) {
+                m_latchedTrigRisingOffsets.remove(trigger.trigOffset);
+            } else if (prev == 0 && curr == 1) {
+                m_latchedTrigRisingOffsets.insert(trigger.trigOffset);
+            }
+        }
+    }
+
+    // 强制收尾后的闭锁：该 Trig 必须先回到 0 才允许再次接受。
+    // offset 必须是真实 Trig 下标（>0）；0 为保留字，避免误判「解除闭锁」。
+    if (m_blockTrigUntilIdleOffset > 0 &&
+        m_blockTrigUntilIdleOffset < values.size() &&
+        values.value(m_blockTrigUntilIdleOffset) == 0) {
+        qInfo(LOG_FLOW).noquote()
+            << QStringLiteral("Trig 已回 0，解除重复触发闭锁 offset=")
+            << m_blockTrigUntilIdleOffset;
+        m_blockTrigUntilIdleOffset = -1;
+    }
+
     if (m_activeTask.definition != nullptr) {
         return;
     }
@@ -187,7 +225,24 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
     // 空闲时：仅在 40047 相对上次轮询变化时切路，避免覆盖 IPC 自动切路结果。
     applyPlcScanPathId(values, previousCommandBlock, true);
 
-    if (const protocol::TriggerDefinition* pendingTrigger = selectPendingTrigger(values)) {
+    // 首帧（previous 为空）只建快照，不消费已为 1 的 Trig（IPC 重启/重连常见残留）。
+    if (previousCommandBlock.isEmpty()) {
+        for (const auto& trigger : protocol::triggerDefinitions()) {
+            if (trigger.trigOffset >= 0 &&
+                trigger.trigOffset < values.size() &&
+                values.value(trigger.trigOffset) == 1) {
+                qInfo(LOG_FLOW).noquote()
+                    << QStringLiteral("忽略启动/重连首帧残留触发 ")
+                    << protocol::triggerName(trigger)
+                    << QStringLiteral("（需 PLC 先拉低再置 1）");
+            }
+        }
+        return;
+    }
+
+    if (const protocol::TriggerDefinition* pendingTrigger =
+            selectPendingTrigger(values, previousCommandBlock)) {
+        m_latchedTrigRisingOffsets.remove(pendingTrigger->trigOffset);
         processTrigger(*pendingTrigger, values);
     }
 }
@@ -538,12 +593,44 @@ void StateMachine::finalizeCompletedTaskIfTriggerReleased(
 }
 
 const protocol::TriggerDefinition* StateMachine::selectPendingTrigger(
-    const QVector<quint16>& commandBlock) const
+    const QVector<quint16>& commandBlock,
+    const QVector<quint16>& previousCommandBlock) const
 {
+    // 无上一拍时无法判断上升沿，不接受任何 Trig。
+    if (previousCommandBlock.isEmpty()) {
+        return nullptr;
+    }
+
     for (const auto& trigger : protocol::triggerDefinitions()) {
-        if (trigger.trigOffset < commandBlock.size() && commandBlock[trigger.trigOffset] == 1) {
-            return &trigger;
+        if (trigger.trigOffset < 0 || trigger.trigOffset >= commandBlock.size()) {
+            continue;
         }
+        if (trigger.trigOffset >= previousCommandBlock.size()) {
+            continue;
+        }
+        if (commandBlock.value(trigger.trigOffset) != 1) {
+            continue;
+        }
+        // 看门狗强制收尾后：同一 Trig 仍为 1 时忽略，直到其先回 0。
+        if (m_blockTrigUntilIdleOffset > 0 &&
+            trigger.trigOffset == m_blockTrigUntilIdleOffset) {
+            continue;
+        }
+
+        const bool risingEdge =
+            previousCommandBlock.value(trigger.trigOffset) == 0;
+        const bool latchedWhileBusy =
+            m_latchedTrigRisingOffsets.contains(trigger.trigOffset);
+        // 本拍 0→1，或忙碌期间已锁存且空闲后 Trig 仍保持为 1。
+        if (!risingEdge && !latchedWhileBusy) {
+            continue;
+        }
+        if (latchedWhileBusy && !risingEdge) {
+            qInfo(LOG_FLOW).noquote()
+                << QStringLiteral("补接受忙碌期间锁存的触发 ")
+                << protocol::triggerName(trigger);
+        }
+        return &trigger;
     }
     return nullptr;
 }

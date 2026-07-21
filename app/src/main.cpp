@@ -7,6 +7,7 @@
 #include "scan_tracking/app/console_runtime.h"
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/common/logger.h"
+#include "scan_tracking/vision/hik_mvs_sdk_runtime.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -27,6 +28,8 @@ int main(int argc, char* argv[])
 
     scan_tracking::common::Logger::initialize(
         QCoreApplication::applicationDirPath() + QStringLiteral("/logs"));
+    // 工位一依赖 start.bat 设置 GenTL；此处在进程内提前补齐，避免 IDE/直接双击启动时 CXP 枚举失败。
+    scan_tracking::vision::ensureHikGenTlEnvironment();
     scan_tracking::common::ConfigManager::initialize();
 
     const int exit_code = [&app]() {

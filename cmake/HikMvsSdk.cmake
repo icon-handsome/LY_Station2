@@ -98,9 +98,10 @@ function(scan_tracking_deploy_hik_mvs_runtime target_name)
         )
 
         if(MSVC)
+            set(_mvs_gentl_default "C:/Program Files (x86)/Common Files/MVS/Runtime/Win64_x64")
             set_property(TARGET ${target_name} APPEND PROPERTY
                 VS_DEBUGGER_ENVIRONMENT
-                "PATH=${_runtime_dir};%PATH%"
+                "PATH=${_runtime_dir};%PATH%\nGENICAM_GENTL64_PATH=${_mvs_gentl_default};${_runtime_dir}"
             )
         endif()
     endif()

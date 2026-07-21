@@ -2,6 +2,7 @@
 
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QObject>
+#include <QtCore/QSet>
 #include <QtCore/QTimer>
 #include <QtCore/QVector>
 #include <QtCore/QtGlobal>
@@ -189,7 +190,9 @@ private:
     void finalizeCompletedTaskIfTriggerReleased(const QVector<quint16>& commandBlock, bool force = false);
     void clearActiveTask();
 
-    const protocol::TriggerDefinition* selectPendingTrigger(const QVector<quint16>& commandBlock) const;
+    const protocol::TriggerDefinition* selectPendingTrigger(
+        const QVector<quint16>& commandBlock,
+        const QVector<quint16>& previousCommandBlock) const;
 
     void recordModbusFailure(quint16 alarmCode, const QString& message);
     void resetModbusFailureCounter();
@@ -206,6 +209,8 @@ private:
     void finishCodeRead(quint16 resultCode, const QString& codeValue, const QString& message = QString());
     /// 段扫兼编号已收尾后，迟到的 OCR 只写编号寄存器，不再动 Ack/Res。
     void applyLateCodeReadOcr(const QString& cameraIp, const QString& codeValue);
+    /// 编号段扫 Ack 已写出后，若 PLC 迟迟不拉低 Trig，延时强制收尾以免整线卡死。
+    void scheduleCodeReadScanFinalizeWatchdog(int trigOffset);
     void finishSelfCheckCapture(const vision::MultiCameraCaptureBundle& bundle);
     /// 当前路径检测成功后：清空段缓存/扫描完成寄存器，并自动切到下一条启用路径（不依赖 PLC ResultReset）。
     void prepareNextScanPathAfterSuccess();
@@ -240,6 +245,10 @@ private:
     bool m_codeReadSoftPending = false;
     /// 编号段扫齐套后，等 PLC 拉低 Trig 再切下一路（避免过早清 Done 导致 PLC 认为无应答）。
     bool m_advancePathAfterTriggerRelease = false;
+    /// 强制收尾后，该 Trig 必须先回到 0 才允许再次接受（防止 Trig 一直为 1 时重复触发）。
+    int m_blockTrigUntilIdleOffset = -1;
+    /// 忙碌时错过的 0→1 上升沿；空闲后若 Trig 仍为 1 则补接受（臂/伸缩杆并行常见）。
+    QSet<int> m_latchedTrigRisingOffsets;
     QString m_codeReadCameraIp;
     quint16 m_heartbeatCounter = 0;
     quint16 m_alarmLevel = 0;

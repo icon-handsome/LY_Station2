@@ -363,6 +363,32 @@ void StateMachine::applyLateCodeReadOcr(const QString& cameraIp, const QString& 
         << QStringLiteral(" ip=") << cameraIp;
 }
 
+void StateMachine::scheduleCodeReadScanFinalizeWatchdog(int trigOffset)
+{
+    // 给 PLC 留出采样 Done/Ack/Res 的时间；超时仍占着任务会导致后续触发全部被忽略。
+    const int holdDoneMs = 500;
+    QPointer<StateMachine> self(this);
+    QTimer::singleShot(holdDoneMs, this, [self, trigOffset, holdDoneMs]() {
+        if (self == nullptr) {
+            return;
+        }
+        if (self->m_activeTask.definition == nullptr ||
+            !self->m_activeTask.completionAnnounced) {
+            return;
+        }
+        if (self->m_activeTask.definition->trigOffset != trigOffset) {
+            return;
+        }
+
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("编号段扫完成已超过 ") << holdDoneMs
+            << QStringLiteral("ms，PLC 仍未拉低 Trig，强制释放任务以免卡死；")
+            << QStringLiteral("该 Trig 需先回 0 才可再次触发。");
+        self->m_blockTrigUntilIdleOffset = trigOffset;
+        self->finalizeCompletedTaskIfTriggerReleased(self->m_lastCommandBlock, true);
+    });
+}
+
 void StateMachine::finishCodeRead(quint16 resultCode, const QString& codeValue, const QString& message)
 {
     if (m_activeTask.definition == nullptr || m_activeTask.completionAnnounced) {
@@ -399,6 +425,7 @@ void StateMachine::finishCodeRead(quint16 resultCode, const QString& codeValue, 
     // Trig_ScanSegment / Trig_TelescopicScan 兼跑编号：回写段扫寄存器，并占位齐套缓存。
     if (scanStage) {
         const QString triggerLabel = protocol::triggerName(*m_activeTask.definition);
+        const int trigOffset = m_activeTask.definition->trigOffset;
         const bool ok = resultCode == 1;
         bool shouldAdvancePath = false;
         if (ok) {
@@ -426,11 +453,21 @@ void StateMachine::finishCodeRead(quint16 resultCode, const QString& codeValue, 
                 qInfo(LOG_FLOW).noquote()
                     << QStringLiteral("pathId=")
                     << (configMgr != nullptr ? configMgr->activePathId() : 0)
-                    << QStringLiteral(" 编号段扫齐套（Done/Ack/Res 保持至 PLC 拉低 Trig）。");
+                    << QStringLiteral(" 编号段扫齐套（Done/Ack/Res 保持至 PLC 拉低 Trig"
+                                      "；超时将强制释放）。");
             }
         }
 
         notifyCodeReadFinished(resultCode, codeValue);
+
+        // 须在 complete 之前置位：complete 内可能立刻 finalize（Trig 已为 0）。
+        if (shouldAdvancePath) {
+            m_advancePathAfterTriggerRelease = true;
+            qInfo(LOG_FLOW).noquote()
+                << QStringLiteral("编号段扫齐套：保留 Done/Ack/Res 供 PLC 读取，"
+                                  "待 Trig 释放（或看门狗超时）后再自动切下一路。");
+        }
+
         // PLC 常同时看 DoneIndex + ImageCount/CloudFrameCount；cloud=0 可能被当成无有效应答。
         completeScanSegmentCapture(
             ok ? 1 : 7,
@@ -445,13 +482,9 @@ void StateMachine::finishCodeRead(quint16 resultCode, const QString& codeValue, 
             << QStringLiteral(" message=") << effectiveMessage
             << (keepSoftPending ? QStringLiteral(" softOcr=1") : QString());
 
-        // 勿在此处立刻 prepareNextScanPath：会清掉 DoneIndex，PLC 来不及读到扫描应答。
-        // 等 Trig 拉低 finalize 后再切路径。
-        if (shouldAdvancePath) {
-            m_advancePathAfterTriggerRelease = true;
-            qInfo(LOG_FLOW).noquote()
-                << QStringLiteral("编号段扫齐套：保留 Done/Ack/Res 供 PLC 读取，"
-                                  "待 Trig 释放后再自动切下一路。");
+        // 若 PLC 一直拉高 Trig（例如等 OCR 文本），必须靠看门狗强制收尾。
+        if (m_activeTask.definition != nullptr && m_activeTask.completionAnnounced) {
+            scheduleCodeReadScanFinalizeWatchdog(trigOffset);
         }
         return;
     }

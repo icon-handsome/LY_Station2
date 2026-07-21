@@ -58,7 +58,14 @@ exit /b %ERRORLEVEL%
 
 :apply_runtime_path
 set "APP_DIR=%~1"
-set "PATH=%APP_DIR%;%APP_DIR%\mech_eye_api;%APP_DIR%\ThirdParty;%APP_DIR%\hik_mvs_runtime;C:\Qt\5.15.2\msvc2019_64\bin;%ROOT%\third_party\Mech-Eye SDK-2.5.4\API\dll;%ROOT%\third_party\Mech-Eye SDK-2.5.4\API\dll_debug;%PATH%"
+set "MVS_RT=C:\Program Files (x86)\Common Files\MVS\Runtime\Win64_x64"
+rem 与工位一对齐：CXP GenTL Producer 路径（缺省时 EnumDevices 返回 0x800000FF）
+set "GENICAM_GENTL64_PATH=%MVS_RT%;%APP_DIR%;%APP_DIR%\hik_mvs_runtime"
+set "PATH=%APP_DIR%;%APP_DIR%\mech_eye_api;%APP_DIR%\ThirdParty;%APP_DIR%\hik_mvs_runtime;%MVS_RT%;C:\Qt\5.15.2\msvc2019_64\bin;%ROOT%\third_party\Mech-Eye SDK-2.5.4\API\dll;%ROOT%\third_party\Mech-Eye SDK-2.5.4\API\dll_debug;%PATH%"
+echo [scan_tracking_dev] GENICAM_GENTL64_PATH=%GENICAM_GENTL64_PATH%
+if not exist "%MVS_RT%\MvFGProducerCXP.cti" if not exist "%APP_DIR%\MvFGProducerCXP.cti" (
+  echo [scan_tracking_dev] WARN: MvFGProducerCXP.cti not found
+)
 exit /b 0
 
 :usage
