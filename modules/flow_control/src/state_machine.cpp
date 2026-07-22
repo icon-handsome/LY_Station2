@@ -30,6 +30,9 @@ StateMachine::StateMachine(
     , m_handlerRegistry(std::make_unique<TaskHandlerRegistry>())
     , m_state(AppState::Init)
 {
+    qRegisterMetaType<scan_tracking::flow_control::ScanPathEventInfo>(
+        "scan_tracking::flow_control::ScanPathEventInfo");
+
     const auto* configMgr = common::ConfigManager::instance();
     const auto flowConfig = configMgr ? configMgr->flowControlConfig()
                                       : common::FlowControlConfig{100, 1000, 300};
@@ -265,6 +268,56 @@ vision::HikCameraCController* StateMachine::hikCameraCController() const
     return m_hikCameraCController;
 }
 
+AppState StateMachine::currentState() const
+{
+    return m_state;
+}
+
+protocol::IpcState StateMachine::ipcState() const
+{
+    return m_ipcState;
+}
+
+protocol::Stage StateMachine::currentStage() const
+{
+    return m_currentStage;
+}
+
+quint16 StateMachine::alarmLevel() const
+{
+    return m_alarmLevel;
+}
+
+quint16 StateMachine::alarmCode() const
+{
+    return m_alarmCode;
+}
+
+quint16 StateMachine::warnCode() const
+{
+    return m_warnCode;
+}
+
+quint16 StateMachine::progress() const
+{
+    return m_progress;
+}
+
+const QVector<quint16>& StateMachine::lastCommandBlock() const
+{
+    return m_lastCommandBlock;
+}
+
+protocol::registers::Pose6f StateMachine::robotTcpPose() const
+{
+    return m_robotTcpPose;
+}
+
+quint16 StateMachine::robotStatusWord() const
+{
+    return m_lastCommandBlock.value(protocol::registers::kRobotStatusWord, 0);
+}
+
 void StateMachine::setTaskProgress(quint16 progress)
 {
     m_progress = progress;
@@ -308,6 +361,7 @@ void StateMachine::notifyCodeReadFinished(quint16 resultCode, const QString& cod
 
 void StateMachine::notifyResultResetFinished(quint16 resultCode)
 {
+    clearPathProgressTracking(QStringLiteral("cache_reset"));
     emit resultResetFinished(resultCode);
 }
 

@@ -13,7 +13,15 @@ QString resolveCaptureCacheRoot(const QString& configuredRoot);
 /// 确保目录存在；失败返回空字符串
 QString ensureDirectoryExists(const QString& directoryPath);
 
-/// Mech-Eye 3D 点云：<root>/mech_3d
+/// 单次运行实例下某点位目录：
+/// <runRoot>/path_{pathId}/{arm|telescopic}/{pointIndex}/
+QString capturePointDirectory(
+    const QString& runRoot,
+    int pathId,
+    const QString& deviceTag,
+    int pointIndex);
+
+/// Mech-Eye 3D 点云：<root>/mech_3d（遗留/调试缓存，主流程落盘请用 capturePointDirectory）
 QString captureCacheMech3DDir(const QString& root);
 
 /// Mech-Eye 深度纹理灰度图（非独立 2D 相机）：<root>/mech_texture

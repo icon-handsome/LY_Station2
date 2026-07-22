@@ -98,21 +98,20 @@ QString defaultScanCacheDirectory()
 
 QString buildSegmentPlyPath(
     const QString& configuredRoot,
-    int segmentIndex,
-    quint32 taskId,
-    const QString& timestamp)
+    int pathId,
+    const QString& deviceTag,
+    int segmentIndex)
 {
-    const QString baseDir = scan_tracking::common::captureCacheMech3DDir(configuredRoot);
-    if (baseDir.isEmpty()) {
-        qWarning(LOG_POINT_CLOUD_IO).noquote() << "无法创建 mech_3d 缓存目录";
+    const QString pointDir = scan_tracking::common::capturePointDirectory(
+        configuredRoot, pathId, deviceTag, segmentIndex);
+    if (pointDir.isEmpty()) {
+        qWarning(LOG_POINT_CLOUD_IO).noquote()
+            << QStringLiteral("无法创建点位目录 pathId=") << pathId
+            << QStringLiteral(" device=") << deviceTag
+            << QStringLiteral(" point=") << segmentIndex;
         return QString();
     }
-
-    const QString ts =
-        timestamp.trimmed().isEmpty() ? scan_tracking::common::buildCaptureTimestamp() : timestamp;
-    const QString fileName =
-        QStringLiteral("segment_%1_task%2_%3.ply").arg(segmentIndex).arg(taskId).arg(ts);
-    return QDir(baseDir).absoluteFilePath(fileName);
+    return QDir(pointDir).absoluteFilePath(QStringLiteral("cloud.ply"));
 }
 
 bool savePointCloudFrameToPly(const PointCloudFrame& frame, const QString& absolutePath)
@@ -302,21 +301,20 @@ void releasePointCloudFrameBuffers(PointCloudFrame* frame)
 
 QString buildSegmentMechTexturePngPath(
     const QString& configuredRoot,
-    int segmentIndex,
-    quint32 taskId,
-    const QString& timestamp)
+    int pathId,
+    const QString& deviceTag,
+    int segmentIndex)
 {
-    const QString baseDir = scan_tracking::common::captureCacheMechTextureDir(configuredRoot);
-    if (baseDir.isEmpty()) {
-        qWarning(LOG_POINT_CLOUD_IO).noquote() << "无法创建 mech_texture 缓存目录";
+    const QString pointDir = scan_tracking::common::capturePointDirectory(
+        configuredRoot, pathId, deviceTag, segmentIndex);
+    if (pointDir.isEmpty()) {
+        qWarning(LOG_POINT_CLOUD_IO).noquote()
+            << QStringLiteral("无法创建点位目录(texture) pathId=") << pathId
+            << QStringLiteral(" device=") << deviceTag
+            << QStringLiteral(" point=") << segmentIndex;
         return QString();
     }
-
-    const QString ts =
-        timestamp.trimmed().isEmpty() ? scan_tracking::common::buildCaptureTimestamp() : timestamp;
-    const QString fileName =
-        QStringLiteral("segment_%1_task%2_%3.png").arg(segmentIndex).arg(taskId).arg(ts);
-    return QDir(baseDir).absoluteFilePath(fileName);
+    return QDir(pointDir).absoluteFilePath(QStringLiteral("texture.png"));
 }
 
 bool saveGrayTextureFrameToPng(const GrayTextureFrame& frame, const QString& absolutePath)

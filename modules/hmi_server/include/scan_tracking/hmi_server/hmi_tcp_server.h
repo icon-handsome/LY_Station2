@@ -74,12 +74,9 @@ public:
     bool hasClient() const;
 
     /**
-     * @brief 主动推送坡口综合检测结果到 Qt 显控
+     * @brief 主动推送综合检测结果到 Qt 显控（`event.inspection.finished`）
      *
-     * 发送 `event.inspection.finished`，成功与失败均推送，便于客户演示即时看到结果。
-     * TODO(hmi-demo): 无客户端时不缓存，演示后若需要可补最后一帧缓存
-     * TODO(hmi-demo): 与 status.system 联动刷新 progress/alarmLevel
-     * TODO(hmi-demo): 多路径/第二工位结果需扩展 payload 或新增 event 类型
+     * 成功与失败均推送。无客户端时当前不缓存；多路径结果字段见 InspectionResult / headMetrics。
      */
     void publishInspectionResult(const flow_control::InspectionResult& result);
 
@@ -183,6 +180,7 @@ private:
     /// 处理发起多相机联合采集的点云/图像 Bundle 指令
     void handleCmdCaptureBundle(const QJsonObject& message);
 
+    /// 废弃命令：一律失败应答（兼容旧显控）
     void handleCmdSetBevelRecipe(const QJsonObject& message);
     void handleCmdDebugTriggerInspection(const QJsonObject& message);
 
@@ -193,6 +191,7 @@ private:
     void pushSystemStatus();
 
     QJsonObject buildSystemStatusPayload() const;
+    QJsonObject buildScanPathProgressPayload() const;
     
     /// 向 Qt 端周期性推送 PLC 连接状态及内部部分寄存器运行状态
     void pushPlcStatus();

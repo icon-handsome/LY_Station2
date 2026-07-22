@@ -29,24 +29,33 @@ int bmpRowStride(int width)
 
 QString buildSegmentHikMonoPath(
     const QString& configuredRoot,
+    int pathId,
+    const QString& deviceTag,
     int segmentIndex,
-    quint32 taskId,
-    const QString& cameraTag,
-    const QString& timestamp)
+    const QString& cameraTag)
 {
-    const QString baseDir =
-        scan_tracking::common::captureCacheHikMonoCameraDir(configuredRoot, cameraTag);
-    if (baseDir.isEmpty()) {
+    const QString pointDir = scan_tracking::common::capturePointDirectory(
+        configuredRoot, pathId, deviceTag, segmentIndex);
+    if (pointDir.isEmpty()) {
         qWarning(LOG_HIK_MONO_IO).noquote()
-            << "无法创建 hik_mono 相机子目录 cameraTag=" << cameraTag;
+            << QStringLiteral("无法创建点位目录(hik) pathId=") << pathId
+            << QStringLiteral(" device=") << deviceTag
+            << QStringLiteral(" point=") << segmentIndex;
         return QString();
     }
 
-    const QString ts =
-        timestamp.trimmed().isEmpty() ? scan_tracking::common::buildCaptureTimestamp() : timestamp;
-    const QString fileName =
-        QStringLiteral("segment_%1_task%2_%3.bmp").arg(segmentIndex).arg(taskId).arg(ts);
-    return QDir(baseDir).absoluteFilePath(fileName);
+    QString fileStem = cameraTag.trimmed().toLower();
+    if (fileStem.isEmpty()) {
+        fileStem = QStringLiteral("hik");
+    } else if (fileStem == QLatin1String("hika")) {
+        fileStem = QStringLiteral("hikA");
+    } else if (fileStem == QLatin1String("hikb")) {
+        fileStem = QStringLiteral("hikB");
+    } else if (fileStem.startsWith(QLatin1String("hikc"))) {
+        fileStem = QStringLiteral("hikC");
+    }
+
+    return QDir(pointDir).absoluteFilePath(fileStem + QStringLiteral(".bmp"));
 }
 
 bool saveHikMonoFrameToBmp(const HikMonoFrame& frame, const QString& absolutePath)

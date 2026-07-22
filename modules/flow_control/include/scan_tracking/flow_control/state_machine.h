@@ -2,6 +2,8 @@
 
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QObject>
+#include <QtCore/QSet>
+#include <QtCore/QString>
 #include <QtCore/QTimer>
 #include <QtCore/QVector>
 #include <QtCore/QtGlobal>
@@ -39,6 +41,35 @@ enum class AppState {
 
 Q_DECLARE_METATYPE(scan_tracking::flow_control::AppState)
 
+/// HMI 路径级进度事件字段（event.path.*，对齐第一工位显控约定）
+struct ScanPathEventInfo {
+    int pathId = 0;
+    QString pathName;
+    int pathIndex = 0;       ///< 在 enabledPathIds 中的序号，1-based
+    int pathCount = 0;       ///< 启用路径总数
+    QString inspectionType;  ///< 第二工位填 algorithm（如 weld_section）
+    int totalPoints = 0;
+    quint16 resultCode = 0;  ///< finished 时：1=成功
+};
+
+/// HMI status.system.scanPathProgress 快照
+struct ScanPathProgressSnapshot {
+    QVector<int> enabledPathIds;
+    int currentPathId = 0;
+    QString currentPathName;
+    QVector<int> completedPathIds;
+    int pathCount = 0;
+    bool allPathsComplete = false;
+};
+
+}  // namespace flow_control
+}  // namespace scan_tracking
+
+Q_DECLARE_METATYPE(scan_tracking::flow_control::ScanPathEventInfo)
+
+namespace scan_tracking {
+namespace flow_control {
+
 class StateMachine : public QObject, public PlcTaskHost {
     Q_OBJECT
 
@@ -55,20 +86,19 @@ public:
     void start();
     void stop();
 
-    AppState currentState() const { return m_state; }
-    protocol::IpcState ipcState() const { return m_ipcState; }
-    protocol::Stage currentStage() const { return m_currentStage; }
-    quint16 alarmLevel() const { return m_alarmLevel; }
-    quint16 alarmCode() const { return m_alarmCode; }
-    quint16 warnCode() const { return m_warnCode; }
-    quint16 progress() const { return m_progress; }
+    // 下列访问器刻意非内联：StateMachine 成员布局常随路径进度等字段变更，
+    // 调用方（如 hmi_server）若仅增量重编会按旧偏移读到垃圾值并闪退。
+    AppState currentState() const;
+    protocol::IpcState ipcState() const;
+    protocol::Stage currentStage() const;
+    quint16 alarmLevel() const;
+    quint16 alarmCode() const;
+    quint16 warnCode() const;
+    quint16 progress() const;
 
-    const QVector<quint16>& lastCommandBlock() const { return m_lastCommandBlock; }
-    protocol::registers::Pose6f robotTcpPose() const { return m_robotTcpPose; }
-    quint16 robotStatusWord() const
-    {
-        return m_lastCommandBlock.value(protocol::registers::kRobotStatusWord, 0);
-    }
+    const QVector<quint16>& lastCommandBlock() const;
+    protocol::registers::Pose6f robotTcpPose() const;
+    quint16 robotStatusWord() const;
 
     void setAlarm(quint16 level, quint16 code, const QString& message);
     bool reportPersonZoneAlarm(bool alarm);
@@ -76,6 +106,9 @@ public:
     InspectionResult evaluateCachedInspection(quint32 taskId = 0) const;
 
     const ScanSegmentCache& scanSegmentCache() const { return m_scanSegmentCache; }
+
+    /// 供 HMI status.system.scanPathProgress 使用的路径进度快照
+    ScanPathProgressSnapshot scanPathProgressSnapshot() const;
 
     // --- PlcTaskHost（供 Handler 调用）---
     modbus::ModbusService* modbusService() const override;
@@ -119,6 +152,8 @@ public:
     void startSelfCheckCapture() override;
 
     void resetScanSegmentCache() override;
+    /// 切路径时只清段缓存，保留本次运行实例落盘目录。
+    void clearScanSegmentCacheForPathSwitch();
     void resetSafetyInterlockState() override;
     void maybeAdvancePathOnNewCycleStart(int localIndex) override;
 
@@ -153,6 +188,15 @@ signals:
     void selfCheckFinished(quint16 resultCode, quint16 failWord0);
     void codeReadFinished(quint16 resultCode, const QString& codeValue);
     void resultResetFinished(quint16 resultCode);
+
+    /// 当前扫描路径开始（首段采集或切路后），供 HMI 高亮进行中路径
+    void pathStarted(const ScanPathEventInfo& info);
+    /// 当前扫描路径完成（检测成功并即将/已经切走）
+    void pathFinished(const ScanPathEventInfo& info);
+    /// 全部启用路径均已完成
+    void scanPathsAllFinished(const QVector<int>& completedPathIds, int pathCount);
+    /// 路径进度复位（如 Trig_ResultReset）
+    void pathProgressReset(const QString& reason);
 
 private slots:
     void pollPlcState();
@@ -213,6 +257,12 @@ private:
     void finishSelfCheckCapture(const vision::MultiCameraCaptureBundle& bundle);
     /// 当前路径检测成功后：清空段缓存/扫描完成寄存器，并自动切到下一条启用路径（不依赖 PLC ResultReset）。
     void prepareNextScanPathAfterSuccess();
+    /// 临时策略（PLC 暂不发 Trig_Inspection）：离开当前路径前，若已齐套则自动跑对应算法并写结果寄存器。
+    void maybeAutoRunInspectionBeforeLeavingPath();
+    void markCurrentPathInspectionDone();
+    bool alreadyInspectedCurrentPathRun() const;
+    QString currentInspectionRunKey() const;
+    void publishInspectionOutcome(const InspectionResult& result, const QString& triggerLabel);
     /// 当前活跃路径的臂+伸缩杆缓存是否已齐套。
     bool isActivePathQuotaComplete() const;
     /// 读取 PLC ScanPathId(40047) 并热切换活跃路径；0=未指定则忽略。
@@ -221,6 +271,11 @@ private:
     bool applyPlcScanPathId(const QVector<quint16>& commandBlock,
                             const QVector<quint16>& previousCommandBlock = {},
                             bool onlyOnChange = false);
+
+    ScanPathEventInfo buildScanPathEventInfo(int pathId, quint16 resultCode = 0) const;
+    void maybeEmitPathStarted(int pathId);
+    void maybeEmitPathFinished(int pathId, quint16 resultCode = 1);
+    void clearPathProgressTracking(const QString& resetReason);
 
     quint32 readTaskId(const QVector<quint16>& commandBlock) const;
     quint16 resolveScanSegmentIndex(const QVector<quint16>& commandBlock,
@@ -246,7 +301,13 @@ private:
     bool m_advancePathAfterTriggerRelease = false;
     /// 强制收尾后，该 Trig 必须先回到 0 才允许再次接受（防止 Trig 一直为 1 时重复触发）。
     int m_blockTrigUntilIdleOffset = -1;
+    /// 本轮段缓存已做过检测（Trig_Inspection 或切路前自动检测），避免重复跑算法。
+    int m_lastInspectedPathId = -1;
+    QString m_lastInspectedRunKey;
     QString m_codeReadCameraIp;
+    QSet<int> m_emittedPathStarted;
+    QSet<int> m_emittedPathFinished;
+    bool m_emittedAllPathsFinished = false;
     quint16 m_heartbeatCounter = 0;
     quint16 m_alarmLevel = 0;
     quint16 m_alarmCode = 0;

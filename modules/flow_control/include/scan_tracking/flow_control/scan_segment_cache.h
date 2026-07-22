@@ -40,10 +40,14 @@ struct ScanSegmentCacheEntry {
 
 class ScanSegmentCache {
 public:
+    /// 清空段缓存并丢弃当前 run 目录绑定（下次采集新建 run_*）。
     void reset();
 
-    /// 为当前 taskId 准备 run 目录。taskId 变化时清空段缓存并新建目录；
-    /// taskId=0（PLC 未写）也允许，目录名为 run_0_{timestamp}。
+    /// 仅清空段内存缓存，保留当前 run 落盘根目录（切路径时用，避免一次运行多个 run 文件夹）。
+    void clearSegmentsKeepRunRoot();
+
+    /// 为当前 taskId 准备 run 目录。taskId 变为「非 0 且与上次不同」时新建目录；
+    /// taskId=0 时若已有 run 根则复用，保证整次运行只有一个文件夹。
     bool ensureRunRoot(quint32 taskId, QString* runRootOut = nullptr, QString* timestampOut = nullptr);
 
     void storeSegment(

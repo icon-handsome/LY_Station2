@@ -6,13 +6,14 @@
 
 namespace scan_tracking::vision {
 
-/// 生成分段海康 Mono BMP 路径（hik_mono/camera_a 或 hik_mono/camera_b）
+/// 生成分段海康 Mono BMP：
+/// <runRoot>/path_{pathId}/{arm|telescopic}/{segmentIndex}/{cameraTag}.bmp
 QString buildSegmentHikMonoPath(
     const QString& configuredRoot,
+    int pathId,
+    const QString& deviceTag,
     int segmentIndex,
-    quint32 taskId,
-    const QString& cameraTag,
-    const QString& timestamp);
+    const QString& cameraTag);
 
 /// 将 Mono8 帧保存为 8 位灰度 BMP
 bool saveHikMonoFrameToBmp(const HikMonoFrame& frame, const QString& absolutePath);

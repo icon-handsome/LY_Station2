@@ -9,14 +9,13 @@ namespace scan_tracking::mech_eye {
 /// 默认采集缓存根目录：<applicationDir>/ScanTracking_CaptureCache
 QString defaultScanCacheDirectory();
 
-/// 生成分段 PLY 绝对路径（mech_3d 子目录）：segment_{N}_task{T}_{timestamp}.ply
-/// @param configuredRoot config.ini scanCacheDirectory，空则默认根目录
-/// @param timestamp 与同段海康图共用；空则自动生成
+/// 生成分段 PLY 绝对路径：
+/// <runRoot>/path_{pathId}/{arm|telescopic}/{segmentIndex}/cloud.ply
 QString buildSegmentPlyPath(
     const QString& configuredRoot,
-    int segmentIndex,
-    quint32 taskId,
-    const QString& timestamp = QString());
+    int pathId,
+    const QString& deviceTag,
+    int segmentIndex);
 
 /// 将 PointCloudFrame 保存为 binary_little_endian PLY（仅 x,y,z；保留全部点含 NaN）
 bool savePointCloudFrameToPly(const PointCloudFrame& frame, const QString& absolutePath);
@@ -27,12 +26,13 @@ bool loadPointCloudFrameFromPly(const QString& absolutePath, PointCloudFrame* ou
 /// 释放 PointCloudFrame 中的大数组，保留 pointCount/width/height 等元数据
 void releasePointCloudFrameBuffers(PointCloudFrame* frame);
 
-/// 生成分段 Mech 纹理 PNG 绝对路径（mech_texture 子目录）
+/// 生成分段 Mech 纹理 PNG：
+/// <runRoot>/path_{pathId}/{arm|telescopic}/{segmentIndex}/texture.png
 QString buildSegmentMechTexturePngPath(
     const QString& configuredRoot,
-    int segmentIndex,
-    quint32 taskId,
-    const QString& timestamp = QString());
+    int pathId,
+    const QString& deviceTag,
+    int segmentIndex);
 
 /// 将 GrayTextureFrame 保存为 8 位灰度 PNG
 bool saveGrayTextureFrameToPng(const GrayTextureFrame& frame, const QString& absolutePath);

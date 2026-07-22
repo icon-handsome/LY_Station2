@@ -28,6 +28,7 @@ add_library(scan_tracking_flow_control STATIC
     src/state_machine_modbus.cpp
     src/state_machine_scan.cpp
     src/state_machine_inspection.cpp
+    src/state_machine_path_progress.cpp
     src/state_machine_plc_io.cpp
     src/handlers/code_read_handler.cpp
     src/handlers/inspection_handler.cpp

@@ -57,6 +57,10 @@ inline constexpr const char* kEventUnloadCalcFinished = "event.unload_calc.finis
 inline constexpr const char* kEventSelfCheckFinished  = "event.self_check.finished";
 inline constexpr const char* kEventCodeReadFinished   = "event.code_read.finished";
 inline constexpr const char* kEventResultResetFinished = "event.result_reset.finished";
+inline constexpr const char* kEventPathStarted          = "event.path.started";
+inline constexpr const char* kEventPathFinished         = "event.path.finished";
+inline constexpr const char* kEventScanPathsAllFinished = "event.scan_paths.all_finished";
+inline constexpr const char* kEventPathProgressReset    = "event.path.progress_reset";
 inline constexpr const char* kEventAlarm             = "event.alarm";
 inline constexpr const char* kEventLog               = "event.log";
 
@@ -79,7 +83,7 @@ inline constexpr const char* kCmdRefreshCamera       = "cmd.refresh_camera";
 inline constexpr const char* kCmdModbusConnect       = "cmd.modbus_connect";
 inline constexpr const char* kCmdModbusDisconnect    = "cmd.modbus_disconnect";
 
-/// 第一工位遗留：第二工位返回不支持，保留协议兼容
+/// 已废弃（原坡口配方）；第二工位仍识别并返回不支持，避免旧显控误连时无应答
 inline constexpr const char* kCmdSetBevelRecipe      = "cmd.set_bevel_recipe";
 inline constexpr const char* kCmdDebugTriggerInspection = "cmd.debug_trigger_inspection";
 

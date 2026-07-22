@@ -27,9 +27,11 @@
 #include <QtCore/QLoggingCategory>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
+#include <QtCore/QTimer>
 #include <QtCore/QVector>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QUuid>
+#include <QtCore/QPointer>
 #include <qdatetime.h>
 
 namespace scan_tracking {
@@ -192,6 +194,8 @@ void HmiTcpServer::bindServiceSignals()
 
     qRegisterMetaType<scan_tracking::flow_control::AppState>(
         "scan_tracking::flow_control::AppState");
+    qRegisterMetaType<scan_tracking::flow_control::ScanPathEventInfo>(
+        "scan_tracking::flow_control::ScanPathEventInfo");
     qRegisterMetaType<scan_tracking::mech_eye::CaptureResult>(
         "scan_tracking::mech_eye::CaptureResult");
     qRegisterMetaType<scan_tracking::vision::MultiCameraCaptureBundle>(
@@ -276,12 +280,21 @@ void HmiTcpServer::onNewConnection()
         m_heartbeatTimer->start();
 
         sendToClient(buildEnvelope(QStringLiteral("core.hello"), nextEventId(), QJsonObject()));
-        pushAllStatusToClient();
-        publishInitialInspectionDisplay();
-        syncCameraConnectivityCache();
-        if (m_stateMachine) {
-            syncPlcAuxDeviceAlarmCache(m_stateMachine->lastCommandBlock());
-        }
+
+        // 延后全量 status / 初始检测帧：避免在 newConnection 同步栈上与采集完成信号重入，
+        // 也避免增量编译下立刻触碰大段 StateMachine 字段时放大布局不一致问题。
+        QPointer<HmiTcpServer> self(this);
+        QTimer::singleShot(0, this, [self]() {
+            if (!self || !self->hasClient()) {
+                return;
+            }
+            self->pushAllStatusToClient();
+            self->publishInitialInspectionDisplay();
+            self->syncCameraConnectivityCache();
+            if (self->m_stateMachine) {
+                self->syncPlcAuxDeviceAlarmCache(self->m_stateMachine->lastCommandBlock());
+            }
+        });
     }
 }
 
@@ -589,20 +602,43 @@ void HmiTcpServer::handleCmdGetConfig(const QJsonObject& message)
     flowControlObj[QLatin1String("simulatedProcessingMs")] = cfgMgr->flowControlConfig().simulatedProcessingMs; // 模拟处理间隔
     configPayload[QLatin1String("flowControl")] = flowControlObj;
     
-    // 7. Tracking 配置
-    QJsonObject trackingObj;
+    // 7. 扫描路径配置（含路径目录 + 当前活跃路径）
+    QJsonObject scanPathsObj;
     {
         const int scanPointTotal = cfgMgr->enabledScanPointCount();
-        trackingObj[QLatin1String("scanSegmentTotal")] = scanPointTotal > 0
+        scanPathsObj[QLatin1String("scanSegmentTotal")] = scanPointTotal > 0
             ? scanPointTotal
             : cfgMgr->trackingConfig().scanSegmentTotal;
-        trackingObj[QLatin1String("activePathId")] = cfgMgr->activePathId();
-        trackingObj[QLatin1String("activePathName")] = cfgMgr->activePathName();
-        trackingObj[QLatin1String("activePathAlgorithm")] = cfgMgr->activePathAlgorithm();
-        trackingObj[QLatin1String("armPointCount")] = cfgMgr->enabledArmPointCount();
-        trackingObj[QLatin1String("telescopicPointCount")] = cfgMgr->enabledTelescopicPointCount();
+        scanPathsObj[QLatin1String("activePathId")] = cfgMgr->activePathId();
+        scanPathsObj[QLatin1String("activePathName")] = cfgMgr->activePathName();
+        scanPathsObj[QLatin1String("activePathAlgorithm")] = cfgMgr->activePathAlgorithm();
+        scanPathsObj[QLatin1String("armPointCount")] = cfgMgr->enabledArmPointCount();
+        scanPathsObj[QLatin1String("telescopicPointCount")] = cfgMgr->enabledTelescopicPointCount();
+
+        QJsonArray pathsArray;
+        for (const auto& path : cfgMgr->scanPathsConfig().scanPaths) {
+            if (!path.enabled) {
+                continue;
+            }
+            const QString algorithm = common::ConfigManager::resolvePathAlgorithm(path);
+            if (algorithm == QLatin1String("self_check")) {
+                continue;
+            }
+            QJsonObject pathObj;
+            pathObj[QLatin1String("pathId")] = path.pathId;
+            pathObj[QLatin1String("pathName")] =
+                path.name.isEmpty() ? QStringLiteral("路径%1").arg(path.pathId) : path.name;
+            pathObj[QLatin1String("inspectionType")] = algorithm;
+            pathObj[QLatin1String("algorithm")] = algorithm;
+            pathObj[QLatin1String("totalPoints")] = path.totalPoints > 0
+                ? path.totalPoints
+                : (path.armPointCount + path.telescopicPointCount);
+            pathObj[QLatin1String("enabled")] = path.enabled;
+            pathsArray.append(pathObj);
+        }
+        scanPathsObj[QLatin1String("paths")] = pathsArray;
     }
-    configPayload[QLatin1String("tracking")] = trackingObj;
+    configPayload[QLatin1String("scanPaths")] = scanPathsObj;
 
     QJsonObject hmiObj;
     hmiObj[QLatin1String("enabled")] = cfgMgr->hmiConfig().enabled;
@@ -843,7 +879,7 @@ void HmiTcpServer::handleCmdSetBevelRecipe(const QJsonObject& message)
         QLatin1String(msg_type::kCmdSetBevelRecipe),
         msgId,
         false,
-        QStringLiteral("坡口配方已移除：第二工位检测流程尚未实现"));
+        QStringLiteral("不支持：cmd.set_bevel_recipe 已废弃（第二工位无坡口配方）"));
 }
 
 void HmiTcpServer::handleCmdDebugTriggerInspection(const QJsonObject& message)
@@ -954,17 +990,28 @@ QJsonObject HmiTcpServer::buildSystemStatusPayload() const
     default:                               appStateStr = QStringLiteral("Unknown"); break;
     }
 
+    // 一律转 int 写入 JSON：避免 quint16 在部分 Qt5 重载下类型歧义；也便于日志 toInt 读。
+    int alarmLevel = static_cast<int>(m_stateMachine->alarmLevel());
+    int progress = static_cast<int>(m_stateMachine->progress());
+    if (alarmLevel < 0 || alarmLevel > 3 || progress < 0 || progress > 100) {
+        qWarning(LOG_HMI_SERVER).noquote()
+            << QStringLiteral("[TCPIP] status.system 字段异常 alarmLevel=") << alarmLevel
+            << QStringLiteral(" progress=") << progress
+            << QStringLiteral("（疑似未完整重编导致 StateMachine 布局不一致，请 clean 后全量编译并整包替换）");
+        // 防御钳制，避免把垃圾值推给显控；根因仍须全量重编。
+        alarmLevel = qBound(alarmLevel, 0, 3);
+        progress = qBound(progress, 0, 100);
+    }
     payload[QLatin1String("ipcState")] = static_cast<int>(m_stateMachine->ipcState());
     payload[QLatin1String("appState")] = appStateStr;
     payload[QLatin1String("stage")] = static_cast<int>(m_stateMachine->currentStage());
-    payload[QLatin1String("alarmLevel")] = m_stateMachine->alarmLevel();
-    payload[QLatin1String("alarmCode")] = m_stateMachine->alarmCode();
-    payload[QLatin1String("warnCode")] = m_stateMachine->warnCode();
+    payload[QLatin1String("alarmLevel")] = alarmLevel;
+    payload[QLatin1String("alarmCode")] = static_cast<int>(m_stateMachine->alarmCode());
+    payload[QLatin1String("warnCode")] = static_cast<int>(m_stateMachine->warnCode());
     payload[QLatin1String("ipcReady")] = (m_stateMachine->currentState() == flow_control::AppState::Ready) ? 1 : 0;
-    payload[QLatin1String("progress")] = m_stateMachine->progress();
+    payload[QLatin1String("progress")] = progress;
     if (const auto* cfgMgr = scan_tracking::common::ConfigManager::instance()) {
         const auto& profile = cfgMgr->stationProfile();
-        // stage1: station metadata extension
         payload[QLatin1String("stationId")] = scan_tracking::common::stationIdToInt(profile.stationId);
         payload[QLatin1String("stationName")] = profile.stationName;
         payload[QLatin1String("workMode")] =
@@ -977,7 +1024,35 @@ QJsonObject HmiTcpServer::buildSystemStatusPayload() const
         }
         payload[QLatin1String("enabledTriggers")] = enabledTriggers;
     }
+    payload[QLatin1String("scanPathProgress")] = buildScanPathProgressPayload();
     return payload;
+}
+
+QJsonObject HmiTcpServer::buildScanPathProgressPayload() const
+{
+    QJsonObject obj;
+    if (!m_stateMachine) {
+        return obj;
+    }
+
+    const flow_control::ScanPathProgressSnapshot snapshot = m_stateMachine->scanPathProgressSnapshot();
+
+    QJsonArray enabledPathIds;
+    for (int pathId : snapshot.enabledPathIds) {
+        enabledPathIds.append(pathId);
+    }
+    QJsonArray completedPathIds;
+    for (int pathId : snapshot.completedPathIds) {
+        completedPathIds.append(pathId);
+    }
+
+    obj[QLatin1String("enabledPathIds")] = enabledPathIds;
+    obj[QLatin1String("currentPathId")] = snapshot.currentPathId;
+    obj[QLatin1String("currentPathName")] = snapshot.currentPathName;
+    obj[QLatin1String("completedPathIds")] = completedPathIds;
+    obj[QLatin1String("pathCount")] = snapshot.pathCount;
+    obj[QLatin1String("allPathsComplete")] = snapshot.allPathsComplete;
+    return obj;
 }
 
 void HmiTcpServer::pushPlcStatus()
@@ -992,7 +1067,6 @@ QJsonObject HmiTcpServer::buildPlcStatusPayload() const
     payload[QLatin1String("modbusConnected")] = m_modbusService && m_modbusService->isConnected();
     if (const auto* cfgMgr = scan_tracking::common::ConfigManager::instance()) {
         const auto& profile = cfgMgr->stationProfile();
-        // stage1: station metadata extension
         payload[QLatin1String("stationId")] = scan_tracking::common::stationIdToInt(profile.stationId);
         payload[QLatin1String("stationName")] = profile.stationName;
         payload[QLatin1String("stationWorkMode")] =
@@ -1006,16 +1080,16 @@ QJsonObject HmiTcpServer::buildPlcStatusPayload() const
         namespace regs = flow_control::protocol::registers;
         const auto& cb = m_stateMachine->lastCommandBlock();
         if (cb.size() > regs::kArmScanSegmentIndex) {
-            payload[QLatin1String("plcHeartbeat")]    = cb.value(regs::kPlcHeartbeat);
-            payload[QLatin1String("plcSystemState")]  = cb.value(regs::kPlcSystemState);
-            payload[QLatin1String("workMode")]        = cb.value(regs::kStationWorkMode);
-            payload[QLatin1String("flowEnable")]      = cb.value(regs::kFlowEnable);
-            payload[QLatin1String("safetyWord")]      = cb.value(regs::kSafetyStatusWord);
+            payload[QLatin1String("plcHeartbeat")]    = static_cast<int>(cb.value(regs::kPlcHeartbeat));
+            payload[QLatin1String("plcSystemState")]  = static_cast<int>(cb.value(regs::kPlcSystemState));
+            payload[QLatin1String("workMode")]        = static_cast<int>(cb.value(regs::kStationWorkMode));
+            payload[QLatin1String("flowEnable")]      = static_cast<int>(cb.value(regs::kFlowEnable));
+            payload[QLatin1String("safetyWord")]      = static_cast<int>(cb.value(regs::kSafetyStatusWord));
             payload[QLatin1String("taskId")]          = static_cast<int>(
                 (static_cast<quint32>(cb.value(regs::kTaskIdHigh)) << 16) |
                 static_cast<quint32>(cb.value(regs::kTaskIdLow)));
-            payload[QLatin1String("productType")]     = cb.value(regs::kProductType);
-            payload[QLatin1String("recipeId")]        = cb.value(regs::kRecipeId);
+            payload[QLatin1String("productType")]     = static_cast<int>(cb.value(regs::kProductType));
+            payload[QLatin1String("recipeId")]        = static_cast<int>(cb.value(regs::kRecipeId));
             const int armSegmentIndex = static_cast<int>(
                 regs::plcAnalogToUInt16(cb.value(regs::kArmScanSegmentIndex), 0));
             const int telescopicSegmentIndex = (cb.size() > regs::kTelescopicScanSegmentIndex)
@@ -1047,14 +1121,20 @@ QJsonObject HmiTcpServer::buildPlcStatusPayload() const
                 payload[QLatin1String("telescopicPointCount")] = 0;
             }
             if (cb.size() > regs::kRobotStatusWord) {
-                payload[QLatin1String("robotStatusWord")] = cb.value(regs::kRobotStatusWord);
+                payload[QLatin1String("robotStatusWord")] =
+                    static_cast<int>(cb.value(regs::kRobotStatusWord));
             }
             if (cb.size() > regs::kEstopButtonStatus) {
-                payload[QLatin1String("telescopicRodStatus")] = cb.value(regs::kTelescopicRodStatus);
-                payload[QLatin1String("rollerSetFreqHz")] = cb.value(regs::kRollerSetFreqHz);
-                payload[QLatin1String("rollerRunFreqHz")] = cb.value(regs::kRollerRunFreqHz);
-                payload[QLatin1String("electromagnetStatus")] = cb.value(regs::kElectromagnetStatus);
-                payload[QLatin1String("estopButtonStatus")] = cb.value(regs::kEstopButtonStatus);
+                payload[QLatin1String("telescopicRodStatus")] =
+                    static_cast<int>(cb.value(regs::kTelescopicRodStatus));
+                payload[QLatin1String("rollerSetFreqHz")] =
+                    static_cast<int>(cb.value(regs::kRollerSetFreqHz));
+                payload[QLatin1String("rollerRunFreqHz")] =
+                    static_cast<int>(cb.value(regs::kRollerRunFreqHz));
+                payload[QLatin1String("electromagnetStatus")] =
+                    static_cast<int>(cb.value(regs::kElectromagnetStatus));
+                payload[QLatin1String("estopButtonStatus")] =
+                    static_cast<int>(cb.value(regs::kEstopButtonStatus));
             }
         }
     }
@@ -1387,13 +1467,13 @@ void HmiTcpServer::pushDeviceStatus()
 
 QJsonObject HmiTcpServer::buildDeviceStatusPayload() const
 {
-    // onlineWord0 / faultWord0 位定义与 docs/protocols/封头检测工位_TCP_IP显控通信协议_v1.0.md §2.4 一致
+    // onlineWord0 / faultWord0 位定义见显控 TCP 协议 §2.4（bit5 原 Tracking，现表示扫描流水线已启动）
     constexpr int kBitIpcCore = 0;
     constexpr int kBitHmiClient = 1;
     constexpr int kBitMechEye = 2;
     constexpr int kBitVisionPipeline = 3;
     constexpr int kBitHik2d = 4;
-    constexpr int kBitTracking = 5;
+    constexpr int kBitScanPipeline = 5;
     constexpr int kBitModbus = 6;
     constexpr int kBitAlarmWarn = 7;
 
@@ -1436,7 +1516,7 @@ QJsonObject HmiTcpServer::buildDeviceStatusPayload() const
     }
 
     if (m_visionPipeline && m_visionPipeline->isStarted()) {
-        onlineWord0 |= (1u << kBitTracking);
+        onlineWord0 |= (1u << kBitScanPipeline);
     }
 
     const bool modbusOnline = m_modbusService && m_modbusService->isConnected();
@@ -1465,8 +1545,8 @@ QJsonObject HmiTcpServer::buildDeviceStatusPayload() const
     }
 
     QJsonObject payload;
-    payload[QLatin1String("onlineWord0")] = onlineWord0;
-    payload[QLatin1String("faultWord0")] = faultWord0;
+    payload[QLatin1String("onlineWord0")] = static_cast<int>(onlineWord0);
+    payload[QLatin1String("faultWord0")] = static_cast<int>(faultWord0);
     return payload;
 }
 
@@ -1524,6 +1604,60 @@ void HmiTcpServer::connectStateMachineSignals()
             payload[QLatin1String("pathName")] = cfgMgr->activePathName();
         }
         sendToClient(buildEnvelope(QLatin1String(msg_type::kEventScanFinished), nextEventId(), payload));
+    }, Qt::UniqueConnection);
+
+    connect(m_stateMachine, &flow_control::StateMachine::pathStarted, this,
+        [this](const flow_control::ScanPathEventInfo& info) {
+        QJsonObject payload;
+        payload[QLatin1String("pathId")] = info.pathId;
+        payload[QLatin1String("pathName")] = info.pathName;
+        payload[QLatin1String("pathIndex")] = info.pathIndex;
+        payload[QLatin1String("pathCount")] = info.pathCount;
+        payload[QLatin1String("inspectionType")] = info.inspectionType;
+        payload[QLatin1String("algorithm")] = info.inspectionType;
+        payload[QLatin1String("totalPoints")] = info.totalPoints;
+        sendToClient(buildEnvelope(QLatin1String(msg_type::kEventPathStarted), nextEventId(), payload));
+        pushSystemStatus();
+    }, Qt::UniqueConnection);
+
+    connect(m_stateMachine, &flow_control::StateMachine::pathFinished, this,
+        [this](const flow_control::ScanPathEventInfo& info) {
+        QJsonObject payload;
+        payload[QLatin1String("pathId")] = info.pathId;
+        payload[QLatin1String("pathName")] = info.pathName;
+        payload[QLatin1String("pathIndex")] = info.pathIndex;
+        payload[QLatin1String("pathCount")] = info.pathCount;
+        payload[QLatin1String("inspectionType")] = info.inspectionType;
+        payload[QLatin1String("algorithm")] = info.inspectionType;
+        payload[QLatin1String("totalPoints")] = info.totalPoints;
+        if (info.resultCode > 0) {
+            payload[QLatin1String("resultCode")] = static_cast<int>(info.resultCode);
+        }
+        sendToClient(buildEnvelope(QLatin1String(msg_type::kEventPathFinished), nextEventId(), payload));
+        pushSystemStatus();
+    }, Qt::UniqueConnection);
+
+    connect(m_stateMachine, &flow_control::StateMachine::scanPathsAllFinished, this,
+        [this](const QVector<int>& completedPathIds, int pathCount) {
+        QJsonObject payload;
+        QJsonArray completedArray;
+        for (int pathId : completedPathIds) {
+            completedArray.append(pathId);
+        }
+        payload[QLatin1String("completedPathIds")] = completedArray;
+        payload[QLatin1String("pathCount")] = pathCount;
+        sendToClient(buildEnvelope(
+            QLatin1String(msg_type::kEventScanPathsAllFinished), nextEventId(), payload));
+        pushSystemStatus();
+    }, Qt::UniqueConnection);
+
+    connect(m_stateMachine, &flow_control::StateMachine::pathProgressReset, this,
+        [this](const QString& reason) {
+        QJsonObject payload;
+        payload[QLatin1String("reason")] = reason;
+        sendToClient(buildEnvelope(
+            QLatin1String(msg_type::kEventPathProgressReset), nextEventId(), payload));
+        pushSystemStatus();
     }, Qt::UniqueConnection);
 
     connect(
@@ -1639,32 +1773,35 @@ void HmiTcpServer::connectMechEyeSignals()
         if (service == nullptr) {
             return;
         }
+        // 同线程 Auto/Direct：只取元数据，禁止 QueuedConnection 排队整份 CaptureResult（含点云/纹理）。
         connect(service, &mech_eye::MechEyeService::captureFinished, this,
-            [this](scan_tracking::mech_eye::CaptureResult result) {
+            [this](const scan_tracking::mech_eye::CaptureResult& result) {
+                if (!hasClient()) {
+                    return;
+                }
                 QJsonObject payload;
                 payload[QLatin1String("requestId")] = static_cast<qint64>(result.requestId);
                 payload[QLatin1String("cameraKey")] = result.cameraKey;
-                payload[QLatin1String("pointCount")] = static_cast<int>(result.pointCloud.pointCount);
+                payload[QLatin1String("pointCount")] = result.pointCloud.pointCount;
                 payload[QLatin1String("width")] = result.pointCloud.width;
                 payload[QLatin1String("height")] = result.pointCloud.height;
                 payload[QLatin1String("elapsedMs")] = static_cast<int>(result.elapsedMs);
                 payload[QLatin1String("errorCode")] = static_cast<int>(result.errorCode);
                 sendToClient(buildEnvelope(QLatin1String(msg_type::kEventImageCaptured), nextEventId(), payload));
-            },
-            Qt::QueuedConnection);
+            });
 
         connect(service, &mech_eye::MechEyeService::fatalError, this,
-            [this](scan_tracking::mech_eye::CaptureErrorCode code, QString message) {
+            [this](scan_tracking::mech_eye::CaptureErrorCode code, const QString& message) {
+                if (!hasClient()) {
+                    return;
+                }
                 QJsonObject payload;
                 payload[QLatin1String("message")] = message;
                 payload[QLatin1String("level")] = 3;
                 payload[QLatin1String("code")] = static_cast<int>(code);
                 sendToClient(buildEnvelope(QLatin1String(msg_type::kEventAlarm), nextEventId(), payload));
-                if (hasClient()) {
-                    pushDeviceStatus();
-                }
-            },
-            Qt::QueuedConnection);
+                pushDeviceStatus();
+            });
     };
     connectOne(m_mechEyeTelescopic);
     connectOne(m_mechEyeArm);
@@ -1756,8 +1893,12 @@ void HmiTcpServer::connectVisionPipelineSignals()
 {
     if (!m_visionPipeline) return;
 
+    // 同线程只取摘要字段，避免 QueuedConnection 拷贝整包 MultiCameraCaptureBundle。
     connect(m_visionPipeline, &vision::VisionPipelineService::bundleCaptureFinished, this,
-        [this](scan_tracking::vision::MultiCameraCaptureBundle bundle) {
+        [this](const scan_tracking::vision::MultiCameraCaptureBundle& bundle) {
+        if (!hasClient()) {
+            return;
+        }
         QJsonObject payload;
         payload[QLatin1String("segmentIndex")] = bundle.request.segmentIndex;
         payload[QLatin1String("taskId")] = static_cast<int>(bundle.request.taskId);
@@ -1765,8 +1906,7 @@ void HmiTcpServer::connectVisionPipelineSignals()
         payload[QLatin1String("hikAOk")] = bundle.hikCameraAResult.success();
         payload[QLatin1String("hikBOk")] = bundle.hikCameraBResult.success();
         sendToClient(buildEnvelope(QLatin1String(msg_type::kEventBundleCaptured), nextEventId(), payload));
-    },
-        Qt::QueuedConnection);
+    });
 }
 
 // --- 日志转发实现（默认关闭，见 kForwardQtLogsToHmi）---
@@ -1823,7 +1963,7 @@ void HmiTcpServer::uninstallLogForwarder()
     s_logForwarderInstalled = false;
 }
 
-// --- 综合检测结果推送（演示初版）---
+// --- 综合检测结果推送 ---
 
 QJsonObject HmiTcpServer::buildInspectionFinishedPayload(const flow_control::InspectionResult& result)
 {
@@ -1869,7 +2009,7 @@ void HmiTcpServer::publishInitialInspectionDisplay()
     sendToClient(buildEnvelope(QLatin1String(msg_type::kEventInspectionFinished), nextEventId(), payload));
 
     qInfo(LOG_HMI_SERVER).noquote()
-        << QStringLiteral("[TCPIP] 显控连接后已推送初始检测展示帧 event.inspection.finished（全零占位）");
+        << QStringLiteral("[TCPIP] 显控连接后已推送初始检测展示帧 event.inspection.finished（等待检测）");
 }
 
 void HmiTcpServer::publishInspectionResult(const flow_control::InspectionResult& result)

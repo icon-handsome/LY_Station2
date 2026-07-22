@@ -38,6 +38,37 @@ QString ensureDirectoryExists(const QString& directoryPath)
     return QDir(directoryPath).absolutePath();
 }
 
+QString capturePointDirectory(
+    const QString& runRoot,
+    int pathId,
+    const QString& deviceTag,
+    int pointIndex)
+{
+    const QString resolved = ensureDirectoryExists(resolveCaptureCacheRoot(runRoot));
+    if (resolved.isEmpty()) {
+        return QString();
+    }
+
+    const int safePathId = pathId > 0 ? pathId : 0;
+    const int safePointIndex = pointIndex > 0 ? pointIndex : 0;
+    QString tag = deviceTag.trimmed().toLower();
+    if (tag.isEmpty()) {
+        tag = QStringLiteral("arm");
+    }
+
+    const QString pathDir = ensureDirectoryExists(
+        QDir(resolved).absoluteFilePath(QStringLiteral("path_%1").arg(safePathId)));
+    if (pathDir.isEmpty()) {
+        return QString();
+    }
+    const QString deviceDir = ensureDirectoryExists(QDir(pathDir).absoluteFilePath(tag));
+    if (deviceDir.isEmpty()) {
+        return QString();
+    }
+    return ensureDirectoryExists(
+        QDir(deviceDir).absoluteFilePath(QString::number(safePointIndex)));
+}
+
 QString captureCacheMech3DDir(const QString& root)
 {
     const QString resolved = ensureDirectoryExists(resolveCaptureCacheRoot(root));

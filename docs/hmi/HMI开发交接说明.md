@@ -1,12 +1,11 @@
 # HMI 显控 TCP 开发交接说明
 
-**文档版本**: v1.6  
-**最后更新**: 2026-06-16  
+**文档版本**: v1.7  
+**最后更新**: 2026-07-22  
 **适用范围**: 本仓库（IPC_Station2，第二工位专用）— **仅 TCP Server 端**；麒麟 OS Qt 显控为独立 Client 工程。
 
-> **v1.6 变更**：`cmd.debug_trigger_inspection` 已接入 `evaluateCachedInspection` + `publishInspectionResult`（缓存校验占位，不写 PLC）；`Trig_Inspection` 正式流程同样走 `finishInspection`。  
-> **v1.5 变更（第二工位骨架）**：本仓已移除 `TrackingService` 与第一工位坡口算法；`event.inspection.finished` 测量字段精简为 `quality_code`；`cmd.set_bevel_recipe` 保留协议占位（返回未实现）；已删除 `[Hmi] allowDebugTriggerInspection`。  
-> **v1.4 变更**：主流程改内存缓存；调试检测从内存读取三段点云；位姿拼接落盘至 `output/run_*`。（**第一工位路径已不在本仓**）
+> **v1.7 变更**：清理第一工位坡口 / Tracking 文案与协议样例；`cmd.get_config` 配置节改为 `scanPaths`；`event.inspection.finished` 以 `headMetrics`（含 `qualityCode`）为准；`cmd.set_bevel_recipe` 仍识别但固定失败。  
+> **v1.6 变更**：`cmd.debug_trigger_inspection` 接入缓存评估 + `publishInspectionResult`（不写 PLC）。
 
 > **新接手请先读**：本文 → [`checklists/现场联调_阶段0-1.md`](./checklists/现场联调_阶段0-1.md) → [`封头检测工位_TCP_IP显控通信协议_v1.0.md`](../protocols/封头检测工位_TCP_IP显控通信协议_v1.0.md)
 
@@ -28,7 +27,7 @@
 
 - **协议**：v1.0，帧格式 `[uint32 大端长度][UTF-8 JSON]`，信封字段 `version/msgId/type/timestamp/payload`。
 - **角色**：Core = TCP Server（单客户端）；显控 = TCP Client。
-- **本仓库不包含** 显控客户端代码；Qt 侧按协议自行实现或使用 `serializeFrame` / `buildEnvelope` 语义（可参考 `hmi_protocol.h`）。
+- **本仓库不包含** 显控客户端代码；Qt 侧按协议自行实现（可参考 `hmi_protocol.h`）。
 
 ---
 
@@ -41,61 +40,54 @@
 | `app/src/console_runtime.cpp` | 读 `config.ini [Hmi]` 创建 `HmiTcpServer`、`bindServiceSignals()`、`start()` |
 | `config.ini` `[Hmi]` | `enabled`、`tcpPort`（默认 9900） |
 
-**日志分类**：`hmi.server`、`hmi.session`；带 `[TCPIP]` 前缀的收发摘要（高频 status/心跳不刷屏）。
+**日志分类**：`hmi.server`、`hmi.session`；带 `[TCPIP]` 前缀的收发摘要。
 
-### 2.1 检测结果推送链路（第二工位）
+### 2.1 检测结果推送链路
 
 ```text
 Trig_Inspection（PLC）或 cmd.debug_trigger_inspection（显控）
-  → evaluateStation2Inspection（ScanSegmentCache 校验占位）
+  → evaluateStation2Inspection
   → finishInspection → HmiTcpServer::publishInspectionResult
   → TCP event.inspection.finished
 ```
 
-- 显控 TCP 连接成功后推送**初始占位帧**（`resultCode=0`，`message="等待检测"`）。
-- PLC 正式触发：写 `NG_Reason*` 寄存器并完成 Res/Ack 后推送 HMI。
+- 显控 TCP 连接成功后推送**初始帧**（`resultCode=0`，`message="等待检测"`）。
+- PLC 正式触发：写 `NG_Reason*` 并完成 Res/Ack 后推送 HMI。
 - `cmd.debug_trigger_inspection`：从缓存评估并推送，**不写 PLC**。
-- `cmd.set_bevel_recipe`：返回失败说明（第一工位坡口配方已移除）。
+- `cmd.set_bevel_recipe`：固定失败（已废弃）。
 
 ---
 
 ## 3. 已实现能力（Core Server）
 
-### 3.1 传输与连接（阶段 0）
+### 3.1 传输与连接
 
 - [x] 长度前缀帧、粘包/半包、最大 1MB
 - [x] 单客户端；新连接踢旧连接
 - [x] `core.hello` / `hmi.hello`
 - [x] 心跳：Core 2s `heartbeat.ping`；客户端任意消息重置 6s 超时
-- [x] 连接后全量 `status.*` + 周期 500ms 轮询（payload 变更去重，稳态不刷 `status.camera`）
+- [x] 连接后全量 `status.*` + 周期 500ms 轮询（payload 变更去重）
 
-### 3.2 监视面（阶段 1）
+### 3.2 监视面
 
-- [x] `status.system` / `status.plc` / `status.camera` / `status.device`
-- [x] `status.plc` 辅机字段：`telescopicRodStatus` / `rollerSetFreqHz` / `rollerRunFreqHz` / `electromagnetStatus` / `estopButtonStatus`（两工位均推送；status=2 时 `event.alarm` code 920/921）
-- [x] 状态变化即时推送
-- [x] `event.scan.*`、`event.bundle.captured`、`event.image.captured`
-- [x] `event.alarm`、业务事件（绑定 StateMachine）
+- [x] `status.system`（含 `scanPathProgress`）/ `status.plc` / `status.camera` / `status.device`
+- [x] 双 MechEye、臂/杆段进度、辅机字段与 920/921 报警
+- [x] `event.scan.*`、`event.path.*`、`event.bundle.captured`、`event.image.captured`
+- [x] `event.alarm`、业务 `event.*.finished`（绑定 StateMachine）
 
 ### 3.3 控制与调试命令
 
 - [x] `cmd.start` / `cmd.stop` / `cmd.reset` / `cmd.clear_alarm`
-- [x] `cmd.get_status` / `cmd.get_config`
+- [x] `cmd.get_status` / `cmd.get_config`（含 `scanPaths`）
 - [x] `cmd.modbus_connect` / `cmd.modbus_disconnect`
-- [x] `cmd.capture_mech_eye` / `cmd.capture_bundle`
-- [x] `cmd.refresh_camera`（当前仅刷新 MechEye）
-- [x] `cmd.debug_trigger_inspection`（从段缓存评估并推送 `event.inspection.finished`，不写 PLC）
-- [x] `cmd.set_bevel_recipe`（占位：返回「第二工位未实现」）
+- [x] `cmd.capture_mech_eye` / `cmd.capture_bundle` / `cmd.refresh_camera`
+- [x] `cmd.debug_trigger_inspection`
+- [x] `cmd.set_bevel_recipe`（废弃：固定失败）
+- [x] `cmd.report_person_zone_alarm`
 
 ### 3.4 检测测量结构化
 
-- [x] `event.inspection.finished` 含 `resultCode`、`ngReasonWord*`、`measureItemCount`、`quality_code`、`message`
-- [x] 连接后初始占位帧 + 检测完成推送（OK/NG/未实现均推送）
-
-### 3.5 配置与设备故障字
-
-- [x] `config.ini [Hmi]`：`enabled`、`tcpPort`
-- [x] `status.device.faultWord0` 位表聚合，见协议 §2.4
+- [x] `event.inspection.finished`：`resultCode`、`ngReasonWord*`、`pathId`/`algorithm`、`headMetrics.*`、`message`
 
 ---
 
@@ -104,11 +96,10 @@ Trig_Inspection（PLC）或 cmd.debug_trigger_inspection（显控）
 | 项 | 状态 | 说明 |
 |----|------|------|
 | `cmd.trigger_scan` / `cmd.trigger_inspection` 等 | **拒绝** | 须 PLC→状态机触发（防撞机） |
-| `cmd.debug_trigger_inspection` | **已实现（占位算法）** | 缓存校验 + 推送；不写 PLC |
-| `cmd.set_bevel_recipe` | **占位** | 第一工位配方已移除 |
+| `cmd.set_bevel_recipe` | **废弃** | 固定失败应答 |
 | `event.task.*` | 未实现 | 协议常量已有 |
 | `event.log` | 默认关闭 | `kForwardQtLogsToHmi=false` |
-| 无显控连接时补发最后一帧检测结果 | 未实现 | TODO(hmi-demo) |
+| 无显控连接时补发最后一帧检测结果 | 未实现 | 可选增强 |
 | Qt 显控 Client + UI | **外部仓库** | 本仓库不维护客户端 |
 
 ---
@@ -119,35 +110,24 @@ Trig_Inspection（PLC）或 cmd.debug_trigger_inspection（显控）
 |------|------|
 | 服务启动 | `app/src/console_runtime.cpp` |
 | 命令分发 / 状态推送 / `publishInspectionResult` | `modules/hmi_server/src/hmi_tcp_server.cpp` |
-| 检测 Handler 占位 | `modules/flow_control/src/handlers/inspection_handler.cpp` |
 | 帧组包 / 协议常量 | `modules/hmi_server/src/hmi_protocol.cpp`、`hmi_protocol.h` |
 
----
+## 6. 本地快速验证
 
-## 6. 现场联调（Core + 外部 Qt Client）
-
-1. `config.ini`：`[Hmi] enabled=true`、`tcpPort=9900`
-2. 启动 `scan-tracking.exe`，确认 HMI TCP 监听日志
-3. 由 **Qt 显控** 或任意遵守协议的 TCP 客户端连接并联调（见联调文档）
-4. 验收步骤：[`checklists/现场联调_阶段0-1.md`](./checklists/现场联调_阶段0-1.md)
-
----
+1. `config.ini [Hmi] enabled=true`，`tcpPort=9900`
+2. 启动 Core，确认 HMI TCP 监听日志
+3. 由 Qt 显控或任意遵守协议的 TCP 客户端连接并联调
 
 ## 7. Qt 显控侧（不在本仓库）
 
-1. 在麒麟 Qt 工程中实现 TCP Client（`QTcpSocket`）
-2. 按 `hmi_protocol.h` 实现长度头 + JSON 解帧与 `type` 分发
-3. 可引用本仓库 `scan_tracking_hmi_protocol` 的常量与 `serializeFrame` 逻辑（拷贝或子模块，勿在本仓库加 Client 目标）
-4. UI 绑定 `status.*` / `event.*`；**不要**调用 `cmd.trigger_*`（Core 会拒绝）
-5. 演示检测页可调用 `cmd.debug_trigger_inspection`（须先完成 ScanSegment 采集以填充段缓存）
-
----
+1. 按协议实现长度头 + JSON 解帧与 `type` 分发
+2. 绑定 `headMetrics.qualityCode` 与第二工位测量字段；勿再依赖坡口键 / 顶层 `quality_code` / `cmd.get_config.tracking`
+3. 可参考本仓库 `scan_tracking_hmi_protocol` 的常量与 `serializeFrame` 语义（拷贝即可，勿在本仓加 Client 目标）
 
 ## 8. 相关文档
 
 | 文档 | 用途 |
 |------|------|
-| [封头检测工位_TCP_IP显控通信协议_v1.0.md](../protocols/封头检测工位_TCP_IP显控通信协议_v1.0.md) | 消息与 payload |
-| [checklists/现场联调_阶段0-1.md](./checklists/现场联调_阶段0-1.md) | 联调验收 |
+| [封头检测工位_TCP_IP显控通信协议_v1.0.md](../protocols/封头检测工位_TCP_IP显控通信协议_v1.0.md) | 消息与 payload（文件名历史遗留，内容已按第二工位修订） |
+| [现场联调_阶段0-1.md](./checklists/现场联调_阶段0-1.md) | 联调清单 |
 | [第二工位骨架删减说明.md](../guides/第二工位骨架删减说明.md) | 本仓 HMI 保留范围 |
-| [flow_control架构说明.md](../guides/flow_control架构说明.md) | Handler / PlcTaskHost 与检测链路 |

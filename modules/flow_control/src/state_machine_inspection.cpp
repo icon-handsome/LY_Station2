@@ -58,6 +58,66 @@ void StateMachine::finishInspection(const InspectionResult& result)
     m_codeReadPending = false;
     m_codeReadCameraIp.clear();
 
+    publishInspectionOutcome(result, QStringLiteral("Trig_Inspection"));
+    markCurrentPathInspectionDone();
+    if (result.resultCode == 1) {
+        const int pathId = result.pathId > 0
+            ? result.pathId
+            : (common::ConfigManager::instance() != nullptr
+                   ? common::ConfigManager::instance()->activePathId()
+                   : 0);
+        maybeEmitPathFinished(pathId, result.resultCode);
+    }
+
+    const bool dataValid = result.resultCode == 1 || result.resultCode == 2;
+    const protocol::AckState ackState = dataValid ? protocol::AckState::Completed
+                                                  : protocol::AckState::Failed;
+    completeActiveTask(result.resultCode, ackState, dataValid);
+
+    // 检测成功后由 IPC 自清缓存并切下一条路径；不依赖 PLC Trig_ResultReset / pathId。
+    if (result.resultCode == 1) {
+        prepareNextScanPathAfterSuccess();
+    }
+}
+
+bool StateMachine::isActiveCodeReadTrigger() const
+{
+    return m_activeTask.definition != nullptr &&
+           std::strcmp(m_activeTask.definition->name, "Trig_CodeRead") == 0;
+}
+
+QString StateMachine::currentInspectionRunKey() const
+{
+    if (!m_scanSegmentCache.runCaptureRoot().isEmpty()) {
+        return m_scanSegmentCache.runCaptureRoot();
+    }
+    return QStringLiteral("task%1_n%2")
+        .arg(m_scanSegmentCache.runTaskId())
+        .arg(m_scanSegmentCache.cachedSegmentCount());
+}
+
+void StateMachine::markCurrentPathInspectionDone()
+{
+    const auto* cfgMgr = common::ConfigManager::instance();
+    m_lastInspectedPathId = cfgMgr != nullptr ? cfgMgr->activePathId() : -1;
+    m_lastInspectedRunKey = currentInspectionRunKey();
+}
+
+bool StateMachine::alreadyInspectedCurrentPathRun() const
+{
+    const auto* cfgMgr = common::ConfigManager::instance();
+    if (cfgMgr == nullptr) {
+        return false;
+    }
+    return m_lastInspectedPathId == cfgMgr->activePathId() &&
+           !m_lastInspectedRunKey.isEmpty() &&
+           m_lastInspectedRunKey == currentInspectionRunKey();
+}
+
+void StateMachine::publishInspectionOutcome(
+    const InspectionResult& result,
+    const QString& triggerLabel)
+{
     InspectionSummary summary;
     summary.resultCode = result.resultCode;
     summary.ngReasonWord0 = result.ngReasonWord0;
@@ -72,11 +132,6 @@ void StateMachine::finishInspection(const InspectionResult& result)
             result.measurement.codeValue);
     }
 
-    const bool dataValid = result.resultCode == 1 || result.resultCode == 2;
-    const protocol::AckState ackState = dataValid ? protocol::AckState::Completed
-                                                  : protocol::AckState::Failed;
-    completeActiveTask(result.resultCode, ackState, dataValid);
-
     emit inspectionFinished(
         result.resultCode,
         result.ngReasonWord0,
@@ -88,31 +143,86 @@ void StateMachine::finishInspection(const InspectionResult& result)
     emit inspectionResultReady(result);
 
     qInfo(LOG_FLOW).noquote()
-        << QStringLiteral("Trig_Inspection：已完成 Res=") << result.resultCode
+        << triggerLabel << QStringLiteral("：已完成 Res=") << result.resultCode
         << QStringLiteral(" pathId=") << result.pathId
         << QStringLiteral(" pathName=") << result.pathName
         << QStringLiteral(" algorithm=") << result.algorithm
         << QStringLiteral(" qualityCode=") << result.measurement.qualityCode
+        << QStringLiteral(" lengthMm=") << result.measurement.lengthMm
+        << QStringLiteral(" volumeL=") << result.measurement.volumeLiters
+        << QStringLiteral(" thicknessMm=") << result.measurement.thicknessMm
         << QStringLiteral(" segments=") << result.sourcePointCount
         << QStringLiteral(" message=") << result.message;
-
-    // 检测成功后由 IPC 自清缓存并切下一条路径；不依赖 PLC Trig_ResultReset / pathId。
-    if (result.resultCode == 1) {
-        prepareNextScanPathAfterSuccess();
-    }
 }
 
-bool StateMachine::isActiveCodeReadTrigger() const
+void StateMachine::maybeAutoRunInspectionBeforeLeavingPath()
 {
-    return m_activeTask.definition != nullptr &&
-           std::strcmp(m_activeTask.definition->name, "Trig_CodeRead") == 0;
+    // 临时策略：PLC 暂不发 Trig_Inspection 时，切路/清缓存前自动跑齐套路径的算法。
+    if (alreadyInspectedCurrentPathRun()) {
+        return;
+    }
+    if (!isActivePathQuotaComplete()) {
+        qInfo(LOG_FLOW).noquote()
+            << QStringLiteral("切路前跳过自动检测：当前路径未齐套（缓存不足）。");
+        return;
+    }
+
+    const auto* cfgMgr = common::ConfigManager::instance();
+    if (cfgMgr == nullptr) {
+        return;
+    }
+
+    const QString algorithm = cfgMgr->activePathAlgorithm().trimmed();
+    if (algorithm.isEmpty() ||
+        algorithm == QLatin1String("code_read") ||
+        algorithm == QLatin1String("self_check")) {
+        qInfo(LOG_FLOW).noquote()
+            << QStringLiteral("切路前跳过自动检测：algorithm=")
+            << (algorithm.isEmpty() ? QStringLiteral("<empty>") : algorithm)
+            << QStringLiteral("（由专用触发处理或不适用）。");
+        return;
+    }
+
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("临时策略：切路前自动执行检测（等价 Trig_Inspection） pathId=")
+        << cfgMgr->activePathId()
+        << QStringLiteral(" name=") << cfgMgr->activePathName()
+        << QStringLiteral(" algorithm=") << algorithm
+        << QStringLiteral(" cache arm=") << m_scanSegmentCache.cachedCountForDevice(
+               common::ScanDeviceKind::Arm)
+        << QStringLiteral("/") << cfgMgr->enabledArmPointCount()
+        << QStringLiteral(" telescopic=")
+        << m_scanSegmentCache.cachedCountForDevice(common::ScanDeviceKind::Telescopic)
+        << QStringLiteral("/") << cfgMgr->enabledTelescopicPointCount();
+
+    const InspectionResult result = evaluateCachedInspection(m_scanSegmentCache.runTaskId());
+    publishInspectionOutcome(result, QStringLiteral("AutoInspection"));
+    markCurrentPathInspectionDone();
+    if (result.resultCode == 1) {
+        maybeEmitPathFinished(cfgMgr->activePathId(), result.resultCode);
+    }
+
+    // 无活动 Trig_Inspection 任务时，仍把 Inspection 通道 Ack/Res 写成完成态，便于 HMI 观察。
+    if (m_activeTask.definition == nullptr ||
+        m_activeTask.definition->stage != protocol::Stage::Inspection) {
+        if (const protocol::TriggerDefinition* inspectionTrig = protocol::triggerByOffset(
+                protocol::registers::modbusIndexFromPlcAddress(40024))) {
+            const bool dataValid = result.resultCode == 1 || result.resultCode == 2;
+            sendRes(*inspectionTrig, result.resultCode);
+            sendAck(
+                *inspectionTrig,
+                dataValid ? protocol::AckState::Completed : protocol::AckState::Failed);
+        }
+    }
 }
 
 void StateMachine::prepareNextScanPathAfterSuccess()
 {
     // PLC 不做 ResultReset：检测成功 / 开下一路时 IPC 自行清段缓存与扫描完成寄存器，再切路径。
     // 故意保留本次 Inspection 结果寄存器，供 PLC/HMI 读取。
-    resetScanSegmentCache();
+    maybeAutoRunInspectionBeforeLeavingPath();
+
+    clearScanSegmentCacheForPathSwitch();
     if (isModbusConnected()) {
         clearScanSegmentDoneRegisters();
     }
@@ -139,6 +249,10 @@ void StateMachine::prepareNextScanPathAfterSuccess()
         << QStringLiteral(" 配额 arm=") << cfgMgr->enabledArmPointCount()
         << QStringLiteral(" telescopic=") << cfgMgr->enabledTelescopicPointCount()
         << QStringLiteral("；PLC 可直接按新路径从段号 1 继续采集。");
+
+    // 新路径立刻告知 HMI「当前进行中」（不必等下一段扫到才 started）
+    m_emittedPathStarted.remove(toPathId);
+    maybeEmitPathStarted(toPathId);
 }
 
 bool StateMachine::applyPlcScanPathId(
@@ -177,6 +291,9 @@ bool StateMachine::applyPlcScanPathId(
         return false;
     }
 
+    // 先对即将离开的路径做自动检测（需仍指向旧 pathId 且缓存未清）。
+    maybeAutoRunInspectionBeforeLeavingPath();
+
     if (!cfgMgr->setActivePathId(requested)) {
         qWarning(LOG_FLOW).noquote()
             << QStringLiteral("PLC ScanPathId(40047)=") << requested
@@ -184,8 +301,8 @@ bool StateMachine::applyPlcScanPathId(
         return false;
     }
 
-    // pathId 变化：清段缓存与扫描 Done，避免旧路径段混入新路径检测。
-    resetScanSegmentCache();
+    // pathId 变化：清段缓存与扫描 Done，避免旧路径段混入新路径检测；保留同一运行实例落盘目录。
+    clearScanSegmentCacheForPathSwitch();
     if (isModbusConnected()) {
         clearScanSegmentDoneRegisters();
     }
@@ -197,6 +314,15 @@ bool StateMachine::applyPlcScanPathId(
         << QStringLiteral(" algorithm=") << cfgMgr->activePathAlgorithm()
         << QStringLiteral(" 配额 arm=") << cfgMgr->enabledArmPointCount()
         << QStringLiteral(" telescopic=") << cfgMgr->enabledTelescopicPointCount();
+
+    // PLC 切路：若离开的路径此前已检测完成则补 finished；新路径允许重新 started
+    if (m_lastInspectedPathId == fromPathId) {
+        maybeEmitPathFinished(fromPathId, 1);
+    }
+    m_emittedPathStarted.remove(requested);
+    m_emittedPathFinished.remove(requested);
+    m_emittedAllPathsFinished = false;
+    maybeEmitPathStarted(requested);
     return true;
 }
 
@@ -519,6 +645,9 @@ void StateMachine::finishCodeRead(quint16 resultCode, const QString& codeValue, 
         << QStringLiteral(" message=") << effectiveMessage;
 
     if (resultCode == 1) {
+        if (const auto* cfgMgr = common::ConfigManager::instance()) {
+            maybeEmitPathFinished(cfgMgr->activePathId(), resultCode);
+        }
         prepareNextScanPathAfterSuccess();
     }
 }

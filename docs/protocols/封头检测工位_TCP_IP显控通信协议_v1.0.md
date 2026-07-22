@@ -1,7 +1,7 @@
-# 封头检测工位 IPC-Qt 显控通信协议
+# 第二工位 IPC-Qt 显控通信协议
 
-**版本**：v1.0（2026-05-25 增补 `cmd.debug_trigger_inspection` 与检测推送说明）  
-**适用范围**：第一工位核心控制程序（Windows）与 Qt 显控界面（麒麟 OS）的 TCP/IP 通信。
+**版本**：v1.0（第二工位修订：去掉坡口/Tracking 遗留说明，对齐当前 Core 推送字段）  
+**适用范围**：`IPC_Station2` 核心控制程序（Windows）与 Qt 显控界面（麒麟 OS）的 TCP/IP 通信。
 
 ---
 
@@ -59,11 +59,13 @@ TCP 是流式协议，为解决粘包和半包问题，采用长度前缀的帧�
 - **payload 字段**：
   - `ipcState` (int): 0=未初始化, 1=初始化中, 2=就绪, 3=忙碌, 4=暂停, 5=故障
   - `appState` (string): "Init", "Ready", "Scanning", "Error"
-  - `stage` (int): 当前工艺阶段 0~10
+  - `stage` (int): 当前工艺阶段（含 `11`=伸缩杆扫描 TelescopicScan）
   - `alarmLevel` (int): 0=无, 1=提示, 2=黄警, 3=红警
   - `alarmCode`, `warnCode` (int)
   - `ipcReady` (int): 0/1
   - `progress` (int): 0~100
+  - `stationId` / `stationName` / `workMode`(string，工位 profile) / `enabledTriggers`
+  - `scanPathProgress` (object)：当前路径基础显示，见 §2.5 / `docs/hmi/路径状态交互指令.txt`
 
 ### 2.3 PLC 状态 (`status.plc`)
 - **频率**：500ms 周期。
@@ -74,7 +76,9 @@ TCP 是流式协议，为解决粘包和半包问题，采用长度前缀的帧�
   - `flowEnable` (int): 0/1
   - `safetyWord` (int): 位域字典
   - `taskId` (int), `productType` (int), `recipeId` (int)
-  - `scanSegmentIndex` (int), `scanSegmentTotal` (int)
+  - `armScanSegmentIndex` / `telescopicScanSegmentIndex` / `scanSegmentIndex`(兼容，等同臂段号)
+  - `scanSegmentTotal`、`activePathId` / `activePathName` / `activePathAlgorithm`
+  - `armPointCount` / `telescopicPointCount`
   - `robotStatusWord` (int): 埃斯顿机械臂状态字（PLC 转发 Robot Modbus 40004，位定义见 IPC-PLC 协议 §8.1.1）
   - `telescopicRodStatus` (int): 伸缩杆状态，0=待机, 1=运行, 2=故障（PLC 40041）
   - `rollerSetFreqHz` (int): 滚轮设定频率 Hz（PLC 40042）
@@ -82,18 +86,21 @@ TCP 是流式协议，为解决粘包和半包问题，采用长度前缀的帧�
   - `electromagnetStatus` (int): 电磁吸盘状态，0=退磁, 1=充磁, 2=报警（PLC 40044）
   - `estopButtonStatus` (int): 急停按钮，0=断开(未按下), 1=按下（PLC 40045）
   - `modbusConnected` (bool)
+  - `stationId` / `stationName` / `stationWorkMode`
 
-> **辅机字段**：第一、第二工位均推送；无 PLC 数据时缺省为 0。`telescopicRodStatus` 或 `electromagnetStatus` 变为 **2** 时，Core 向显控推送 `event.alarm`（`level=2`，`code` 920/921，见 §2.8）。
+> **辅机字段**：无 PLC 数据时缺省为 0。`telescopicRodStatus` 或 `electromagnetStatus` 变为 **2** 时，Core 向显控推送 `event.alarm`（`level=2`，`code` 920/921，见 §2.8）。
 
 ### 2.4 相机与设备状态 (`status.camera` / `status.device`)
 - **频率**：
   - Core 每 **500ms** 轮询一次是否需推送，但 **仅当 JSON payload 与上次下发不一致时才真正发送**（变更去重，稳态下不会每 500ms 刷一条）。
   - 相机/流水线/梅卡等 **连接态或 `state` 变化** 时立即尝试推送，同样受 payload 去重约束（海康仅 `connected` 变化才触发 `status.camera` 内容变化，采图过程中的文字状态不会刷屏）。
   - 新客户端接入时 **强制全量** 各推送一次（含 `status.camera`）。
-- **显控侧预期**：稳态监视下 `status.camera` 很少出现；连接瞬间可能连收数条（`mechEye`/`hikA`/`hikB`/`hikC`/`pipeline` 分别就绪时）；不应出现无变化的周期性刷屏。
+- **显控侧预期**：稳态监视下 `status.camera` 很少出现；连接瞬间可能连收数条（双 MechEye / hik / pipeline 分别就绪时）；不应出现无变化的周期性刷屏。
 - **camera payload**:
-  - `mechEye`: `{ state(int), model, sn, connected(bool) }`
-  - `hikA`, `hikB`, `hikC`: `{ roleName, connected(bool) }`（`hikC` 的 `connected`：MVS SDK 已连接 **或** 智能相机 TCP 已接入）
+  - `mechEyeTelescopic` / `mechEyeArm`: `{ roleName, state(int), connected(bool) }`
+  - `mechEye`: 兼容别名，等同伸缩杆 MechEye
+  - `hikA`, `hikB`, `hikC`: `{ roleName, connected(bool) }`
+  - `hikCTelescopic` / `hikCArm`: `{ ipAddress, connected(bool) }`（智能相机分组）
   - `pipeline`: `{ state(int) }`
 - **device payload**:
   - `onlineWord0`, `faultWord0` (int) 位域字典（`online` 与 `fault` 按位对齐，便于显控做设备条）
@@ -104,37 +111,49 @@ TCP 是流式协议，为解决粘包和半包问题，采用长度前缀的帧�
 |-----|---------------|--------------|
 | 0 | IPC Core 进程在线 | IPC 故障（`ipcState=Fault` / `appState=Error` / 红警 `alarmLevel≥3`） |
 | 1 | HMI 客户端已连接 | （保留） |
-| 2 | Mech-Eye 可用（非 Idle/Error） | Mech-Eye `Error` |
+| 2 | Mech-Eye 可用（非 Idle/Error；臂或杆任一） | Mech-Eye `Error` |
 | 3 | 视觉流水线 `Ready` | 视觉流水线 `Error` |
 | 4 | CXP 双目 A/B 或海康 C 任一台已连接 | CXP A/B 与海康 C 均未连接（服务已配置时） |
-| 5 | （保留） | （保留；Tracking 模块已移除） |
+| 5 | 扫描流水线已启动（`VisionPipeline::isStarted`） | （保留） |
 | 6 | Modbus 已连接 | Modbus 未连接 |
 | 7 | （保留） | 黄警 `alarmLevel≥2` |
 
 ### 2.5 流程事件 (`event.scan.*` / `event.task.*`)
-- `event.scan.started`: `{ segmentIndex, taskId }`
-- `event.scan.finished`: `{ segmentIndex, resultCode, imageCount, cloudFrameCount }`
+- `event.scan.started`: `{ segmentIndex, taskId, pathId?, pathName?, purpose? }`
+- `event.scan.finished`: `{ segmentIndex, resultCode, imageCount, cloudFrameCount, pathId?, pathName? }`
 - `event.image.captured`: `{ requestId, cameraKey, pointCount, width, height, elapsedMs, errorCode }` (不传原图)
-- `event.bundle.captured`: `{ segmentIndex, taskId, mechOk, hikAOk, hikBOk }`（`lbOk` 已移除）
+- `event.bundle.captured`: `{ segmentIndex, taskId, mechOk, hikAOk, hikBOk }`
+- `event.path.started` / `event.path.finished`：路径级进度（见 `docs/hmi/路径状态交互指令.txt`）
+- `event.scan_paths.all_finished` / `event.path.progress_reset`
+- `event.task.*`：协议保留，当前 Core 未推送
+
+`status.system` 另含 `scanPathProgress`：`currentPathId` / `currentPathName` / `enabledPathIds` / `completedPathIds` / `pathCount` / `allPathsComplete`。
 
 ### 2.6 检测结果 (`event.inspection.finished`)
 
-> **IPC_Station2（第二工位）**：第一工位坡口/Po_Kou 字段已移除；当前 payload 以 `quality_code` 为主；检测为**段缓存校验占位**（Res=1/2/3，非 Res=8）。
+> 第二工位测量量放在嵌套对象 `headMetrics`（键名沿用历史，语义为筒体/焊缝等综合指标，**不是**坡口 Po_Kou）。
 
 - **产生时机**：
   - **正式**：PLC `Trig_Inspection` → `InspectionHandler` → `finishInspection` → `publishInspectionResult`
   - **调试**：显控 `cmd.debug_trigger_inspection` → `evaluateCachedInspection` → `publishInspectionResult`（不写 PLC）
-- **推送策略**：`resultCode=1`（OK）、`2`（NG）、`3`（数据/缓存异常）均可推送；显控须处理失败场景。
-- **连接初始化**：显控 TCP 接入成功后，Core **一次性**推送 `event.inspection.finished`，`resultCode=0`，`quality_code=0`，`message="等待检测"`。
-- **payload 字段（当前第二工位）**：
-  - `resultCode` (int): **0=尚未检测/连接占位**，1=OK, 2=NG, 3=缓存/数据异常, 6=流程异常（StateMachine 超时等）
+- **推送策略**：`resultCode=1`（OK）、`2`（NG）、`3`（数据/缓存异常）、`6`（流程异常）均可推送；显控须处理失败场景。
+- **连接初始化**：显控 TCP 接入成功后，Core **一次性**推送 `event.inspection.finished`，`resultCode=0`，`headMetrics.qualityCode=0`，`message="等待检测"`。
+- **payload 顶层字段**：
+  - `resultCode` (int): **0=尚未检测/连接占位**，1=OK, 2=NG, 3=缓存/数据异常, 6=流程异常
   - `ngReasonWord0`, `ngReasonWord1` (int)
   - `measureItemCount` (int)
   - `sourcePointCount` (int)
-  - `quality_code` (int): 1=缓存校验通过（占位），2=段数据无效
-  - `message` (string): 概要描述
+  - `pathId` / `pathName` / `algorithm` (string)
+  - `codeValue` (string，可选)
+  - `message` (string)
+  - `headMetrics` (object)：见下
 
-**历史说明（第一工位，已不在 IPC_Station2）**：曾含 `head_angle_tol`、`blunt_height_tol`、`headMetrics` 等 Po_Kou 坡口字段；显控若仍绑定旧键，需按第二工位 UI 改版或做兼容层。
+- **`headMetrics` 主要字段**（按算法路径填充，未测项可为 0）：
+  - `qualityCode` (int): 1=通过，2=不通过/无效
+  - 焊缝：`mismatchMm` / `reinforcementMm` / `angularityMm` / `includedAngleDeg` / `leftUndercutMm` / `rightUndercutMm` / `maxUndercutMm` / `measuredSegmentCount`
+  - 厚度/内表面：`thicknessMm` / `thicknessPairCount` / `thicknessSuccessCount` / `innerDiameterMm` / `innerCircumferenceMm` / `innerRoundness` / …
+  - 长度容积：`lengthMm` / `volumeLiters` / `volumeRadiusMm` / `fittedOuterRadiusMm`
+  - 部分字段同时带 snake_case 别名（如 `thickness_mm`），便于旧绑定迁移
 
 ### 2.7 其他检测校验完成 (`event.xxx.finished`)
 - `event.pose_check.finished`: `{ success, resultCode, poseDeviationMm, rt[16], message }`
@@ -165,29 +184,29 @@ Qt 发送 request（附带不重复的 `msgId`），Core 执行后返回对应 `
 | `cmd.reset` | `{}` | - | 重置状态 |
 | `cmd.clear_alarm` | `{}` | - | 清除当前报警记录 |
 | `cmd.get_status` | `{}` | `system`, `plc`, `camera`, `device` 全量状态对象 | 主动拉取全量状态 |
-| `cmd.get_config` | `{ "section": "..." }` | 指定 section 或全量 JSON；`bevel.recipe` 含当前配方 | 获取 Core 侧配置 |
-| `cmd.set_bevel_recipe` | `{ "bevel_type": 0, "has_hole": false }` 等 | - | **占位**：第二工位返回失败说明（第一工位配方已移除） |
-| `cmd.trigger_scan` | `{ "segmentIndex": 1, "taskId": 123 }` | - | 触发单段扫描 |
+| `cmd.get_config` | `{ "section": "..." }` | 全量 JSON：`app`/`logger`/`modbus`/`camera`/`vision`/`flowControl`/`scanPaths`/`hmi`（无坡口配方） | 获取 Core 侧配置 |
+| `cmd.set_bevel_recipe` | （任意） | - | **废弃**：固定返回失败（第二工位无坡口配方） |
+| `cmd.trigger_scan` | `{ "segmentIndex": 1, "taskId": 123 }` | - | 触发单段扫描（**Core 拒绝**，须 PLC） |
 | `cmd.trigger_inspection` | `{ "taskId": 123 }` | - | 触发综合检测（**Core 拒绝**，须 PLC） |
-| `cmd.debug_trigger_inspection` | `{}` | - | 从段缓存评估并推送 `event.inspection.finished`（不写 PLC）；无缓存时 Res=3 |
-| `cmd.trigger_self_check` | `{}` | - | 显控触发自检；**Core 已接收并应答 success**，实际自检流程与 `event.self_check.finished` 推送待实现 |
-| `cmd.trigger_pose_check` | `{}` | - | 触发位姿校验 (当前为占位) |
-| `cmd.trigger_code_read` | `{}` | - | 触发条码读取 (当前为占位) |
-| `cmd.trigger_result_reset`| `{}` | - | 触发结果缓存清空 |
+| `cmd.debug_trigger_inspection` | `{}` | - | 从段缓存评估并推送 `event.inspection.finished`（不写 PLC） |
+| `cmd.trigger_self_check` | `{}` | - | 显控触发自检；**Core 已接收并应答 success**，完整流程待完善 |
+| `cmd.trigger_pose_check` | `{}` | - | **Core 拒绝**，须 PLC |
+| `cmd.trigger_code_read` | `{}` | - | **Core 拒绝**，须 PLC |
+| `cmd.trigger_result_reset`| `{}` | - | **Core 拒绝**，须 PLC |
 | `cmd.capture_mech_eye` | `{ "cameraKey":"...", "mode":0, "timeoutMs":5000 }` | `"requestId": 123` | 单相机独立采图 |
 | `cmd.capture_bundle` | `{ "segmentIndex":1, "taskId": 123 }` | `"requestId": 123` | 触发多相机集成采集 |
 | `cmd.refresh_camera` | `{}` | - | 刷新相机连接状态 |
 | `cmd.modbus_connect` | `{}` | - | 重连 PLC Modbus |
 | `cmd.modbus_disconnect` | `{}` | - | 断开 PLC Modbus |
 
-> **备注**：不需要支持 `cmd.set_config` （热修改配置），不涉及直接控制 PLC 寄存器的命令（Qt 不直接控制 PLC）。第二、第三工位参数暂不加入协议。  
-> **`cmd.trigger_*` 与 `cmd.debug_trigger_inspection` 区别**：除 `cmd.trigger_self_check`（仅接收应答，执行待实现）外，其余 `cmd.trigger_*` 一律拒绝（防撞机）；`cmd.debug_trigger_inspection` 为配置门控的演示/联调入口，默认关闭。
+> **备注**：不需要支持 `cmd.set_config`（热修改配置），不涉及直接控制 PLC 寄存器的命令（Qt 不直接控制 PLC）。  
+> **`cmd.trigger_*` 与 `cmd.debug_trigger_inspection` 区别**：除 `cmd.trigger_self_check`（仅接收应答，执行待完善）外，其余 `cmd.trigger_*` 一律拒绝（防撞机）；`cmd.debug_trigger_inspection` 为联调入口，不写 PLC。
 
 ---
 
 ## 4. 示例
 
-### 4.1 触发检测与响应
+### 4.1 触发检测被拒绝（须走 PLC）
 **Qt 请求：**
 ```json
 {
@@ -208,8 +227,8 @@ Qt 发送 request（附带不重复的 `msgId`），Core 执行后返回对应 `
   "type": "cmd.trigger_inspection",
   "timestamp": 1710000000050,
   "payload": {
-    "success": true,
-    "message": "Inspection triggered."
+    "success": false,
+    "message": "直接触发未实现，请使用 PLC"
   }
 }
 ```
@@ -226,34 +245,22 @@ Qt 发送 request（附带不重复的 `msgId`），Core 执行后返回对应 `
     "resultCode": 1,
     "ngReasonWord0": 0,
     "ngReasonWord1": 0,
-    "measureItemCount": 2,
+    "measureItemCount": 1,
     "sourcePointCount": 125000,
-    "head_angle_tol": 45.2,
-    "blunt_height_tol": 1.05,
-    "bevel_type": 0,
-    "icp_fitness": 0.98,
-    "quality_code": 0,
+    "pathId": 1,
+    "pathName": "straight_weld",
+    "algorithm": "weld_section",
+    "message": "焊缝检测通过",
     "headMetrics": {
-      "inner_diameter_mm": 0,
-      "roundness_tol": 0,
-      "straight_slope_tol": 0,
-      "head_depth_mm": 0,
-      "straight_height_tol": 0,
-      "bevel_angle_deg": 45.2,
-      "blunt_height_mm": 1.05,
-      "inner_circumference_mm": 0,
-      "hole_opening_mm": 0,
-      "joint_fit_up_angle_deg": 0,
-      "thickness_mm": 0,
-      "head_volume_m3": 0
-    },
-    "expected_bevel_type": 0,
-    "expected_angle_deg": 45,
-    "expected_length": 1,
-    "has_hole": false,
-    "angle_tol_deg": 2,
-    "length_tol_mm": 1,
-    "message": "坡口测量通过：angle=45.200 deg, length=1.050 mm, bevelType=0, icpFitness=0.980000。"
+      "qualityCode": 1,
+      "mismatchMm": 0.12,
+      "reinforcementMm": 1.05,
+      "maxUndercutMm": 0.3,
+      "measuredSegmentCount": 4,
+      "thicknessMm": 0,
+      "lengthMm": 0,
+      "volumeLiters": 0
+    }
   }
 }
 ```

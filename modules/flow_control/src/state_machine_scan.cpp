@@ -66,6 +66,9 @@ void applyLbPoseStitchingIfNeeded(vision::MultiCameraCaptureBundle* bundle)
 
 void StateMachine::notifyScanStarted(int segmentIndex, quint32 taskId)
 {
+    if (const auto* cfgMgr = common::ConfigManager::instance()) {
+        maybeEmitPathStarted(cfgMgr->activePathId());
+    }
     emit scanStarted(segmentIndex, taskId);
 }
 
@@ -236,7 +239,15 @@ void StateMachine::onMechEyeFatalError(mech_eye::CaptureErrorCode code, QString 
 void StateMachine::resetScanSegmentCache()
 {
     m_scanSegmentCache.reset();
-    qInfo(LOG_FLOW).noquote() << QStringLiteral("扫描段缓存已清空。");
+    qInfo(LOG_FLOW).noquote() << QStringLiteral("扫描段缓存已清空（含运行实例目录绑定）。");
+}
+
+void StateMachine::clearScanSegmentCacheForPathSwitch()
+{
+    m_scanSegmentCache.clearSegmentsKeepRunRoot();
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("已清段缓存并保留运行实例目录：")
+        << m_scanSegmentCache.runCaptureRoot();
 }
 
 }  // namespace scan_tracking::flow_control

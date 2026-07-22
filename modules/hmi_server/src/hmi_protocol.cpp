@@ -56,9 +56,9 @@ QString summarizeHmiTracePayload(const QString& type, const QJsonObject& payload
     if (type == QLatin1String(kStatusSystem)) {
         return QStringLiteral("ipcState=%1 appState=%2 alarmLevel=%3 progress=%4")
             .arg(payload.value(QLatin1String("ipcState")).toInt(-1))
-            .arg(payload.value(QLatin1String("appState")).toString())
-            .arg(payload.value(QLatin1String("alarmLevel")).toInt(-1))
-            .arg(payload.value(QLatin1String("progress")).toInt(-1));
+            .arg(payload.value(QLatin1String("appState")).toString(),
+                 QString::number(payload.value(QLatin1String("alarmLevel")).toInt(-1)),
+                 QString::number(payload.value(QLatin1String("progress")).toInt(-1)));
     }
     if (type == QLatin1String(kStatusPlc)) {
         QString summary = QStringLiteral("modbusConnected=%1")

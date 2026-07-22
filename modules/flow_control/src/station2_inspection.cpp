@@ -13,6 +13,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -131,6 +133,46 @@ bool extractFiniteXyz(
 
     *finitePointCount = finite;
     return finite > 0;
+}
+
+/// 简单体素降采样（保留每格首点）。厚度 DLL 内部也会体素，但先降到百万级以下可显著减内存/ICP 压力。
+void voxelDownsampleXyz(std::vector<float>* xyz, int* pointCount, float leafMm)
+{
+    if (xyz == nullptr || pointCount == nullptr || leafMm <= 0.0f || *pointCount <= 0) {
+        return;
+    }
+    constexpr int kSkipBelow = 400000;
+    if (*pointCount <= kSkipBelow) {
+        return;
+    }
+
+    const int n = *pointCount;
+    const float inv = 1.0f / leafMm;
+    std::unordered_set<uint64_t> occupied;
+    occupied.reserve(static_cast<size_t>(n / 8));
+    std::vector<float> out;
+    out.reserve(static_cast<size_t>(n / 4) * 3u);
+
+    for (int i = 0; i < n; ++i) {
+        const float x = (*xyz)[static_cast<size_t>(i) * 3u + 0u];
+        const float y = (*xyz)[static_cast<size_t>(i) * 3u + 1u];
+        const float z = (*xyz)[static_cast<size_t>(i) * 3u + 2u];
+        const auto ix = static_cast<int32_t>(std::floor(x * inv));
+        const auto iy = static_cast<int32_t>(std::floor(y * inv));
+        const auto iz = static_cast<int32_t>(std::floor(z * inv));
+        const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(ix)) << 42) ^
+                             (static_cast<uint64_t>(static_cast<uint32_t>(iy)) << 21) ^
+                             static_cast<uint64_t>(static_cast<uint32_t>(iz));
+        if (!occupied.insert(key).second) {
+            continue;
+        }
+        out.push_back(x);
+        out.push_back(y);
+        out.push_back(z);
+    }
+
+    *pointCount = static_cast<int>(out.size() / 3u);
+    *xyz = std::move(out);
 }
 
 void accumulateMeasurement(
@@ -648,49 +690,72 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
             return result;
         }
 
-        QVector<scan_tracking::thickness_measure::ThicknessPairClouds> apiPairs;
-        apiPairs.reserve(thicknessPairs.size());
+        // 逐对测量（不用 measurePairsAverage）：便于定位闪退点；SOR 已在 thickness_config 关闭。
+        // 注意：旧 DLL 在 ICP 失败早退时析构点云会堆损坏闪退，需换用已修复的 ThicknessMeasure.dll。
+        double thicknessSum = 0.0;
+        int success = 0;
+        QString lastError;
         for (const ThicknessPairRefs& pair : thicknessPairs) {
-            scan_tracking::thickness_measure::ThicknessPairClouds apiPair;
-            apiPair.inner.xyz = pair.inner->xyz.data();
-            apiPair.inner.pointCount = static_cast<size_t>(pair.inner->finiteCount);
-            apiPair.outer.xyz = pair.outer->xyz.data();
-            apiPair.outer.pointCount = static_cast<size_t>(pair.outer->finiteCount);
-            apiPairs.push_back(apiPair);
+            std::vector<float> innerXyz = pair.inner->xyz;
+            std::vector<float> outerXyz = pair.outer->xyz;
+            int innerPts = pair.inner->finiteCount;
+            int outerPts = pair.outer->finiteCount;
+            voxelDownsampleXyz(&innerXyz, &innerPts, 2.0f);
+            voxelDownsampleXyz(&outerXyz, &outerPts, 2.0f);
+
             qInfo(LOG_STATION2_INSPECTION)
-                << "thickness pair inner=" << pair.innerIndex
+                << "thickness pair begin inner=" << pair.innerIndex
                 << "outer=" << pair.outerIndex
-                << "innerPts=" << pair.inner->finiteCount
-                << "outerPts=" << pair.outer->finiteCount;
+                << "innerPts=" << pair.inner->finiteCount << "->" << innerPts
+                << "outerPts=" << pair.outer->finiteCount << "->" << outerPts;
+
+            scan_tracking::thickness_measure::ThicknessPairMeasurement one;
+            scan_tracking::thickness_measure::ThicknessMeasureError error;
+            if (!sharedThicknessMeasureService().measurePair(
+                    innerXyz.data(),
+                    static_cast<size_t>(innerPts),
+                    outerXyz.data(),
+                    static_cast<size_t>(outerPts),
+                    &one,
+                    &error) ||
+                !one.valid) {
+                lastError = error.message;
+                qWarning(LOG_STATION2_INSPECTION)
+                    << "pathId" << quota.pathId
+                    << "thickness pair" << pair.innerIndex << pair.outerIndex
+                    << "failed:" << error.message;
+                continue;
+            }
+
+            thicknessSum += one.thicknessMm;
+            ++success;
+            qInfo(LOG_STATION2_INSPECTION)
+                << "pathId" << quota.pathId
+                << "thickness pair" << pair.innerIndex << pair.outerIndex
+                << "thicknessMm=" << one.thicknessMm
+                << "innerFitness=" << one.innerIcpFitnessScore
+                << "outerFitness=" << one.outerIcpFitnessScore;
         }
 
-        scan_tracking::thickness_measure::ThicknessAverageMeasurement avg;
-        scan_tracking::thickness_measure::ThicknessMeasureError error;
-        if (!sharedThicknessMeasureService().measurePairsAverage(apiPairs, &avg, &error) ||
-            !avg.valid || avg.successCount == 0) {
+        result.measurement.thicknessPairCount = thicknessPairs.size();
+        result.measurement.thicknessSuccessCount = success;
+        if (success <= 0) {
             result.resultCode = 2;
             result.ngReasonWord0 = kNgReasonAlgorithmFailed;
             result.measurement.qualityCode = 2;
             result.measureItemCount = 1;
-            result.measurement.thicknessPairCount = static_cast<int>(avg.pairCount);
-            result.measurement.thicknessSuccessCount = static_cast<int>(avg.successCount);
-            result.message = QStringLiteral("pathId=%1 厚度测量失败：%2（成功对 %3/%4）")
+            result.message = QStringLiteral("pathId=%1 厚度测量失败：%2（成功对 0/%3）")
                                  .arg(quota.pathId)
-                                 .arg(error.message.isEmpty() ? QStringLiteral("无有效厚度对")
-                                                             : error.message)
-                                 .arg(static_cast<int>(avg.successCount))
-                                 .arg(static_cast<int>(avg.pairCount > 0 ? avg.pairCount
-                                                                        : thicknessPairs.size()));
+                                 .arg(lastError.isEmpty() ? QStringLiteral("无有效厚度对") : lastError)
+                                 .arg(thicknessPairs.size());
             return result;
         }
 
-        result.measurement.thicknessMm = avg.thicknessMm;
-        result.measurement.thicknessPairCount = static_cast<int>(avg.pairCount);
-        result.measurement.thicknessSuccessCount = static_cast<int>(avg.successCount);
+        result.measurement.thicknessMm = thicknessSum / success;
         qInfo(LOG_STATION2_INSPECTION)
             << "pathId" << quota.pathId
-            << "thicknessMm=" << avg.thicknessMm
-            << "success=" << avg.successCount << "/" << avg.pairCount;
+            << "thicknessMm=" << result.measurement.thicknessMm
+            << "success=" << success << "/" << thicknessPairs.size();
     }
 
     // --- 内表面 ---
@@ -972,13 +1037,37 @@ InspectionResult evaluateStation2Inspection(
         effective.algorithm = QStringLiteral("weld_section");
     }
 
+    // TODO(algo): 临时——检测一律返回 OK，不调用任何测量 DLL；只保证扫段/落盘/切路跑通拿 3D+2D。
+    // 恢复真实算法：删除本 early-return 整块，下方 evaluate* / code_read / self_check 分支即重新生效。
+    {
+        InspectionResult stub;
+        fillPathMeta(&stub, effective);
+        stub.sourcePointCount = effective.total() > 0 ? effective.total()
+                                                      : cache.cachedSegmentCount();
+        stub.resultCode = 1;  // OK
+        stub.measureItemCount = 0;
+        stub.measurement.qualityCode = 1;
+        stub.message = QStringLiteral(
+            "pathId=%1 algorithm=%2：检测临时固定返回 OK（TODO(algo)，未调用算法）。")
+                           .arg(effective.pathId)
+                           .arg(effective.algorithm.isEmpty() ? QStringLiteral("-")
+                                                             : effective.algorithm);
+        qWarning(LOG_STATION2_INSPECTION).noquote() << stub.message;
+        Q_UNUSED(taskId);
+        return stub;
+    }
+
+    // ---- 以下为真实算法分发（当前被上方 TODO 短路）----
     if (effective.algorithm == QLatin1String("weld_section")) {
+        // TODO(algo): return evaluateWeldSectionInspection(cache, taskId, effective);
         return evaluateWeldSectionInspection(cache, taskId, effective);
     }
     if (effective.algorithm == QLatin1String("thickness_inner_surface")) {
+        // TODO(algo): return evaluateThicknessInnerSurfaceInspection(cache, taskId, effective);
         return evaluateThicknessInnerSurfaceInspection(cache, taskId, effective);
     }
     if (effective.algorithm == QLatin1String("length_volume")) {
+        // TODO(algo): return evaluateLengthVolumeInspection(cache, taskId, effective);
         return evaluateLengthVolumeInspection(cache, taskId, effective);
     }
     if (effective.algorithm == QLatin1String("self_check")) {

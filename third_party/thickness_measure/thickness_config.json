@@ -4,7 +4,8 @@
     "outer_template_cloud_path": "../input/0_template_outer_sample.pcd"
   },
   "preprocess": {
-    "enable_outlier_removal": true,
+    "_comment": "SOR 必须关闭：完整扫描点云上先 SOR 再体素会在本工具链闪退；请先体素（leaf_size）降采样。",
+    "enable_outlier_removal": false,
     "mean_k": 10,
     "stddev_mul_thresh": 5.0,
     "enable_voxel_downsample": true,
@@ -17,7 +18,7 @@
   },
   "icp": {
     "max_iterations": 100,
-    "max_correspondence_distance": 100.0,
+    "max_correspondence_distance": 500.0,
     "transformation_epsilon": 0.001,
     "euclidean_fitness_epsilon": 0.001
   },

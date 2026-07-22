@@ -3,6 +3,7 @@
 
 #include <QCoreApplication>
 #include <QFile>
+#include <QFileInfo>
 #include <QTemporaryDir>
 #include <QtTest/QtTest>
 
@@ -17,7 +18,7 @@ class PointCloudIoTest : public QObject {
 private slots:
     void roundTripSaveLoad();
     void binaryPlyPreservesNanPoints();
-    void plyPathUsesMech3dSubdir();
+    void plyPathUsesPathDevicePointLayout();
 };
 
 void PointCloudIoTest::roundTripSaveLoad()
@@ -43,9 +44,11 @@ void PointCloudIoTest::roundTripSaveLoad()
     QTemporaryDir tempDir;
     QVERIFY(tempDir.isValid());
 
-    const QString ts = QStringLiteral("20260525_120000_000");
-    const QString plyPath = buildSegmentPlyPath(tempDir.path(), 1, 100u, ts);
-    QVERIFY(plyPath.contains(QStringLiteral("mech_3d")));
+    const QString plyPath = buildSegmentPlyPath(tempDir.path(), 1, QStringLiteral("arm"), 1);
+    QVERIFY(plyPath.contains(QStringLiteral("path_1")));
+    QVERIFY(plyPath.contains(QStringLiteral("arm")));
+    QVERIFY(plyPath.contains(QStringLiteral("/1/")) || plyPath.contains(QStringLiteral("\\1\\")));
+    QVERIFY(plyPath.endsWith(QStringLiteral("cloud.ply")));
     QVERIFY(!plyPath.isEmpty());
     QVERIFY(savePointCloudFrameToPly(frame, plyPath));
     QVERIFY(QFile::exists(plyPath));
@@ -88,7 +91,10 @@ void PointCloudIoTest::binaryPlyPreservesNanPoints()
     QTemporaryDir tempDir;
     QVERIFY(tempDir.isValid());
 
-    const QString plyPath = buildSegmentPlyPath(tempDir.path(), 2, 200u, QStringLiteral("20260629_120000_000"));
+    const QString plyPath =
+        buildSegmentPlyPath(tempDir.path(), 5, QStringLiteral("telescopic"), 2);
+    QVERIFY(plyPath.contains(QStringLiteral("path_5")));
+    QVERIFY(plyPath.contains(QStringLiteral("telescopic")));
     QVERIFY(savePointCloudFrameToPly(frame, plyPath));
 
     PointCloudFrame loaded;
@@ -99,13 +105,21 @@ void PointCloudIoTest::binaryPlyPreservesNanPoints()
     QVERIFY(!std::isfinite((*loaded.pointsXYZ)[3]));
 }
 
-void PointCloudIoTest::plyPathUsesMech3dSubdir()
+void PointCloudIoTest::plyPathUsesPathDevicePointLayout()
 {
     QTemporaryDir tempDir;
     QVERIFY(tempDir.isValid());
 
-    const QString root = scan_tracking::common::captureCacheMech3DDir(tempDir.path());
-    QVERIFY(root.endsWith(QStringLiteral("mech_3d")));
+    const QString armPath = buildSegmentPlyPath(tempDir.path(), 1, QStringLiteral("arm"), 3);
+    const QString telPath =
+        buildSegmentPlyPath(tempDir.path(), 1, QStringLiteral("telescopic"), 3);
+    QVERIFY(armPath.contains(QStringLiteral("path_1")));
+    QVERIFY(armPath.contains(QStringLiteral("arm")));
+    QVERIFY(telPath.contains(QStringLiteral("telescopic")));
+    QCOMPARE(QFileInfo(armPath).fileName(), QStringLiteral("cloud.ply"));
+    QCOMPARE(QFileInfo(telPath).fileName(), QStringLiteral("cloud.ply"));
+    QCOMPARE(QFileInfo(armPath).dir().dirName(), QStringLiteral("3"));
+    QCOMPARE(QFileInfo(telPath).dir().dirName(), QStringLiteral("3"));
 }
 
 QTEST_MAIN(PointCloudIoTest)

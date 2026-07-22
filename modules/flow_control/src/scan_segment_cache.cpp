@@ -21,16 +21,6 @@ QString deviceTagForPath(common::ScanDeviceKind device)
     return common::ConfigManager::scanDeviceKindToString(device);
 }
 
-/// 落盘文件名用「设备_本地段号」避免 arm/telescopic 同号冲突。
-int encodeDiskSegmentIndex(common::ScanDeviceKind device, int localIndex)
-{
-    // 机械臂保持 1..N；伸缩杆用 1000+localIndex，仅影响文件名。
-    if (device == common::ScanDeviceKind::Telescopic) {
-        return 1000 + localIndex;
-    }
-    return localIndex;
-}
-
 }  // namespace
 
 void ScanSegmentCache::reset()
@@ -41,27 +31,38 @@ void ScanSegmentCache::reset()
     m_runTimestamp.clear();
 }
 
+void ScanSegmentCache::clearSegmentsKeepRunRoot()
+{
+    m_entries.clear();
+}
+
 bool ScanSegmentCache::ensureRunRoot(quint32 taskId, QString* runRootOut, QString* timestampOut)
 {
-    // taskId=0（PLC 未写 TaskId）也必须能落盘。初始 m_runTaskId 同为 0，
-    // 不能仅靠「taskId 变化」判断，否则永远不会创建 run 目录。
-    if (m_runTaskId != taskId) {
+    // 仅当 PLC 给出明确且变化的非 0 taskId 时，才换新的运行实例目录。
+    // taskId=0（未写）全程复用已有 run_*，避免切路径后反复新建文件夹。
+    const bool switchToNewTask =
+        taskId != 0 && m_runTaskId != 0 && taskId != m_runTaskId;
+    if (switchToNewTask) {
         m_entries.clear();
         m_runTaskId = taskId;
         m_runTimestamp.clear();
         m_runCaptureRoot.clear();
+    } else if (taskId != 0) {
+        m_runTaskId = taskId;
     }
 
     if (m_runCaptureRoot.isEmpty()) {
         if (m_runTimestamp.isEmpty()) {
             m_runTimestamp = scan_tracking::common::buildCaptureTimestamp();
         }
-        m_runTaskId = taskId;
+        if (taskId != 0) {
+            m_runTaskId = taskId;
+        }
         m_runCaptureRoot =
-            scan_tracking::common::buildRunCaptureRoot(taskId, m_runTimestamp);
+            scan_tracking::common::buildRunCaptureRoot(m_runTaskId, m_runTimestamp);
         if (m_runCaptureRoot.isEmpty()) {
             qWarning(LOG_SCAN_CACHE).noquote()
-                << QStringLiteral("创建 run 落盘目录失败 taskId=") << taskId
+                << QStringLiteral("创建 run 落盘目录失败 taskId=") << m_runTaskId
                 << QStringLiteral(" timestamp=") << m_runTimestamp;
             if (runRootOut != nullptr) {
                 *runRootOut = QString();
@@ -71,11 +72,9 @@ bool ScanSegmentCache::ensureRunRoot(quint32 taskId, QString* runRootOut, QStrin
             }
             return false;
         }
-        if (taskId == 0) {
-            qInfo(LOG_SCAN_CACHE).noquote()
-                << QStringLiteral("PLC taskId=0，使用 run_0_* 落盘目录：")
-                << m_runCaptureRoot;
-        }
+        qInfo(LOG_SCAN_CACHE).noquote()
+            << QStringLiteral("已创建运行实例落盘目录：") << m_runCaptureRoot
+            << QStringLiteral(" taskId=") << m_runTaskId;
     }
 
     if (runRootOut != nullptr) {
@@ -209,6 +208,7 @@ bool persistScanSegmentBundle(
     const vision::MultiCameraCaptureBundle& bundle,
     QString* errorMessage)
 {
+    Q_UNUSED(timestamp);
     if (runRoot.trimmed().isEmpty()) {
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("run 落盘根目录为空（taskId=%1，请确认 output 可写）。")
@@ -220,7 +220,6 @@ bool persistScanSegmentBundle(
     bool ok = true;
     QString firstError;
     const QString deviceLabel = deviceTagForPath(device);
-    const int diskIndex = encodeDiskSegmentIndex(device, segmentIndex);
 
     auto recordFailure = [&](const QString& message) {
         ok = false;
@@ -232,9 +231,14 @@ bool persistScanSegmentBundle(
     const bool cxpParticipated =
         !bundle.request.hikCameraAKey.isEmpty() || !bundle.request.hikCameraBKey.isEmpty();
 
+    int pathId = 0;
+    if (const auto* configMgr = scan_tracking::common::ConfigManager::instance()) {
+        pathId = configMgr->activePathId();
+    }
+
     if (bundle.mechEyeResult.pointCloud.isValid()) {
         const QString plyPath = scan_tracking::mech_eye::buildSegmentPlyPath(
-            runRoot, diskIndex, taskId, timestamp);
+            runRoot, pathId, deviceLabel, segmentIndex);
         if (plyPath.isEmpty() ||
             !scan_tracking::mech_eye::savePointCloudFrameToPly(
                 bundle.mechEyeResult.pointCloud, plyPath)) {
@@ -246,7 +250,7 @@ bool persistScanSegmentBundle(
 
     if (bundle.mechEyeResult.success()) {
         const QString pngPath = scan_tracking::mech_eye::buildSegmentMechTexturePngPath(
-            runRoot, diskIndex, taskId, timestamp);
+            runRoot, pathId, deviceLabel, segmentIndex);
         if (pngPath.isEmpty() ||
             !bundle.mechEyeResult.texture2D.isValid() ||
             !scan_tracking::mech_eye::saveGrayTextureFrameToPng(
@@ -258,25 +262,8 @@ bool persistScanSegmentBundle(
     }
 
     if (bundle.hikCameraCCaptureOk()) {
-        QString hikLabel = QStringLiteral("hikC");
-        const QString hikIp = bundle.request.hikCameraCIp.trimmed();
-        if (!hikIp.isEmpty()) {
-            const auto* configMgr = scan_tracking::common::ConfigManager::instance();
-            if (configMgr != nullptr) {
-                const auto& visionConfig = configMgr->visionConfig();
-                if (hikIp == visionConfig.telescopicGroup.hikCameraC.ipAddress.trimmed()) {
-                    hikLabel = QStringLiteral("hikC_telescopic");
-                } else if (hikIp == visionConfig.armGroup.hikCameraC.ipAddress.trimmed()) {
-                    hikLabel = QStringLiteral("hikC_arm");
-                }
-            }
-        }
         const QString destPath = scan_tracking::vision::buildSegmentHikMonoPath(
-            runRoot,
-            diskIndex,
-            taskId,
-            hikLabel,
-            timestamp);
+            runRoot, pathId, deviceLabel, segmentIndex, QStringLiteral("hikC"));
         if (destPath.isEmpty()) {
             recordFailure(QStringLiteral("%1 段 %2 海康 C 落盘路径无效")
                               .arg(deviceLabel)
@@ -304,7 +291,7 @@ bool persistScanSegmentBundle(
     if (cxpParticipated) {
         if (bundle.hikCameraAResult.frame.isValid()) {
             const QString bmpPath = scan_tracking::vision::buildSegmentHikMonoPath(
-                runRoot, diskIndex, taskId, QStringLiteral("hikA"), timestamp);
+                runRoot, pathId, deviceLabel, segmentIndex, QStringLiteral("hikA"));
             if (bmpPath.isEmpty() ||
                 !scan_tracking::vision::saveHikMonoFrameToBmp(
                     bundle.hikCameraAResult.frame, bmpPath)) {
@@ -320,7 +307,7 @@ bool persistScanSegmentBundle(
 
         if (bundle.hikCameraBResult.frame.isValid()) {
             const QString bmpPath = scan_tracking::vision::buildSegmentHikMonoPath(
-                runRoot, diskIndex, taskId, QStringLiteral("hikB"), timestamp);
+                runRoot, pathId, deviceLabel, segmentIndex, QStringLiteral("hikB"));
             if (bmpPath.isEmpty() ||
                 !scan_tracking::vision::saveHikMonoFrameToBmp(
                     bundle.hikCameraBResult.frame, bmpPath)) {
