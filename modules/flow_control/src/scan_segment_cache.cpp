@@ -4,6 +4,7 @@
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/mech_eye/point_cloud_io.h"
 #include "scan_tracking/vision/hik_mono_io.h"
+#include "scan_tracking/vision/lb_pose_io.h"
 
 #include <QtCore/QFile>
 #include <QtCore/QLoggingCategory>
@@ -239,9 +240,11 @@ bool persistScanSegmentBundle(
     if (bundle.mechEyeResult.pointCloud.isValid()) {
         const QString plyPath = scan_tracking::mech_eye::buildSegmentPlyPath(
             runRoot, pathId, deviceLabel, segmentIndex);
+        const scan_tracking::mech_eye::GrayTextureFrame* texture =
+            bundle.mechEyeResult.texture2D.isValid() ? &bundle.mechEyeResult.texture2D : nullptr;
         if (plyPath.isEmpty() ||
             !scan_tracking::mech_eye::savePointCloudFrameToPly(
-                bundle.mechEyeResult.pointCloud, plyPath)) {
+                bundle.mechEyeResult.pointCloud, plyPath, texture)) {
             recordFailure(QStringLiteral("%1 段 %2 Mech-Eye 点云落盘失败")
                               .arg(deviceLabel)
                               .arg(segmentIndex));
@@ -319,6 +322,23 @@ bool persistScanSegmentBundle(
             recordFailure(QStringLiteral("%1 段 %2 海康 B 无有效帧")
                               .arg(deviceLabel)
                               .arg(segmentIndex));
+        }
+    }
+
+    // LB 位姿矩阵：与 Mech/CXP 同点位目录下的 lb_pose/ 子目录
+    if (bundle.lbPoseResult.invoked) {
+        QString lbError;
+        if (!scan_tracking::vision::saveLbPoseResultToDisk(
+                bundle.lbPoseResult,
+                runRoot,
+                pathId,
+                deviceLabel,
+                segmentIndex,
+                &lbError)) {
+            recordFailure(QStringLiteral("%1 段 %2 LB 位姿落盘失败：%3")
+                              .arg(deviceLabel)
+                              .arg(segmentIndex)
+                              .arg(lbError));
         }
     }
 

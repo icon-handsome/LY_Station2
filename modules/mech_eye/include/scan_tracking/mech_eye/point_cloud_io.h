@@ -17,10 +17,14 @@ QString buildSegmentPlyPath(
     const QString& deviceTag,
     int segmentIndex);
 
-/// 将 PointCloudFrame 保存为 binary_little_endian PLY（仅 x,y,z；保留全部点含 NaN）
-bool savePointCloudFrameToPly(const PointCloudFrame& frame, const QString& absolutePath);
+/// 将 PointCloudFrame 保存为 binary_little_endian PLY：x,y,z + uchar rgb（保留全部点含 NaN）。
+/// texture 有效且像素数 >= 点数时，按点序把灰度纹理写成 R=G=B；否则 RGB 写 0。
+bool savePointCloudFrameToPly(
+    const PointCloudFrame& frame,
+    const QString& absolutePath,
+    const GrayTextureFrame* texture = nullptr);
 
-/// 从 PLY 加载点云；写入仅 xyz，读取兼容带法向的旧文件
+/// 从 PLY 加载点云（仅取 xyz）；兼容旧文件：纯 xyz / xyz+法向 / xyz+rgb
 bool loadPointCloudFrameFromPly(const QString& absolutePath, PointCloudFrame* outFrame);
 
 /// 释放 PointCloudFrame 中的大数组，保留 pointCount/width/height 等元数据

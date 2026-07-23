@@ -30,12 +30,36 @@ struct PlyHeader {
     PlyFormat format = PlyFormat::Unknown;
     int vertexCount = 0;
     bool hasNormals = false;
+    bool hasRgb = false;
     int headerEndOffset = 0;
+    /// 每个顶点二进制字节数（仅 binary）；未知时为 0
+    int bytesPerVertex = 0;
 };
 
 bool isFinitePoint(float x, float y, float z)
 {
     return std::isfinite(x) && std::isfinite(y) && std::isfinite(z);
+}
+
+int propertyByteSize(const QString& typeToken)
+{
+    if (typeToken == QLatin1String("float") || typeToken == QLatin1String("float32")
+        || typeToken == QLatin1String("int") || typeToken == QLatin1String("int32")
+        || typeToken == QLatin1String("uint") || typeToken == QLatin1String("uint32")) {
+        return 4;
+    }
+    if (typeToken == QLatin1String("double") || typeToken == QLatin1String("float64")) {
+        return 8;
+    }
+    if (typeToken == QLatin1String("uchar") || typeToken == QLatin1String("uint8")
+        || typeToken == QLatin1String("char") || typeToken == QLatin1String("int8")) {
+        return 1;
+    }
+    if (typeToken == QLatin1String("ushort") || typeToken == QLatin1String("uint16")
+        || typeToken == QLatin1String("short") || typeToken == QLatin1String("int16")) {
+        return 2;
+    }
+    return 0;
 }
 
 bool parsePlyHeader(QIODevice* device, PlyHeader* header, QString* errorMessage)
@@ -54,6 +78,7 @@ bool parsePlyHeader(QIODevice* device, PlyHeader* header, QString* errorMessage)
 
     PlyHeader parsed;
     bool inHeader = true;
+    bool inVertexElement = false;
     while (inHeader && !device->atEnd()) {
         const QByteArray rawLine = device->readLine();
         const QString line = QString::fromUtf8(rawLine).trimmed();
@@ -63,10 +88,24 @@ bool parsePlyHeader(QIODevice* device, PlyHeader* header, QString* errorMessage)
             } else if (line.contains(QStringLiteral("binary_little_endian"))) {
                 parsed.format = PlyFormat::BinaryLittleEndian;
             }
-        } else if (line.startsWith(QStringLiteral("element vertex"))) {
-            parsed.vertexCount = line.section(QLatin1Char(' '), 2).toInt();
-        } else if (line == QStringLiteral("property float nx")) {
-            parsed.hasNormals = true;
+        } else if (line.startsWith(QStringLiteral("element "))) {
+            inVertexElement = line.startsWith(QStringLiteral("element vertex"));
+            if (inVertexElement) {
+                parsed.vertexCount = line.section(QLatin1Char(' '), 2).toInt();
+            }
+        } else if (inVertexElement && line.startsWith(QStringLiteral("property "))) {
+            const QStringList tokens = line.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+            if (tokens.size() >= 3) {
+                const int size = propertyByteSize(tokens[1]);
+                if (size > 0) {
+                    parsed.bytesPerVertex += size;
+                }
+                if (tokens[2] == QLatin1String("nx")) {
+                    parsed.hasNormals = true;
+                } else if (tokens[2] == QLatin1String("red") || tokens[2] == QLatin1String("r")) {
+                    parsed.hasRgb = true;
+                }
+            }
         } else if (line == QStringLiteral("end_header")) {
             inHeader = false;
             parsed.headerEndOffset = static_cast<int>(device->pos());
@@ -80,6 +119,14 @@ bool parsePlyHeader(QIODevice* device, PlyHeader* header, QString* errorMessage)
         return false;
     }
 
+    // 兼容旧写法：未统计到 property 时按 xyz / xyz+nxny nz 回退
+    if (parsed.bytesPerVertex <= 0) {
+        parsed.bytesPerVertex = parsed.hasNormals ? 24 : 12;
+        if (parsed.hasRgb) {
+            parsed.bytesPerVertex += 3;
+        }
+    }
+
     *header = parsed;
     return true;
 }
@@ -87,6 +134,11 @@ bool parsePlyHeader(QIODevice* device, PlyHeader* header, QString* errorMessage)
 void writeBinaryFloat(std::ofstream& ofs, float value)
 {
     ofs.write(reinterpret_cast<const char*>(&value), sizeof(float));
+}
+
+void writeBinaryUChar(std::ofstream& ofs, uint8_t value)
+{
+    ofs.write(reinterpret_cast<const char*>(&value), sizeof(uint8_t));
 }
 
 }  // namespace
@@ -114,7 +166,10 @@ QString buildSegmentPlyPath(
     return QDir(pointDir).absoluteFilePath(QStringLiteral("cloud.ply"));
 }
 
-bool savePointCloudFrameToPly(const PointCloudFrame& frame, const QString& absolutePath)
+bool savePointCloudFrameToPly(
+    const PointCloudFrame& frame,
+    const QString& absolutePath,
+    const GrayTextureFrame* texture)
 {
     if (!frame.isValid() || absolutePath.trimmed().isEmpty()) {
         qWarning(LOG_POINT_CLOUD_IO) << QStringLiteral("savePointCloudFrameToPly：帧或路径无效");
@@ -131,6 +186,20 @@ bool savePointCloudFrameToPly(const PointCloudFrame& frame, const QString& absol
         return false;
     }
 
+    const uint8_t* texturePixels = nullptr;
+    int texturePixelCount = 0;
+    if (texture != nullptr && texture->isValid()) {
+        texturePixels = texture->pixels->data();
+        texturePixelCount = static_cast<int>(texture->pixels->size());
+        if (texturePixelCount < count) {
+            qWarning(LOG_POINT_CLOUD_IO).noquote()
+                << QStringLiteral("savePointCloudFrameToPly：纹理像素不足，RGB 将写 0")
+                << QStringLiteral(" texturePixels=") << texturePixelCount
+                << QStringLiteral(" points=") << count;
+            texturePixels = nullptr;
+        }
+    }
+
     QFileInfo fileInfo(absolutePath);
     QDir().mkpath(fileInfo.absolutePath());
 
@@ -141,21 +210,38 @@ bool savePointCloudFrameToPly(const PointCloudFrame& frame, const QString& absol
         return false;
     }
 
-    ofs << "ply\nformat binary_little_endian 1.0\nelement vertex " << count
-        << "\nproperty float x\nproperty float y\nproperty float z\nend_header\n";
+    ofs << "ply\n"
+        << "format binary_little_endian 1.0\n"
+        << "element vertex " << count << "\n"
+        << "property float x\n"
+        << "property float y\n"
+        << "property float z\n"
+        << "property uchar red\n"
+        << "property uchar green\n"
+        << "property uchar blue\n"
+        << "end_header\n";
 
     for (int index = 0; index < count; ++index) {
         const auto base = static_cast<std::size_t>(index * 3);
         writeBinaryFloat(ofs, points[base]);
         writeBinaryFloat(ofs, points[base + 1]);
         writeBinaryFloat(ofs, points[base + 2]);
+
+        uint8_t gray = 0;
+        if (texturePixels != nullptr) {
+            gray = texturePixels[static_cast<std::size_t>(index)];
+        }
+        writeBinaryUChar(ofs, gray);
+        writeBinaryUChar(ofs, gray);
+        writeBinaryUChar(ofs, gray);
     }
 
     ofs.close();
 
     qInfo(LOG_POINT_CLOUD_IO).noquote()
-        << QStringLiteral("PLY(binary) 已保存：") << absolutePath
-        << QStringLiteral(" points=") << count;
+        << QStringLiteral("PLY(binary xyz+rgb) 已保存：") << absolutePath
+        << QStringLiteral(" points=") << count
+        << QStringLiteral(" textured=") << (texturePixels != nullptr);
 
     return true;
 }
@@ -189,9 +275,8 @@ bool loadPointCloudFrameFromPly(const QString& absolutePath, PointCloudFrame* ou
     }
 
     if (header.format == PlyFormat::BinaryLittleEndian) {
-        const int floatsPerVertex = header.hasNormals ? 6 : 3;
         const qint64 bytesNeeded =
-            static_cast<qint64>(header.vertexCount) * floatsPerVertex * static_cast<qint64>(sizeof(float));
+            static_cast<qint64>(header.vertexCount) * header.bytesPerVertex;
         const QByteArray body = file.read(bytesNeeded);
         if (body.size() != bytesNeeded) {
             qWarning(LOG_POINT_CLOUD_IO).noquote()
@@ -200,7 +285,7 @@ bool loadPointCloudFrameFromPly(const QString& absolutePath, PointCloudFrame* ou
         }
 
         for (int index = 0; index < header.vertexCount; ++index) {
-            const auto offset = static_cast<std::size_t>(index * floatsPerVertex * sizeof(float));
+            const auto offset = static_cast<std::size_t>(index * header.bytesPerVertex);
             float x = 0.0f;
             float y = 0.0f;
             float z = 0.0f;
@@ -212,7 +297,7 @@ bool loadPointCloudFrameFromPly(const QString& absolutePath, PointCloudFrame* ou
             points->push_back(y);
             points->push_back(z);
 
-            if (header.hasNormals) {
+            if (header.hasNormals && header.bytesPerVertex >= 24) {
                 float nx = 0.0f;
                 float ny = 0.0f;
                 float nz = 1.0f;
@@ -285,6 +370,7 @@ bool loadPointCloudFrameFromPly(const QString& absolutePath, PointCloudFrame* ou
     qInfo(LOG_POINT_CLOUD_IO).noquote()
         << QStringLiteral("PLY 已加载：") << absolutePath
         << QStringLiteral(" pointCount=") << pointCount
+        << QStringLiteral(" hasRgb=") << header.hasRgb
         << QStringLiteral(" hasNormals=") << outFrame->hasNormals();
 
     return true;

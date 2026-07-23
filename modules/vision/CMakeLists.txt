@@ -3,6 +3,7 @@ set(SCAN_TRACKING_VISION_SOURCES
     src/hik_cxp_mono_io.cpp
     src/hik_cxp_camera_service.cpp
     src/hik_mono_io.cpp
+    src/lb_pose_io.cpp
     src/hik_camera_service.cpp
     src/hik_camera_c_controller.cpp
     src/hik_smart_camera_tcp_server.cpp
@@ -13,6 +14,7 @@ set(SCAN_TRACKING_VISION_SOURCES
     include/scan_tracking/vision/hik_cxp_mono_io.h
     include/scan_tracking/vision/hik_cxp_camera_service.h
     include/scan_tracking/vision/hik_mono_io.h
+    include/scan_tracking/vision/lb_pose_io.h
     include/scan_tracking/vision/hik_camera_service.h
     include/scan_tracking/vision/hik_camera_c_controller.h
     include/scan_tracking/vision/hik_smart_camera_tcp_server.h

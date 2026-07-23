@@ -48,7 +48,7 @@ struct LengthVolumeConfig {
     int minConsecutiveInsideBins = 3;
     int outsideCheckBins = 2;
     float refineHalfWidth = 6.0f;
-    double refineEdgePercentile = 0.02;
+    double refineEdgePercentile = 0.0001;  // V2.0 outsideScan edge percentile
     float endpointMaxRadius = 0.0f;
 };
 

@@ -255,7 +255,7 @@ LengthVolumeConfig MakeBaselineAConfig()
     config.minConsecutiveInsideBins = 3;
     config.outsideCheckBins = 2;
     config.refineHalfWidth = 6.0f;
-    config.refineEdgePercentile = 0.02;
+    config.refineEdgePercentile = 0.0001;
     config.endpointMaxRadius = 0.0f;
     return config;
 }
