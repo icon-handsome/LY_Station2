@@ -56,6 +56,7 @@ void applyLbPoseStitchingIfNeeded(vision::MultiCameraCaptureBundle* bundle)
         return;
     }
 
+    bundle->mechEyeResult.pointCloudRaw = bundle->mechEyeResult.pointCloud;
     bundle->mechEyeResult.pointCloud = stitched;
     qInfo(LOG_FLOW).noquote()
         << QStringLiteral("点云已按 LB Rt_global 变换：") << stitchMessage

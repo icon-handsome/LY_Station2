@@ -1037,37 +1037,13 @@ InspectionResult evaluateStation2Inspection(
         effective.algorithm = QStringLiteral("weld_section");
     }
 
-    // TODO(algo): 临时——检测一律返回 OK，不调用任何测量 DLL；只保证扫段/落盘/切路跑通拿 3D+2D。
-    // 恢复真实算法：删除本 early-return 整块，下方 evaluate* / code_read / self_check 分支即重新生效。
-    {
-        InspectionResult stub;
-        fillPathMeta(&stub, effective);
-        stub.sourcePointCount = effective.total() > 0 ? effective.total()
-                                                      : cache.cachedSegmentCount();
-        stub.resultCode = 1;  // OK
-        stub.measureItemCount = 0;
-        stub.measurement.qualityCode = 1;
-        stub.message = QStringLiteral(
-            "pathId=%1 algorithm=%2：检测临时固定返回 OK（TODO(algo)，未调用算法）。")
-                           .arg(effective.pathId)
-                           .arg(effective.algorithm.isEmpty() ? QStringLiteral("-")
-                                                             : effective.algorithm);
-        qWarning(LOG_STATION2_INSPECTION).noquote() << stub.message;
-        Q_UNUSED(taskId);
-        return stub;
-    }
-
-    // ---- 以下为真实算法分发（当前被上方 TODO 短路）----
     if (effective.algorithm == QLatin1String("weld_section")) {
-        // TODO(algo): return evaluateWeldSectionInspection(cache, taskId, effective);
         return evaluateWeldSectionInspection(cache, taskId, effective);
     }
     if (effective.algorithm == QLatin1String("thickness_inner_surface")) {
-        // TODO(algo): return evaluateThicknessInnerSurfaceInspection(cache, taskId, effective);
         return evaluateThicknessInnerSurfaceInspection(cache, taskId, effective);
     }
     if (effective.algorithm == QLatin1String("length_volume")) {
-        // TODO(algo): return evaluateLengthVolumeInspection(cache, taskId, effective);
         return evaluateLengthVolumeInspection(cache, taskId, effective);
     }
     if (effective.algorithm == QLatin1String("self_check")) {

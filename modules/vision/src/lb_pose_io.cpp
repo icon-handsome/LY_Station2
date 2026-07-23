@@ -92,13 +92,12 @@ QString buildSegmentLbPoseDir(
         configuredRoot, pathId, deviceTag, segmentIndex);
     if (pointDir.isEmpty()) {
         qWarning(LOG_LB_POSE_IO).noquote()
-            << QStringLiteral("无法创建点位目录(lb_pose) pathId=") << pathId
+            << QStringLiteral("无法创建点位目录(lb) pathId=") << pathId
             << QStringLiteral(" device=") << deviceTag
             << QStringLiteral(" point=") << segmentIndex;
         return QString();
     }
-    return scan_tracking::common::ensureDirectoryExists(
-        QDir(pointDir).absoluteFilePath(QStringLiteral("lb_pose")));
+    return pointDir;
 }
 
 QString buildSegmentLbPoseMatrixPath(
@@ -111,7 +110,9 @@ QString buildSegmentLbPoseMatrixPath(
     if (dir.isEmpty()) {
         return QString();
     }
-    return QDir(dir).absoluteFilePath(QStringLiteral("rt_global.txt"));
+    return QDir(dir).absoluteFilePath(
+        scan_tracking::common::buildCaptureArtifactFileName(
+            pathId, deviceTag, QStringLiteral("rt_global"), segmentIndex, QStringLiteral("txt")));
 }
 
 QString buildSegmentLbPoseDiagnosticPath(
@@ -124,7 +125,9 @@ QString buildSegmentLbPoseDiagnosticPath(
     if (dir.isEmpty()) {
         return QString();
     }
-    return QDir(dir).absoluteFilePath(QStringLiteral("diagnostic.txt"));
+    return QDir(dir).absoluteFilePath(
+        scan_tracking::common::buildCaptureArtifactFileName(
+            pathId, deviceTag, QStringLiteral("diagnostic"), segmentIndex, QStringLiteral("txt")));
 }
 
 bool saveLbPoseResultToDisk(

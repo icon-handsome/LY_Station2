@@ -298,6 +298,21 @@ bool HikCxpCameraService::captureMonoFrame(
         m_impl->grabbing = true;
     }
 
+    // 连续自由跑会在梅卡采图窗口内堆积旧帧；默认 OneByOne 会先吐旧图。
+    // 采前清缓冲 + LatestImagesOnly，尽量拿到“当前时刻附近”的新帧。
+    QElapsedTimer grabTimer;
+    grabTimer.start();
+    const int strategyResult =
+        MV_CC_SetGrabStrategy(handle, MV_GrabStrategy_LatestImagesOnly);
+    qInfo() << QStringLiteral("[%1] CXP 采图前设置 GrabStrategy=LatestImagesOnly 结果=0x%2")
+                   .arg(m_roleName)
+                   .arg(static_cast<quint32>(strategyResult), 8, 16, QLatin1Char('0'));
+
+    const int clearResult = MV_CC_ClearImageBuffer(handle);
+    qInfo() << QStringLiteral("[%1] CXP 采图前 ClearImageBuffer 结果=0x%2（丢弃队列旧帧）")
+                   .arg(m_roleName)
+                   .arg(static_cast<quint32>(clearResult), 8, 16, QLatin1Char('0'));
+
     MV_FRAME_OUT frameOut{};
     const int getBufferResult = MV_CC_GetImageBuffer(handle, &frameOut, actualWaitMs);
 
@@ -341,11 +356,15 @@ bool HikCxpCameraService::captureMonoFrame(
                 if (errorMessage != nullptr) {
                     errorMessage->clear();
                 }
-                qInfo() << QStringLiteral("[%1] CXP 采图成功 %2x%3 len=%4")
+                qInfo() << QStringLiteral(
+                               "[%1] CXP 采图成功 %2x%3 len=%4 frameId=%5 elapsedMs=%6 "
+                               "(清缓冲后取最新帧)")
                                .arg(m_roleName)
                                .arg(width)
                                .arg(height)
-                               .arg(frameLen);
+                               .arg(frameLen)
+                               .arg(frame.frameId)
+                               .arg(grabTimer.elapsed());
                 return true;
             }
         }
@@ -419,10 +438,14 @@ bool HikCxpCameraService::captureMonoFrame(
     if (errorMessage != nullptr) {
         errorMessage->clear();
     }
-    qInfo() << QStringLiteral("[%1] CXP 采图成功(GetOneFrame) %2x%3")
+    qInfo() << QStringLiteral(
+                   "[%1] CXP 采图成功(GetOneFrame) %2x%3 frameId=%4 elapsedMs=%5 "
+                   "(清缓冲后取最新帧)")
                    .arg(m_roleName)
                    .arg(width)
-                   .arg(height);
+                   .arg(height)
+                   .arg(frame.frameId)
+                   .arg(grabTimer.elapsed());
     return true;
 }
 
@@ -628,6 +651,14 @@ bool HikCxpCameraService::openMatchedDevice(const QString& preferredCameraKey, Q
                           .arg(m_roleName)
                           .arg(static_cast<quint32>(ret), 8, 16, QLatin1Char('0'));
     } else {
+        // 连接后即自由跑；每次采图前仍会 ClearImageBuffer + LatestImagesOnly。
+        const int strategyAtOpen =
+            MV_CC_SetGrabStrategy(handle, MV_GrabStrategy_LatestImagesOnly);
+        qInfo() << QStringLiteral(
+                       "[%1] CXP 已 StartGrabbing(TriggerMode=Off 连续采)，"
+                       "GrabStrategy=LatestImagesOnly 结果=0x%2")
+                       .arg(m_roleName)
+                       .arg(static_cast<quint32>(strategyAtOpen), 8, 16, QLatin1Char('0'));
         QThread::msleep(100);
     }
 

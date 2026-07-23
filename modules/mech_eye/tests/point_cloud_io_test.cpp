@@ -50,7 +50,7 @@ void PointCloudIoTest::roundTripSaveLoad()
     QVERIFY(plyPath.contains(QStringLiteral("path_1")));
     QVERIFY(plyPath.contains(QStringLiteral("arm")));
     QVERIFY(plyPath.contains(QStringLiteral("/1/")) || plyPath.contains(QStringLiteral("\\1\\")));
-    QVERIFY(plyPath.endsWith(QStringLiteral("cloud.ply")));
+    QVERIFY(plyPath.endsWith(QStringLiteral("P1_Arm_cloud_1.ply")));
     QVERIFY(!plyPath.isEmpty());
     QVERIFY(savePointCloudFrameToPly(frame, plyPath));
     QVERIFY(QFile::exists(plyPath));
@@ -160,11 +160,16 @@ void PointCloudIoTest::plyPathUsesPathDevicePointLayout()
     const QString armPath = buildSegmentPlyPath(tempDir.path(), 1, QStringLiteral("arm"), 3);
     const QString telPath =
         buildSegmentPlyPath(tempDir.path(), 1, QStringLiteral("telescopic"), 3);
+    const QString stitchedPath =
+        buildSegmentStitchedPlyPath(tempDir.path(), 3, QStringLiteral("arm"), 1);
     QVERIFY(armPath.contains(QStringLiteral("path_1")));
     QVERIFY(armPath.contains(QStringLiteral("arm")));
     QVERIFY(telPath.contains(QStringLiteral("telescopic")));
-    QCOMPARE(QFileInfo(armPath).fileName(), QStringLiteral("cloud.ply"));
-    QCOMPARE(QFileInfo(telPath).fileName(), QStringLiteral("cloud.ply"));
+    QCOMPARE(QFileInfo(armPath).fileName(), QStringLiteral("P1_Arm_cloud_3.ply"));
+    QCOMPARE(QFileInfo(telPath).fileName(), QStringLiteral("P1_Telescopic_cloud_3.ply"));
+    QCOMPARE(
+        QFileInfo(stitchedPath).fileName(),
+        QStringLiteral("P3_Arm_cloud_stitched_1.ply"));
     QCOMPARE(QFileInfo(armPath).dir().dirName(), QStringLiteral("3"));
     QCOMPARE(QFileInfo(telPath).dir().dirName(), QStringLiteral("3"));
 }

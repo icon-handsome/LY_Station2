@@ -163,7 +163,33 @@ QString buildSegmentPlyPath(
             << QStringLiteral(" point=") << segmentIndex;
         return QString();
     }
-    return QDir(pointDir).absoluteFilePath(QStringLiteral("cloud.ply"));
+    return QDir(pointDir).absoluteFilePath(
+        scan_tracking::common::buildCaptureArtifactFileName(
+            pathId, deviceTag, QStringLiteral("cloud"), segmentIndex, QStringLiteral("ply")));
+}
+
+QString buildSegmentStitchedPlyPath(
+    const QString& configuredRoot,
+    int pathId,
+    const QString& deviceTag,
+    int segmentIndex)
+{
+    const QString pointDir = scan_tracking::common::capturePointDirectory(
+        configuredRoot, pathId, deviceTag, segmentIndex);
+    if (pointDir.isEmpty()) {
+        qWarning(LOG_POINT_CLOUD_IO).noquote()
+            << QStringLiteral("无法创建点位目录(stitched) pathId=") << pathId
+            << QStringLiteral(" device=") << deviceTag
+            << QStringLiteral(" point=") << segmentIndex;
+        return QString();
+    }
+    return QDir(pointDir).absoluteFilePath(
+        scan_tracking::common::buildCaptureArtifactFileName(
+            pathId,
+            deviceTag,
+            QStringLiteral("cloud_stitched"),
+            segmentIndex,
+            QStringLiteral("ply")));
 }
 
 bool savePointCloudFrameToPly(
@@ -400,7 +426,9 @@ QString buildSegmentMechTexturePngPath(
             << QStringLiteral(" point=") << segmentIndex;
         return QString();
     }
-    return QDir(pointDir).absoluteFilePath(QStringLiteral("texture.png"));
+    return QDir(pointDir).absoluteFilePath(
+        scan_tracking::common::buildCaptureArtifactFileName(
+            pathId, deviceTag, QStringLiteral("texture"), segmentIndex, QStringLiteral("png")));
 }
 
 bool saveGrayTextureFrameToPng(const GrayTextureFrame& frame, const QString& absolutePath)

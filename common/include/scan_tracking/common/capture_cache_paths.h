@@ -21,6 +21,18 @@ QString capturePointDirectory(
     const QString& deviceTag,
     int pointIndex);
 
+/// 设备标签用于文件名：arm→Arm，telescopic→Telescopic，其它首字母大写
+QString captureDeviceTagForFileName(const QString& deviceTag);
+
+/// 段产物唯一文件名：P{pathId}_{Arm|Telescopic}_{artifact}_{pointIndex}.{ext}
+/// 例：P3_Arm_cloud_1.ply
+QString buildCaptureArtifactFileName(
+    int pathId,
+    const QString& deviceTag,
+    const QString& artifactStem,
+    int pointIndex,
+    const QString& extension);
+
 /// Mech-Eye 3D 点云：<root>/mech_3d（遗留/调试缓存，主流程落盘请用 capturePointDirectory）
 QString captureCacheMech3DDir(const QString& root);
 

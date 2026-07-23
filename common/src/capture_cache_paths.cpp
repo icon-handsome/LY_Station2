@@ -69,6 +69,46 @@ QString capturePointDirectory(
         QDir(deviceDir).absoluteFilePath(QString::number(safePointIndex)));
 }
 
+QString captureDeviceTagForFileName(const QString& deviceTag)
+{
+    const QString tag = deviceTag.trimmed().toLower();
+    if (tag.isEmpty() || tag == QLatin1String("arm")) {
+        return QStringLiteral("Arm");
+    }
+    if (tag == QLatin1String("telescopic")) {
+        return QStringLiteral("Telescopic");
+    }
+    return tag.left(1).toUpper() + tag.mid(1);
+}
+
+QString buildCaptureArtifactFileName(
+    int pathId,
+    const QString& deviceTag,
+    const QString& artifactStem,
+    int pointIndex,
+    const QString& extension)
+{
+    const int safePathId = pathId > 0 ? pathId : 0;
+    const int safePointIndex = pointIndex > 0 ? pointIndex : 0;
+    QString stem = artifactStem.trimmed();
+    if (stem.isEmpty()) {
+        stem = QStringLiteral("file");
+    }
+    QString ext = extension.trimmed();
+    if (ext.startsWith(QLatin1Char('.'))) {
+        ext = ext.mid(1);
+    }
+    if (ext.isEmpty()) {
+        ext = QStringLiteral("bin");
+    }
+    return QStringLiteral("P%1_%2_%3_%4.%5")
+        .arg(safePathId)
+        .arg(captureDeviceTagForFileName(deviceTag))
+        .arg(stem)
+        .arg(safePointIndex)
+        .arg(ext);
+}
+
 QString captureCacheMech3DDir(const QString& root)
 {
     const QString resolved = ensureDirectoryExists(resolveCaptureCacheRoot(root));

@@ -237,17 +237,37 @@ bool persistScanSegmentBundle(
         pathId = configMgr->activePathId();
     }
 
-    if (bundle.mechEyeResult.pointCloud.isValid()) {
-        const QString plyPath = scan_tracking::mech_eye::buildSegmentPlyPath(
-            runRoot, pathId, deviceLabel, segmentIndex);
+    if (bundle.mechEyeResult.pointCloud.isValid() ||
+        bundle.mechEyeResult.pointCloudRaw.isValid()) {
         const scan_tracking::mech_eye::GrayTextureFrame* texture =
             bundle.mechEyeResult.texture2D.isValid() ? &bundle.mechEyeResult.texture2D : nullptr;
+
+        // 原始云：有 LB 拼接时写 pointCloudRaw；否则写当前 pointCloud
+        const scan_tracking::mech_eye::PointCloudFrame& rawCloud =
+            bundle.mechEyeResult.pointCloudRaw.isValid()
+                ? bundle.mechEyeResult.pointCloudRaw
+                : bundle.mechEyeResult.pointCloud;
+        const QString plyPath = scan_tracking::mech_eye::buildSegmentPlyPath(
+            runRoot, pathId, deviceLabel, segmentIndex);
         if (plyPath.isEmpty() ||
-            !scan_tracking::mech_eye::savePointCloudFrameToPly(
-                bundle.mechEyeResult.pointCloud, plyPath, texture)) {
+            !scan_tracking::mech_eye::savePointCloudFrameToPly(rawCloud, plyPath, texture)) {
             recordFailure(QStringLiteral("%1 段 %2 Mech-Eye 点云落盘失败")
                               .arg(deviceLabel)
                               .arg(segmentIndex));
+        }
+
+        // 拼接云：与工位一 pointcloud_stitched 对应；仅 LB 成功变换后另存
+        if (bundle.mechEyeResult.pointCloudRaw.isValid() &&
+            bundle.mechEyeResult.pointCloud.isValid()) {
+            const QString stitchedPath = scan_tracking::mech_eye::buildSegmentStitchedPlyPath(
+                runRoot, pathId, deviceLabel, segmentIndex);
+            if (stitchedPath.isEmpty() ||
+                !scan_tracking::mech_eye::savePointCloudFrameToPly(
+                    bundle.mechEyeResult.pointCloud, stitchedPath, texture)) {
+                recordFailure(QStringLiteral("%1 段 %2 Mech-Eye 拼接点云落盘失败")
+                                  .arg(deviceLabel)
+                                  .arg(segmentIndex));
+            }
         }
     }
 
@@ -325,7 +345,7 @@ bool persistScanSegmentBundle(
         }
     }
 
-    // LB 位姿矩阵：与 Mech/CXP 同点位目录下的 lb_pose/ 子目录
+    // LB 位姿矩阵：与 Mech/CXP 同点位目录平铺（无 lb_pose 子目录）
     if (bundle.lbPoseResult.invoked) {
         QString lbError;
         if (!scan_tracking::vision::saveLbPoseResultToDisk(

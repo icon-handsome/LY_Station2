@@ -55,7 +55,9 @@ QString buildSegmentHikMonoPath(
         fileStem = QStringLiteral("hikC");
     }
 
-    return QDir(pointDir).absoluteFilePath(fileStem + QStringLiteral(".bmp"));
+    return QDir(pointDir).absoluteFilePath(
+        scan_tracking::common::buildCaptureArtifactFileName(
+            pathId, deviceTag, fileStem, segmentIndex, QStringLiteral("bmp")));
 }
 
 bool saveHikMonoFrameToBmp(const HikMonoFrame& frame, const QString& absolutePath)
