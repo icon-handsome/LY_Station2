@@ -24,6 +24,7 @@ std::array<float, 16> identityMatrix4x4()
 }
 
 /// LB 成功时用 Rt_global 作为 T0，stereo=I（与第一工位 applySegmentPoseStitching 一致）。
+/// 保留 pointCloudRaw=原始云，pointCloud=变换后云（供检测与 cloud_stitched 落盘）。
 void applyLbPoseStitchingIfNeeded(vision::MultiCameraCaptureBundle* bundle)
 {
     if (bundle == nullptr) {
@@ -44,23 +45,37 @@ void applyLbPoseStitchingIfNeeded(vision::MultiCameraCaptureBundle* bundle)
         return;
     }
 
+    // shared_ptr 别名保留原始缓冲，避免深拷贝；变换失败则清掉 raw 标记。
+    bundle->mechEyeResult.pointCloudRaw = bundle->mechEyeResult.pointCloud;
+
     mech_eye::PointCloudFrame stitched;
     QString stitchMessage;
     if (!mech_eye::transformPointCloudFrame(
-            bundle->mechEyeResult.pointCloud,
+            bundle->mechEyeResult.pointCloudRaw,
             lb.poseMatrix.values,
             identityMatrix4x4(),
             &stitched,
             &stitchMessage)) {
+        bundle->mechEyeResult.pointCloudRaw = mech_eye::PointCloudFrame{};
         qWarning(LOG_FLOW).noquote()
             << QStringLiteral("点云 LB 变换失败：") << stitchMessage;
+        return;
+    }
+
+    if (!stitched.isValid() || stitched.pointCount <= 0 ||
+        stitched.pointsXYZ == nullptr ||
+        static_cast<int>(stitched.pointsXYZ->size()) < stitched.pointCount * 3) {
+        bundle->mechEyeResult.pointCloudRaw = mech_eye::PointCloudFrame{};
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("点云 LB 变换结果无效，保留原始云，不替换 pointCloud。");
         return;
     }
 
     bundle->mechEyeResult.pointCloud = std::move(stitched);
     qInfo(LOG_FLOW).noquote()
         << QStringLiteral("点云已按 LB Rt_global 变换：") << stitchMessage
-        << QStringLiteral(" framePoints=") << lb.framePointCount;
+        << QStringLiteral(" framePoints=") << lb.framePointCount
+        << QStringLiteral(" rawKept=") << bundle->mechEyeResult.pointCloudRaw.isValid();
 }
 
 }  // namespace
@@ -129,8 +144,8 @@ void StateMachine::onBundleCaptureFinished(vision::MultiCameraCaptureBundle bund
                 ? common::ScanDeviceKind::Telescopic
                 : common::ScanDeviceKind::Arm;
 
-        // 点云拼接及 cloud_stitched 落盘暂时关闭，保留实现便于后续恢复。
-        // applyLbPoseStitchingIfNeeded(&bundle);
+        // length_volume / 带 CXP 路径：用 LB Rt_global 把 Mech 点云变换到统一坐标系后再缓存/合并。
+        applyLbPoseStitchingIfNeeded(&bundle);
 
         m_scanSegmentCache.storeSegment(
             device,

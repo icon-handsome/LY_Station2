@@ -116,8 +116,8 @@ struct CaptureResult {
     CaptureErrorCode errorCode = CaptureErrorCode::Success; // 错误码，Success 表示采集成功
     QString errorMessage;   // 错误描述，便于日志记录和调试
     CameraInfoSnapshot cameraInfo;  // 采集时的相机信息快照
-    PointCloudFrame pointCloud; // 采集到的原始点云
-    // 保留该成员以兼容已有模块的 CaptureResult 布局；拼接及其落盘已停用。
+    PointCloudFrame pointCloud; // 工作点云：LB 成功后为变换云，否则为原始云
+    // LB 成功变换时保留原始云（shared_ptr 别名，无深拷贝），供 cloud.ply 落盘；检测仍读 pointCloud。
     PointCloudFrame pointCloudRaw;
     GrayTextureFrame texture2D; // 与点云对齐的 2D 灰度纹理（仅 Capture2DAnd3D）
     qint64 elapsedMs = 0;   // 采集耗时，单位毫秒

@@ -8,13 +8,9 @@
 #include "scan_tracking/common/config_manager.h"
 
 #include <QtCore/QLoggingCategory>
-#include <QtCore/QPair>
 #include <QtCore/QVector>
 
 #include <algorithm>
-#include <cmath>
-#include <cstdint>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -148,46 +144,6 @@ bool extractFiniteXyz(
 
     *finitePointCount = finite;
     return finite > 0;
-}
-
-/// 简单体素降采样（保留每格首点）。厚度 DLL 内部也会体素，但先降到百万级以下可显著减内存/ICP 压力。
-void voxelDownsampleXyz(std::vector<float>* xyz, int* pointCount, float leafMm)
-{
-    if (xyz == nullptr || pointCount == nullptr || leafMm <= 0.0f || *pointCount <= 0) {
-        return;
-    }
-    constexpr int kSkipBelow = 400000;
-    if (*pointCount <= kSkipBelow) {
-        return;
-    }
-
-    const int n = *pointCount;
-    const float inv = 1.0f / leafMm;
-    std::unordered_set<uint64_t> occupied;
-    occupied.reserve(static_cast<size_t>(n / 8));
-    std::vector<float> out;
-    out.reserve(static_cast<size_t>(n / 4) * 3u);
-
-    for (int i = 0; i < n; ++i) {
-        const float x = (*xyz)[static_cast<size_t>(i) * 3u + 0u];
-        const float y = (*xyz)[static_cast<size_t>(i) * 3u + 1u];
-        const float z = (*xyz)[static_cast<size_t>(i) * 3u + 2u];
-        const auto ix = static_cast<int32_t>(std::floor(x * inv));
-        const auto iy = static_cast<int32_t>(std::floor(y * inv));
-        const auto iz = static_cast<int32_t>(std::floor(z * inv));
-        const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(ix)) << 42) ^
-                             (static_cast<uint64_t>(static_cast<uint32_t>(iy)) << 21) ^
-                             static_cast<uint64_t>(static_cast<uint32_t>(iz));
-        if (!occupied.insert(key).second) {
-            continue;
-        }
-        out.push_back(x);
-        out.push_back(y);
-        out.push_back(z);
-    }
-
-    *pointCount = static_cast<int>(out.size() / 3u);
-    *xyz = std::move(out);
 }
 
 void accumulateMeasurement(
@@ -491,7 +447,7 @@ bool loadQuotaSegmentClouds(
         if (!isWithinDeviceQuota(key.device, key.localIndex, quota)) {
             continue;
         }
-        // path3 仅机械臂
+        // 厚度 / 长度容积仅机械臂
         if (key.device != common::ScanDeviceKind::Arm) {
             continue;
         }
@@ -588,21 +544,53 @@ QVector<ThicknessPairRefs> buildThicknessPairs(const QVector<SegmentCloud>& clou
     return pairs;
 }
 
-QVector<QPair<const SegmentCloud*, const SegmentCloud*>> buildInnerSurfacePairs(
-    const QVector<SegmentCloud>& clouds)
+/// 内表面源码要求 exactly 2 帧（两端）。采集点多于 2 时取 localIndex 最小/最大作为两端。
+bool selectInnerSurfaceTwoEnds(
+    const QVector<SegmentCloud>& clouds,
+    const SegmentCloud** outFrame1,
+    const SegmentCloud** outFrame2,
+    int* availableCount,
+    QString* detail)
 {
+    if (outFrame1 == nullptr || outFrame2 == nullptr) {
+        return false;
+    }
+    *outFrame1 = nullptr;
+    *outFrame2 = nullptr;
+
     QVector<const SegmentCloud*> frames;
     for (const SegmentCloud& cloud : clouds) {
         if (cloud.purpose == PointPurposeKind::InnerSurface) {
             frames.push_back(&cloud);
         }
     }
-
-    QVector<QPair<const SegmentCloud*, const SegmentCloud*>> pairs;
-    for (int i = 0; i + 1 < frames.size(); i += 2) {
-        pairs.push_back(qMakePair(frames[i], frames[i + 1]));
+    if (availableCount != nullptr) {
+        *availableCount = frames.size();
     }
-    return pairs;
+    if (frames.size() < 2) {
+        if (detail != nullptr) {
+            *detail = QStringLiteral("inner_surface 点位不足（需两端共 2 帧，当前 %1）")
+                          .arg(frames.size());
+        }
+        return false;
+    }
+
+    *outFrame1 = frames.front();
+    *outFrame2 = frames.back();
+    if (detail != nullptr) {
+        if (frames.size() == 2) {
+            *detail = QStringLiteral("两端帧 localIndex=%1,%2")
+                          .arg((*outFrame1)->localIndex)
+                          .arg((*outFrame2)->localIndex);
+        } else {
+            *detail = QStringLiteral(
+                          "源码要求 exactly 2 帧：从 %1 个 inner_surface 点取两端 localIndex=%2,%3")
+                          .arg(frames.size())
+                          .arg((*outFrame1)->localIndex)
+                          .arg((*outFrame2)->localIndex);
+        }
+    }
+    return *outFrame1 != nullptr && *outFrame2 != nullptr && *outFrame1 != *outFrame2;
 }
 
 scan_tracking::thickness_measure::ThicknessMeasureService& sharedThicknessMeasureService()
@@ -694,13 +682,21 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
     }
 
     const QVector<ThicknessPairRefs> thicknessPairs = buildThicknessPairs(clouds);
-    const auto innerPairs = buildInnerSurfacePairs(clouds);
-    if (thicknessPairs.isEmpty() && innerPairs.isEmpty()) {
+    const SegmentCloud* innerFrame1 = nullptr;
+    const SegmentCloud* innerFrame2 = nullptr;
+    int innerAvailableCount = 0;
+    QString innerEndsDetail;
+    const bool hasInnerEnds = selectInnerSurfaceTwoEnds(
+        clouds, &innerFrame1, &innerFrame2, &innerAvailableCount, &innerEndsDetail);
+    if (thicknessPairs.isEmpty() && !hasInnerEnds) {
         result.resultCode = 3;
         result.ngReasonWord0 = kNgReasonIncompleteSegments;
         result.message = QStringLiteral(
-            "pathId=%1：未找到 thickness/inner_surface 点位用途（请检查 scan_paths points[].purpose）。")
-                             .arg(quota.pathId);
+            "pathId=%1：未找到可用的 thickness 配对或内表面两端帧（请检查 scan_paths points[].purpose）。"
+            "%2")
+                             .arg(quota.pathId)
+                             .arg(innerEndsDetail.isEmpty() ? QString()
+                                                           : QStringLiteral(" ") + innerEndsDetail);
         return result;
     }
 
@@ -708,9 +704,11 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
         << QStringLiteral("开始厚度+内表面测量 pathId=") << quota.pathId
         << QStringLiteral(" name=") << quota.pathName
         << QStringLiteral(" 厚度对数=") << thicknessPairs.size()
-        << QStringLiteral(" 内表面对数=") << innerPairs.size();
+        << QStringLiteral(" 内表面=")
+        << (hasInnerEnds ? innerEndsDetail : QStringLiteral("无两端帧"));
 
-    // --- 厚度 ---
+    // --- 厚度：严格对照源码 C API（tm_create_from_json + tm_measure_pairs_average）---
+    // 预处理（SOR/体素）只在 DLL 内按 thickness_config.json 执行，IPC 不再二次降采样。
     if (!thicknessPairs.isEmpty()) {
         QString initError;
         if (!ensureThicknessMeasureReady(&initError)) {
@@ -724,76 +722,56 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
             return result;
         }
 
-        // 逐对测量（不用 measurePairsAverage）：便于定位闪退点；SOR 已在 thickness_config 关闭。
-        // 注意：旧 DLL 在 ICP 失败早退时析构点云会堆损坏闪退，需换用已修复的 ThicknessMeasure.dll。
-        double thicknessSum = 0.0;
-        int success = 0;
-        QString lastError;
+        QVector<scan_tracking::thickness_measure::ThicknessPairClouds> pairClouds;
+        pairClouds.reserve(thicknessPairs.size());
         for (const ThicknessPairRefs& pair : thicknessPairs) {
-            std::vector<float> innerXyz = pair.inner->xyz;
-            std::vector<float> outerXyz = pair.outer->xyz;
-            int innerPts = pair.inner->finiteCount;
-            int outerPts = pair.outer->finiteCount;
-            voxelDownsampleXyz(&innerXyz, &innerPts, 2.0f);
-            voxelDownsampleXyz(&outerXyz, &outerPts, 2.0f);
-
+            scan_tracking::thickness_measure::ThicknessPairClouds cloudsView;
+            cloudsView.inner.xyz = pair.inner->xyz.data();
+            cloudsView.inner.pointCount = static_cast<size_t>(pair.inner->finiteCount);
+            cloudsView.outer.xyz = pair.outer->xyz.data();
+            cloudsView.outer.pointCount = static_cast<size_t>(pair.outer->finiteCount);
+            pairClouds.push_back(cloudsView);
             qInfo(LOG_STATION2_INSPECTION)
-                << "thickness pair begin inner=" << pair.innerIndex
+                << "thickness pair inner=" << pair.innerIndex
                 << "outer=" << pair.outerIndex
-                << "innerPts=" << pair.inner->finiteCount << "->" << innerPts
-                << "outerPts=" << pair.outer->finiteCount << "->" << outerPts;
-
-            scan_tracking::thickness_measure::ThicknessPairMeasurement one;
-            scan_tracking::thickness_measure::ThicknessMeasureError error;
-            if (!sharedThicknessMeasureService().measurePair(
-                    innerXyz.data(),
-                    static_cast<size_t>(innerPts),
-                    outerXyz.data(),
-                    static_cast<size_t>(outerPts),
-                    &one,
-                    &error) ||
-                !one.valid) {
-                lastError = error.message;
-                qWarning(LOG_STATION2_INSPECTION)
-                    << "pathId" << quota.pathId
-                    << "thickness pair" << pair.innerIndex << pair.outerIndex
-                    << "failed:" << error.message;
-                continue;
-            }
-
-            thicknessSum += one.thicknessMm;
-            ++success;
-            qInfo(LOG_STATION2_INSPECTION)
-                << "pathId" << quota.pathId
-                << "thickness pair" << pair.innerIndex << pair.outerIndex
-                << "thicknessMm=" << one.thicknessMm
-                << "innerFitness=" << one.innerIcpFitnessScore
-                << "outerFitness=" << one.outerIcpFitnessScore;
+                << "innerPts=" << pair.inner->finiteCount
+                << "outerPts=" << pair.outer->finiteCount;
         }
 
-        result.measurement.thicknessPairCount = thicknessPairs.size();
-        result.measurement.thicknessSuccessCount = success;
-        if (success <= 0) {
+        scan_tracking::thickness_measure::ThicknessAverageMeasurement average;
+        scan_tracking::thickness_measure::ThicknessMeasureError error;
+        if (!sharedThicknessMeasureService().measurePairsAverage(pairClouds, &average, &error) ||
+            !average.valid ||
+            average.successCount == 0) {
             result.resultCode = 2;
             result.ngReasonWord0 = kNgReasonAlgorithmFailed;
             result.measurement.qualityCode = 2;
             result.measureItemCount = 1;
-            result.message = QStringLiteral("pathId=%1 厚度测量失败：%2（成功对 0/%3）")
+            result.measurement.thicknessPairCount = static_cast<int>(average.pairCount > 0
+                                                                        ? average.pairCount
+                                                                        : pairClouds.size());
+            result.measurement.thicknessSuccessCount = static_cast<int>(average.successCount);
+            result.message = QStringLiteral("pathId=%1 厚度测量失败：%2（成功对 %3/%4）")
                                  .arg(quota.pathId)
-                                 .arg(lastError.isEmpty() ? QStringLiteral("无有效厚度对") : lastError)
-                                 .arg(thicknessPairs.size());
+                                 .arg(error.message.isEmpty() ? QStringLiteral("无有效厚度对")
+                                                             : error.message)
+                                 .arg(static_cast<int>(average.successCount))
+                                 .arg(static_cast<int>(average.pairCount > 0 ? average.pairCount
+                                                                            : pairClouds.size()));
             return result;
         }
 
-        result.measurement.thicknessMm = thicknessSum / success;
+        result.measurement.thicknessMm = average.thicknessMm;
+        result.measurement.thicknessPairCount = static_cast<int>(average.pairCount);
+        result.measurement.thicknessSuccessCount = static_cast<int>(average.successCount);
         qInfo(LOG_STATION2_INSPECTION)
             << "pathId" << quota.pathId
-            << "thicknessMm=" << result.measurement.thicknessMm
-            << "success=" << success << "/" << thicknessPairs.size();
+            << "thicknessMm=" << average.thicknessMm
+            << "success=" << average.successCount << "/" << average.pairCount;
     }
 
-    // --- 内表面 ---
-    if (!innerPairs.isEmpty()) {
+    // --- 内表面：严格对照源码（exactly 2 帧 → ism_measure_two_frames_average）---
+    if (hasInnerEnds) {
         QString initError;
         if (!ensureInnerSurfaceMeasureReady(&initError)) {
             result.resultCode = 2;
@@ -806,60 +784,52 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
             return result;
         }
 
-        double sumDiameter = 0.0;
-        double sumCircumference = 0.0;
-        double sumRoundness = 0.0;
-        int success = 0;
+        qInfo(LOG_STATION2_INSPECTION).noquote()
+            << QStringLiteral("inner_surface ") << innerEndsDetail
+            << QStringLiteral(" available=") << innerAvailableCount;
 
-        for (const auto& pair : innerPairs) {
-            scan_tracking::inner_surface_measure::InnerSurfaceAverageMeasurement avg;
-            scan_tracking::inner_surface_measure::InnerSurfaceMeasureError error;
-            if (!sharedInnerSurfaceMeasureService().measureTwoFramesAverage(
-                    pair.first->xyz.data(),
-                    static_cast<size_t>(pair.first->finiteCount),
-                    pair.second->xyz.data(),
-                    static_cast<size_t>(pair.second->finiteCount),
-                    &avg,
-                    nullptr,
-                    nullptr,
-                    &error) ||
-                !avg.valid) {
-                qWarning(LOG_STATION2_INSPECTION)
-                    << "pathId" << quota.pathId
-                    << "inner_surface pair" << pair.first->localIndex
-                    << pair.second->localIndex
-                    << "failed:" << error.message;
-                continue;
-            }
-            sumDiameter += avg.diameterMm;
-            sumCircumference += avg.circumferenceMm;
-            sumRoundness += avg.roundness;
-            ++success;
-            qInfo(LOG_STATION2_INSPECTION)
-                << "pathId" << quota.pathId
-                << "inner_surface pair" << pair.first->localIndex
-                << pair.second->localIndex
-                << "diameter=" << avg.diameterMm
-                << "circumference=" << avg.circumferenceMm
-                << "roundness=" << avg.roundness;
-        }
-
-        result.measurement.innerSurfacePairCount = innerPairs.size();
-        result.measurement.innerSurfaceSuccessCount = success;
-        if (success <= 0) {
+        scan_tracking::inner_surface_measure::InnerSurfaceAverageMeasurement avg;
+        scan_tracking::inner_surface_measure::InnerSurfaceFrameMeasurement frame1;
+        scan_tracking::inner_surface_measure::InnerSurfaceFrameMeasurement frame2;
+        scan_tracking::inner_surface_measure::InnerSurfaceMeasureError error;
+        if (!sharedInnerSurfaceMeasureService().measureTwoFramesAverage(
+                innerFrame1->xyz.data(),
+                static_cast<size_t>(innerFrame1->finiteCount),
+                innerFrame2->xyz.data(),
+                static_cast<size_t>(innerFrame2->finiteCount),
+                &avg,
+                &frame1,
+                &frame2,
+                &error) ||
+            !avg.valid) {
             result.resultCode = 2;
             result.ngReasonWord0 = kNgReasonAlgorithmFailed;
             result.measurement.qualityCode = 2;
             result.measureItemCount = 1;
-            result.message = QStringLiteral("pathId=%1 内表面测量失败：全部 %2 对无效。")
+            result.measurement.innerSurfacePairCount = 1;
+            result.measurement.innerSurfaceSuccessCount = 0;
+            result.message = QStringLiteral("pathId=%1 内表面测量失败（两端 localIndex=%2,%3）：%4")
                                  .arg(quota.pathId)
-                                 .arg(innerPairs.size());
+                                 .arg(innerFrame1->localIndex)
+                                 .arg(innerFrame2->localIndex)
+                                 .arg(error.message.isEmpty() ? QStringLiteral("测量无效")
+                                                             : error.message);
             return result;
         }
 
-        result.measurement.innerDiameterMm = sumDiameter / success;
-        result.measurement.innerCircumferenceMm = sumCircumference / success;
-        result.measurement.innerRoundness = sumRoundness / success;
+        result.measurement.innerDiameterMm = avg.diameterMm;
+        result.measurement.innerCircumferenceMm = avg.circumferenceMm;
+        result.measurement.innerRoundness = avg.roundness;
+        result.measurement.innerSurfacePairCount = 1;
+        result.measurement.innerSurfaceSuccessCount = 1;
+        qInfo(LOG_STATION2_INSPECTION)
+            << "pathId" << quota.pathId
+            << "inner_surface ends" << innerFrame1->localIndex << innerFrame2->localIndex
+            << "diameter=" << avg.diameterMm
+            << "circumference=" << avg.circumferenceMm
+            << "roundness=" << avg.roundness
+            << "frame1.valid=" << frame1.valid
+            << "frame2.valid=" << frame2.valid;
     }
 
     result.resultCode = 1;
@@ -869,10 +839,10 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
     result.measurement.qualityCode = 1;
     result.measurement.measuredSegmentCount =
         result.measurement.thicknessSuccessCount * 2 +
-        result.measurement.innerSurfaceSuccessCount * 2;
+        (result.measurement.innerSurfaceSuccessCount > 0 ? 2 : 0);
     result.message = QStringLiteral(
         "厚度+内表面通过：pathId=%1 (%2)；厚度=%3mm（%4/%5 对），"
-        "内径=%6mm 周长=%7mm 圆度=%8（%9/%10 对）")
+        "内径=%6mm 周长=%7mm 圆度=%8（两端 %9）")
                          .arg(quota.pathId)
                          .arg(quota.pathName.isEmpty() ? QStringLiteral("thickness_inner_surface")
                                                       : quota.pathName)
@@ -882,8 +852,10 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
                          .arg(result.measurement.innerDiameterMm, 0, 'f', 3)
                          .arg(result.measurement.innerCircumferenceMm, 0, 'f', 3)
                          .arg(result.measurement.innerRoundness, 0, 'f', 3)
-                         .arg(result.measurement.innerSurfaceSuccessCount)
-                         .arg(result.measurement.innerSurfacePairCount);
+                         .arg(hasInnerEnds ? QStringLiteral("%1/%2")
+                                                .arg(innerFrame1->localIndex)
+                                                .arg(innerFrame2->localIndex)
+                                          : QStringLiteral("-"));
     return result;
 }
 
@@ -972,6 +944,33 @@ InspectionResult evaluateLengthVolumeInspection(
         return result;
     }
 
+    // 源码要求单一统一坐标系外表面云：CXP 参与段必须已用 LB Rt_global 变换后再合并。
+    for (const SegmentCloud& cloud : clouds) {
+        const ScanSegmentCacheEntry* entry =
+            cache.entry(common::ScanDeviceKind::Arm, cloud.localIndex);
+        if (entry == nullptr) {
+            continue;
+        }
+        const auto& bundle = entry->bundle;
+        if (!bundle.cxpParticipated()) {
+            continue;
+        }
+        const auto& lb = bundle.lbPoseResult;
+        if (!lb.invoked || !lb.success || !lb.poseMatrix.valid) {
+            result.resultCode = 2;
+            result.ngReasonWord0 = kNgReasonPointCloudInvalid;
+            result.measurement.qualityCode = 2;
+            result.measureItemCount = 1;
+            result.message = QStringLiteral(
+                                 "pathId=%1 段 %2：CXP 已参与但 LB 位姿无效，无法按源码合并外表面点云（%3）")
+                                 .arg(quota.pathId)
+                                 .arg(cloud.localIndex)
+                                 .arg(lb.message.isEmpty() ? QStringLiteral("lb missing")
+                                                          : lb.message);
+            return result;
+        }
+    }
+
     std::vector<float> mergedXyz;
     size_t mergedCount = 0;
     for (const SegmentCloud& cloud : clouds) {
@@ -993,12 +992,15 @@ InspectionResult evaluateLengthVolumeInspection(
         result.ngReasonWord0 = kNgReasonAlgorithmFailed;
         result.measurement.qualityCode = 2;
         result.measureItemCount = 1;
-        result.message = QStringLiteral("pathId=%1 长度容积测量初始化失败：%2")
+        result.message = QStringLiteral(
+                             "pathId=%1 长度容积测量初始化失败：%2"
+                             "（请确认 config/length_volume_measure/config.ini 与 Data/sample_cylinder.pcd）")
                              .arg(quota.pathId)
                              .arg(initError);
         return result;
     }
 
+    // 对照源码：lvm_create_from_ini + 一次 lvm_measure(合并外表面云, volume_radius_mm)
     const double volumeRadiusMm = resolveVolumeRadiusMm(quota);
     qInfo(LOG_STATION2_INSPECTION).noquote()
         << QStringLiteral("开始长度容积测量 pathId=") << quota.pathId

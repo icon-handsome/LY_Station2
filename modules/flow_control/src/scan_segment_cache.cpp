@@ -238,12 +238,22 @@ bool persistScanSegmentBundle(
         pathId = configMgr->activePathId();
     }
 
-    if (bundle.mechEyeResult.pointCloud.isValid()) {
+    if (bundle.mechEyeResult.pointCloud.isValid() ||
+        bundle.mechEyeResult.pointCloudRaw.isValid()) {
         const scan_tracking::mech_eye::GrayTextureFrame* texture =
             bundle.mechEyeResult.texture2D.isValid() ? &bundle.mechEyeResult.texture2D : nullptr;
 
+        const bool hasRaw = bundle.mechEyeResult.pointCloudRaw.isValid();
+        const bool lbStitched =
+            bundle.lbPoseResult.invoked && bundle.lbPoseResult.success &&
+            bundle.lbPoseResult.poseMatrix.valid && hasRaw &&
+            bundle.mechEyeResult.pointCloud.isValid() &&
+            bundle.mechEyeResult.pointCloud.pointsXYZ !=
+                bundle.mechEyeResult.pointCloudRaw.pointsXYZ;
+
+        // 约定：cloud.ply = 原始云；有 LB 时 cloud_stitched.ply = 变换云。
         const scan_tracking::mech_eye::PointCloudFrame& rawCloud =
-            bundle.mechEyeResult.pointCloud;
+            hasRaw ? bundle.mechEyeResult.pointCloudRaw : bundle.mechEyeResult.pointCloud;
         const QString plyPath = scan_tracking::mech_eye::buildSegmentPlyPath(
             runRoot, pathId, deviceLabel, segmentIndex);
         qInfo(LOG_SCAN_CACHE).noquote()
@@ -251,7 +261,7 @@ bool persistScanSegmentBundle(
                    .arg(deviceLabel)
                    .arg(segmentIndex)
             << rawCloud.pointCount
-            << QStringLiteral(" stitched=false");
+            << QStringLiteral(" lbStitched=") << lbStitched;
         if (plyPath.isEmpty() ||
             !scan_tracking::mech_eye::savePointCloudFrameToPly(rawCloud, plyPath, texture)) {
             recordFailure(QStringLiteral("%1 段 %2 Mech-Eye 点云落盘失败")
@@ -259,23 +269,25 @@ bool persistScanSegmentBundle(
                               .arg(segmentIndex));
         }
 
-        // 拼接云落盘暂时关闭，保留代码便于后续恢复。
-        // if (hasLbStitchedCloud) {
-        //     const QString stitchedPath = scan_tracking::mech_eye::buildSegmentStitchedPlyPath(
-        //         runRoot, pathId, deviceLabel, segmentIndex);
-        //     qInfo(LOG_SCAN_CACHE).noquote()
-        //         << QStringLiteral("%1 段 %2 开始写 PLY cloud_stitched points=")
-        //                .arg(deviceLabel)
-        //                .arg(segmentIndex)
-        //         << bundle.mechEyeResult.pointCloud.pointCount;
-        //     if (stitchedPath.isEmpty() ||
-        //         !scan_tracking::mech_eye::savePointCloudFrameToPly(
-        //             bundle.mechEyeResult.pointCloud, stitchedPath, texture)) {
-        //         recordFailure(QStringLiteral("%1 段 %2 Mech-Eye 拼接点云落盘失败")
-        //                           .arg(deviceLabel)
-        //                           .arg(segmentIndex));
-        //     }
-        // }
+        if (lbStitched) {
+            const QString stitchedPath = scan_tracking::mech_eye::buildSegmentStitchedPlyPath(
+                runRoot, pathId, deviceLabel, segmentIndex);
+            qInfo(LOG_SCAN_CACHE).noquote()
+                << QStringLiteral("%1 段 %2 开始写 PLY cloud_stitched points=")
+                       .arg(deviceLabel)
+                       .arg(segmentIndex)
+                << bundle.mechEyeResult.pointCloud.pointCount;
+            // 拼接云落盘失败只记警告，不拖垮同段其它产物（避免再次因写盘问题连带整段落盘失败）。
+            if (stitchedPath.isEmpty() ||
+                !scan_tracking::mech_eye::savePointCloudFrameToPly(
+                    bundle.mechEyeResult.pointCloud, stitchedPath, texture)) {
+                qWarning(LOG_SCAN_CACHE).noquote()
+                    << QStringLiteral("%1 段 %2 Mech-Eye cloud_stitched 落盘失败（已保留 cloud.ply）")
+                           .arg(deviceLabel)
+                           .arg(segmentIndex)
+                    << QStringLiteral(" path=") << stitchedPath;
+            }
+        }
     }
 
     if (bundle.mechEyeResult.success()) {

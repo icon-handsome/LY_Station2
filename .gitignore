@@ -13,8 +13,10 @@ CMakeLists.txt.user
 _xfer/
 
 # Large point-cloud templates (deploy offline; keep weld_measure ini tracked)
-config/weld_measure/Data/
 *.pcd
+!config/length_volume_measure/Data/sample_cylinder.pcd
+!config/length_volume_measure/Data/sample_cylinder_cut.pcd
+config/weld_measure/Data/
 
 # JetBrains IDE (local)
 .idea/

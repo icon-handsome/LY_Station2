@@ -1,17 +1,22 @@
 #include "scan_tracking/mech_eye/point_cloud_io.h"
 
 #include "scan_tracking/common/capture_cache_paths.h"
+#include "scan_tracking/mech_eye/point_cloud_processor.h"
 
+#include <QByteArray>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
 #include <QLoggingCategory>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <fstream>
+#include <exception>
 #include <limits>
+#include <mutex>
+#include <new>
 #include <vector>
 
 Q_LOGGING_CATEGORY(LOG_POINT_CLOUD_IO, "mech_eye.point_cloud_io")
@@ -131,16 +136,6 @@ bool parsePlyHeader(QIODevice* device, PlyHeader* header, QString* errorMessage)
     return true;
 }
 
-void writeBinaryFloat(std::ofstream& ofs, float value)
-{
-    ofs.write(reinterpret_cast<const char*>(&value), sizeof(float));
-}
-
-void writeBinaryUChar(std::ofstream& ofs, uint8_t value)
-{
-    ofs.write(reinterpret_cast<const char*>(&value), sizeof(uint8_t));
-}
-
 }  // namespace
 
 QString defaultScanCacheDirectory()
@@ -197,79 +192,154 @@ bool savePointCloudFrameToPly(
     const QString& absolutePath,
     const GrayTextureFrame* texture)
 {
-    if (!frame.isValid() || absolutePath.trimmed().isEmpty()) {
-        qWarning(LOG_POINT_CLOUD_IO) << QStringLiteral("savePointCloudFrameToPly：帧或路径无效");
-        return false;
-    }
+    try {
+        if (!frame.isValid() || absolutePath.trimmed().isEmpty()) {
+            qWarning(LOG_POINT_CLOUD_IO) << QStringLiteral("savePointCloudFrameToPly：帧或路径无效");
+            return false;
+        }
+        if (frame.pointsXYZ == nullptr) {
+            qWarning(LOG_POINT_CLOUD_IO) << QStringLiteral("savePointCloudFrameToPly：pointsXYZ 为空");
+            return false;
+        }
 
-    const auto& points = *frame.pointsXYZ;
+        // 与变换侧共用锁，避免写盘过程中缓冲被并发替换。
+        std::lock_guard<std::mutex> lock(pointCloudAlgorithmMutex());
 
-    const int pointCount = frame.pointCount;
-    const int availablePointCount = static_cast<int>(points.size() / 3);
-    const int count = std::min(pointCount, availablePointCount);
-    if (count <= 0) {
-        qWarning(LOG_POINT_CLOUD_IO) << QStringLiteral("savePointCloudFrameToPly：无点可写");
-        return false;
-    }
+        // 再取一次本地视图，防止锁外状态变化。
+        if (!frame.isValid() || frame.pointsXYZ == nullptr) {
+            qWarning(LOG_POINT_CLOUD_IO) << QStringLiteral("savePointCloudFrameToPly：加锁后帧无效");
+            return false;
+        }
 
-    const uint8_t* texturePixels = nullptr;
-    int texturePixelCount = 0;
-    if (texture != nullptr && texture->isValid()) {
-        texturePixels = texture->pixels->data();
-        texturePixelCount = static_cast<int>(texture->pixels->size());
-        if (texturePixelCount < count) {
+        const auto& points = *frame.pointsXYZ;
+        const int pointCount = frame.pointCount;
+        const int availablePointCount = static_cast<int>(points.size() / 3);
+        const int count = std::min(pointCount, availablePointCount);
+        if (count <= 0) {
+            qWarning(LOG_POINT_CLOUD_IO) << QStringLiteral("savePointCloudFrameToPly：无点可写");
+            return false;
+        }
+
+        const uint8_t* texturePixels = nullptr;
+        if (texture != nullptr && texture->isValid() && texture->pixels != nullptr) {
+            const int texturePixelCount = static_cast<int>(texture->pixels->size());
+            if (texturePixelCount >= count) {
+                texturePixels = texture->pixels->data();
+            } else {
+                qWarning(LOG_POINT_CLOUD_IO).noquote()
+                    << QStringLiteral("savePointCloudFrameToPly：纹理像素不足，RGB 将写 0")
+                    << QStringLiteral(" texturePixels=") << texturePixelCount
+                    << QStringLiteral(" points=") << count;
+            }
+        }
+
+        QFileInfo fileInfo(absolutePath);
+        if (!QDir().mkpath(fileInfo.absolutePath())) {
             qWarning(LOG_POINT_CLOUD_IO).noquote()
-                << QStringLiteral("savePointCloudFrameToPly：纹理像素不足，RGB 将写 0")
-                << QStringLiteral(" texturePixels=") << texturePixelCount
-                << QStringLiteral(" points=") << count;
-            texturePixels = nullptr;
+                << QStringLiteral("savePointCloudFrameToPly：无法创建目录")
+                << fileInfo.absolutePath();
+            return false;
         }
-    }
 
-    QFileInfo fileInfo(absolutePath);
-    QDir().mkpath(fileInfo.absolutePath());
+        // 用 QFile 写，避免 ofstream + toStdString 在非 ASCII 路径上出问题。
+        QFile file(absolutePath);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            qWarning(LOG_POINT_CLOUD_IO).noquote()
+                << QStringLiteral("savePointCloudFrameToPly：无法打开") << absolutePath;
+            return false;
+        }
 
-    std::ofstream ofs(absolutePath.toStdString(), std::ios::binary);
-    if (!ofs.is_open()) {
-        qWarning(LOG_POINT_CLOUD_IO).noquote()
-            << QStringLiteral("savePointCloudFrameToPly：无法打开") << absolutePath;
+        {
+            QByteArray header;
+            header.reserve(256);
+            header += "ply\n";
+            header += "format binary_little_endian 1.0\n";
+            header += "element vertex ";
+            header += QByteArray::number(count);
+            header += "\n";
+            header += "property float x\n";
+            header += "property float y\n";
+            header += "property float z\n";
+            header += "property uchar red\n";
+            header += "property uchar green\n";
+            header += "property uchar blue\n";
+            header += "end_header\n";
+            if (file.write(header) != header.size()) {
+                qWarning(LOG_POINT_CLOUD_IO).noquote()
+                    << QStringLiteral("savePointCloudFrameToPly：写头失败") << absolutePath;
+                file.close();
+                QFile::remove(absolutePath);
+                return false;
+            }
+        }
+
+        // 按顶点缓冲写出，降低单次系统调用次数；失败则删半成品避免下次误读。
+        constexpr int kVertsPerChunk = 8192;
+        QByteArray chunk;
+        chunk.resize(kVertsPerChunk * (3 * static_cast<int>(sizeof(float)) + 3));
+
+        int written = 0;
+        while (written < count) {
+            const int n = std::min(kVertsPerChunk, count - written);
+            char* dst = chunk.data();
+            for (int i = 0; i < n; ++i) {
+                const int index = written + i;
+                const auto base = static_cast<std::size_t>(index * 3);
+                float xyz[3] = {points[base], points[base + 1], points[base + 2]};
+                std::memcpy(dst, xyz, sizeof(xyz));
+                dst += sizeof(xyz);
+                const uint8_t gray =
+                    texturePixels != nullptr ? texturePixels[static_cast<std::size_t>(index)]
+                                             : static_cast<uint8_t>(0);
+                dst[0] = static_cast<char>(gray);
+                dst[1] = static_cast<char>(gray);
+                dst[2] = static_cast<char>(gray);
+                dst += 3;
+            }
+            const qint64 bytes = static_cast<qint64>(n) * (3 * static_cast<qint64>(sizeof(float)) + 3);
+            if (file.write(chunk.constData(), bytes) != bytes) {
+                qWarning(LOG_POINT_CLOUD_IO).noquote()
+                    << QStringLiteral("savePointCloudFrameToPly：写体失败") << absolutePath
+                    << QStringLiteral(" at=") << written;
+                file.close();
+                QFile::remove(absolutePath);
+                return false;
+            }
+            written += n;
+        }
+
+        file.flush();
+        file.close();
+        if (file.error() != QFile::NoError) {
+            qWarning(LOG_POINT_CLOUD_IO).noquote()
+                << QStringLiteral("savePointCloudFrameToPly：关闭异常") << absolutePath
+                << file.errorString();
+            QFile::remove(absolutePath);
+            return false;
+        }
+
+        qInfo(LOG_POINT_CLOUD_IO).noquote()
+            << QStringLiteral("PLY(binary xyz+rgb) 已保存：") << absolutePath
+            << QStringLiteral(" points=") << count
+            << QStringLiteral(" textured=") << (texturePixels != nullptr);
+        return true;
+    } catch (const std::bad_alloc&) {
+        qCritical(LOG_POINT_CLOUD_IO).noquote()
+            << QStringLiteral("savePointCloudFrameToPly：内存不足") << absolutePath;
+        QFile::remove(absolutePath);
+        return false;
+    } catch (const std::exception& ex) {
+        qCritical(LOG_POINT_CLOUD_IO).noquote()
+            << QStringLiteral("savePointCloudFrameToPly：异常") << absolutePath
+            << QString::fromUtf8(ex.what());
+        QFile::remove(absolutePath);
+        return false;
+    } catch (...) {
+        qCritical(LOG_POINT_CLOUD_IO).noquote()
+            << QStringLiteral("savePointCloudFrameToPly：未知异常") << absolutePath;
+        QFile::remove(absolutePath);
         return false;
     }
-
-    ofs << "ply\n"
-        << "format binary_little_endian 1.0\n"
-        << "element vertex " << count << "\n"
-        << "property float x\n"
-        << "property float y\n"
-        << "property float z\n"
-        << "property uchar red\n"
-        << "property uchar green\n"
-        << "property uchar blue\n"
-        << "end_header\n";
-
-    for (int index = 0; index < count; ++index) {
-        const auto base = static_cast<std::size_t>(index * 3);
-        writeBinaryFloat(ofs, points[base]);
-        writeBinaryFloat(ofs, points[base + 1]);
-        writeBinaryFloat(ofs, points[base + 2]);
-
-        uint8_t gray = 0;
-        if (texturePixels != nullptr) {
-            gray = texturePixels[static_cast<std::size_t>(index)];
-        }
-        writeBinaryUChar(ofs, gray);
-        writeBinaryUChar(ofs, gray);
-        writeBinaryUChar(ofs, gray);
-    }
-
-    ofs.close();
-
-    qInfo(LOG_POINT_CLOUD_IO).noquote()
-        << QStringLiteral("PLY(binary xyz+rgb) 已保存：") << absolutePath
-        << QStringLiteral(" points=") << count
-        << QStringLiteral(" textured=") << (texturePixels != nullptr);
-
-    return true;
 }
 
 bool loadPointCloudFrameFromPly(const QString& absolutePath, PointCloudFrame* outFrame)

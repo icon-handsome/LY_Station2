@@ -1,6 +1,6 @@
 {
-  "version": "1.6",
-  "lastModified": "2026-07-21",
+  "version": "1.7",
+  "lastModified": "2026-07-23",
   "activePathId": 1,
   "scanPaths": [
     {
@@ -35,15 +35,30 @@
     {
       "pathId": 3,
       "enabled": true,
-      "name": "thickness_inner_surface",
-      "algorithm": "thickness_inner_surface",
-      "description": "厚度+内表面：AO47×13；启用臂 3D+CXP，不启用智能相机与伸缩杆",
+      "name": "length_volume",
+      "algorithm": "length_volume",
+      "description": "外表面长度和容积：AO47(臂)×13；启用臂 3D+CXP，不启用智能相机与伸缩杆。volumeRadiusMm 需与现场核对",
+      "volumeRadiusMm": 600.0,
       "capture": {
         "arm": { "mechEye3d": true, "hikSmartC": false, "hikCxp": true },
         "telescopic": { "mechEye3d": false, "hikSmartC": false }
       },
       "devices": [
         { "device": "arm", "totalPoints": 13 }
+      ]
+    },
+    {
+      "pathId": 4,
+      "enabled": true,
+      "name": "thickness_inner_surface",
+      "algorithm": "thickness_inner_surface",
+      "description": "厚度+内表面：AO47×12；启用臂 3D+CXP，不启用智能相机与伸缩杆",
+      "capture": {
+        "arm": { "mechEye3d": true, "hikSmartC": false, "hikCxp": true },
+        "telescopic": { "mechEye3d": false, "hikSmartC": false }
+      },
+      "devices": [
+        { "device": "arm", "totalPoints": 12 }
       ],
       "points": [
         { "pointIndex": 1, "purpose": "thickness_inner", "needRotation": false },
@@ -57,23 +72,7 @@
         { "pointIndex": 9, "purpose": "inner_surface", "needRotation": false },
         { "pointIndex": 10, "purpose": "inner_surface", "needRotation": false },
         { "pointIndex": 11, "purpose": "inner_surface", "needRotation": false },
-        { "pointIndex": 12, "purpose": "inner_surface", "needRotation": false },
-        { "pointIndex": 13, "purpose": "inner_surface", "needRotation": false }
-      ]
-    },
-    {
-      "pathId": 4,
-      "enabled": true,
-      "name": "length_volume",
-      "algorithm": "length_volume",
-      "description": "外表面长度和容积：AO47(臂)×12；启用臂 3D+CXP，不启用智能相机与伸缩杆。volumeRadiusMm 需与现场核对",
-      "volumeRadiusMm": 600.0,
-      "capture": {
-        "arm": { "mechEye3d": true, "hikSmartC": false, "hikCxp": true },
-        "telescopic": { "mechEye3d": false, "hikSmartC": false }
-      },
-      "devices": [
-        { "device": "arm", "totalPoints": 12 }
+        { "pointIndex": 12, "purpose": "inner_surface", "needRotation": false }
       ]
     },
     {

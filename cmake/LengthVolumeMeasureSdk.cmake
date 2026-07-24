@@ -74,12 +74,19 @@ function(scan_tracking_deploy_length_volume_measure_runtime target_name)
     get_property(_sdk_dir GLOBAL PROPERTY SCAN_TRACKING_LENGTH_VOLUME_MEASURE_SDK_DIR)
     get_property(_dll_release GLOBAL PROPERTY SCAN_TRACKING_LENGTH_VOLUME_MEASURE_DLL_RELEASE)
     get_property(_dll_debug GLOBAL PROPERTY SCAN_TRACKING_LENGTH_VOLUME_MEASURE_DLL_DEBUG)
-    set(_config_ini "${_sdk_dir}/config.ini")
     set(_bin_release "${_sdk_dir}/bin/Release")
     set(_bin_debug "${_sdk_dir}/bin/Debug")
     if(NOT EXISTS "${_bin_debug}/LengthVolumeMeasure.dll")
         set(_bin_debug "${_bin_release}")
     endif()
+
+    # Prefer repo config (ini + Data templates); fall back to SDK-bundled ini.
+    set(_config_dir "${CMAKE_SOURCE_DIR}/config/length_volume_measure")
+    set(_config_ini "${_config_dir}/config.ini")
+    if(NOT EXISTS "${_config_ini}")
+        set(_config_ini "${_sdk_dir}/config.ini")
+    endif()
+    set(_config_data_dir "${_config_dir}/Data")
 
     set(_copy_cmds
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -103,6 +110,23 @@ function(scan_tracking_deploy_length_volume_measure_runtime target_name)
                 "${_config_ini}"
                 "$<TARGET_FILE_DIR:${target_name}>/config/length_volume_measure/config.ini"
         )
+    endif()
+
+    if(EXISTS "${_config_data_dir}/sample_cylinder.pcd")
+        list(APPEND _copy_cmds
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_FILE_DIR:${target_name}>/config/length_volume_measure/Data"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_config_data_dir}/sample_cylinder.pcd"
+                "$<TARGET_FILE_DIR:${target_name}>/config/length_volume_measure/Data/sample_cylinder.pcd"
+        )
+        if(EXISTS "${_config_data_dir}/sample_cylinder_cut.pcd")
+            list(APPEND _copy_cmds
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_config_data_dir}/sample_cylinder_cut.pcd"
+                    "$<TARGET_FILE_DIR:${target_name}>/config/length_volume_measure/Data/sample_cylinder_cut.pcd"
+            )
+        endif()
     endif()
 
     add_custom_command(TARGET ${target_name} POST_BUILD
