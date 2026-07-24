@@ -27,7 +27,7 @@
     completedPathIds[], pathCount
 
   event.path.progress_reset
-    reason（如 cache_reset，Trig_ResultReset）
+    reason（如 result_reset，state_machine.start）
 
 四、UI 逻辑
   started → 进行中；finished → 已完成；progress_reset → 全重置

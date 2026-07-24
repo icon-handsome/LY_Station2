@@ -9,17 +9,7 @@ int ResultResetHandler::trigOffset() const { return 28; }
 
 void ResultResetHandler::execute(TaskHandlerContext& ctx)
 {
-    ctx.host.resetSafetyInterlockState();
-    ctx.host.resetScanSegmentCache();
-
-    if (ctx.host.isModbusConnected()) {
-        ctx.host.clearScanSegmentDoneRegisters();
-        ctx.host.clearInspectionResultRegisters();
-        ctx.host.clearIpcSafetyActionWord();
-    }
-
-    ctx.host.completeActiveTask(1);
-    ctx.host.notifyResultResetFinished(1);
+    ctx.host.executeResultResetTask();
 }
 
 }  // namespace scan_tracking::flow_control

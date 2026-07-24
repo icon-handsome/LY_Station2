@@ -119,6 +119,10 @@ void StateMachine::onBundleCaptureFinished(vision::MultiCameraCaptureBundle bund
             << QStringLiteral(" bundle=") << bundle.request.requestId;
         return;
     }
+    if (!acceptWorkpieceGeneration(
+            m_activeTask.workpieceGeneration, QStringLiteral("bundleCaptureFinished"))) {
+        return;
+    }
 
     qInfo(LOG_FLOW).noquote()
         << QStringLiteral("bundleCaptureFinished 处理 requestId=")
@@ -239,6 +243,17 @@ void StateMachine::completeScanSegmentCapture(
     bool dataValid)
 {
     const int segmentIndex = m_activeTask.scanSegmentIndex;
+    const auto device = activeScanDeviceKind();
+    const int pathId =
+        common::ConfigManager::instance() != nullptr
+            ? common::ConfigManager::instance()->activePathId()
+            : 0;
+
+    // 对齐工位1：严重错误（Res>=5）按 scanFailurePolicy 清理，默认不整表抹掉已扫段。
+    if (resultCode >= 5) {
+        applyScanFailurePolicy(pathId, device, segmentIndex, resultCode);
+    }
+
     if (m_activeTask.definition != nullptr &&
         m_activeTask.definition->stage == protocol::Stage::TelescopicScan) {
         writeTelescopicScanResult(segmentIndex, imageCount, cloudFrameCount);
@@ -247,6 +262,117 @@ void StateMachine::completeScanSegmentCapture(
     }
     completeActiveTask(resultCode, finalAckState, dataValid);
     emit scanFinished(segmentIndex, resultCode, imageCount, cloudFrameCount);
+}
+
+common::ScanDeviceKind StateMachine::activeScanDeviceKind() const
+{
+    if (m_activeTask.definition != nullptr &&
+        m_activeTask.definition->stage == protocol::Stage::TelescopicScan) {
+        return common::ScanDeviceKind::Telescopic;
+    }
+    return common::ScanDeviceKind::Arm;
+}
+
+QString StateMachine::currentScanFailurePolicy() const
+{
+    if (const auto* cfg = common::ConfigManager::instance()) {
+        const QString policy = cfg->flowControlConfig().scanFailurePolicy.trimmed().toLower();
+        if (policy == QLatin1String("path") || policy == QLatin1String("workpiece")) {
+            return policy;
+        }
+    }
+    return QStringLiteral("segment");
+}
+
+void StateMachine::applyScanFailurePolicy(
+    int pathId,
+    common::ScanDeviceKind device,
+    int segmentIndex,
+    quint16 resultCode)
+{
+    const QString policy = currentScanFailurePolicy();
+
+    if (policy == QLatin1String("workpiece")) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("[ScanFail] 策略=workpiece，整表清缓存 Res=") << resultCode
+            << QStringLiteral(" pathId=") << pathId;
+        bumpWorkpieceGeneration(QStringLiteral("scan_fail_workpiece"));
+        clearTransientWorkpieceRuntimeState();
+        resetScanSegmentCache();
+        resetActivePathToFirstEnabled();
+        clearPathProgressTracking(QStringLiteral("scan_fail_workpiece"));
+        return;
+    }
+
+    if (policy == QLatin1String("path")) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("[ScanFail] 策略=path，清当前路径段缓存 Res=") << resultCode
+            << QStringLiteral(" pathId=") << pathId;
+        clearScanSegmentCacheForPathSwitch();
+        m_lastInspectedPathId = -1;
+        m_lastInspectedRunKey.clear();
+        if (pathId > 0) {
+            m_emittedPathFinished.remove(pathId);
+        }
+        return;
+    }
+
+    qWarning(LOG_FLOW).noquote()
+        << QStringLiteral("[ScanFail] 策略=segment，仅剔失败本段 Res=") << resultCode
+        << QStringLiteral(" pathId=") << pathId
+        << QStringLiteral(" device=")
+        << common::ConfigManager::scanDeviceKindToString(device)
+        << QStringLiteral(" 段号=") << segmentIndex;
+    if (segmentIndex > 0 && m_scanSegmentCache.removeSegment(device, segmentIndex)) {
+        qInfo(LOG_FLOW).noquote()
+            << QStringLiteral("[ScanFail] 已从段缓存移除失败段");
+    }
+    // 失败段可能曾被标为已检测：允许同路径重试检测。
+    if (m_lastInspectedPathId == pathId) {
+        m_lastInspectedPathId = -1;
+        m_lastInspectedRunKey.clear();
+    }
+}
+
+void StateMachine::applyInspectionTimeoutFailurePolicy()
+{
+    // 对齐工位1：检测超时先作废在途后台结果，再按策略清缓存。
+    bumpWorkpieceGeneration(QStringLiteral("inspection_timeout"));
+
+    const QString policy = currentScanFailurePolicy();
+    const int pathId =
+        common::ConfigManager::instance() != nullptr
+            ? common::ConfigManager::instance()->activePathId()
+            : 0;
+
+    // 超时不得视为「已检测完成」，否则会挡住同路径重试。
+    m_lastInspectedPathId = -1;
+    m_lastInspectedRunKey.clear();
+
+    if (policy == QLatin1String("workpiece")) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("[ScanFail] Inspection 超时策略=workpiece，整表清缓存");
+        clearTransientWorkpieceRuntimeState();
+        resetScanSegmentCache();
+        resetActivePathToFirstEnabled();
+        clearPathProgressTracking(QStringLiteral("inspection_timeout_workpiece"));
+        return;
+    }
+
+    if (policy == QLatin1String("path")) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("[ScanFail] Inspection 超时策略=path，清当前路径段缓存 pathId=")
+            << pathId;
+        clearScanSegmentCacheForPathSwitch();
+        if (pathId > 0) {
+            m_emittedPathFinished.remove(pathId);
+        }
+        return;
+    }
+
+    qWarning(LOG_FLOW).noquote()
+        << QStringLiteral("[ScanFail] Inspection 超时策略=segment，保留段缓存供重试 pathId=")
+        << pathId;
 }
 
 void StateMachine::onMechEyeFatalError(mech_eye::CaptureErrorCode code, QString message)

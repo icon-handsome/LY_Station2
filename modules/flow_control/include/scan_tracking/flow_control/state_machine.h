@@ -155,6 +155,7 @@ public:
     /// 切路径时只清段缓存，保留本次运行实例落盘目录。
     void clearScanSegmentCacheForPathSwitch();
     void resetSafetyInterlockState() override;
+    void executeResultResetTask() override;
     void maybeAdvancePathOnNewCycleStart(int localIndex) override;
 
     void notifyLoadGraspFinished(quint16 resultCode, const PoseSourceResult& pose) override;
@@ -276,6 +277,27 @@ private:
     void maybeEmitPathStarted(int pathId);
     void maybeEmitPathFinished(int pathId, quint16 resultCode = 1);
     void clearPathProgressTracking(const QString& resetReason);
+    /// 丢弃编号软等待、切路锁存等本件运行态（ResultReset / 冷启动）。
+    void clearTransientWorkpieceRuntimeState();
+    /// 活跃路径回到首条 enabled；成功返回新 pathId，失败返回 0。
+    int resetActivePathToFirstEnabled();
+    /// 当前活动段扫对应的设备组（臂 / 伸缩杆）。
+    common::ScanDeviceKind activeScanDeviceKind() const;
+    /// 读取配置的扫描失败清理策略（segment / path / workpiece）。
+    QString currentScanFailurePolicy() const;
+    /// 对齐工位1：Res>=5 / 段扫超时后按策略清理缓存。
+    void applyScanFailurePolicy(
+        int pathId,
+        common::ScanDeviceKind device,
+        int segmentIndex,
+        quint16 resultCode);
+    /// 检测超时：workpiece 整表清；path 清当前路径段；segment 保留段供重试。
+    void applyInspectionTimeoutFailurePolicy();
+    /// 递增工件世代，作废在途异步回投（对齐工位1 async generation）。
+    quint64 bumpWorkpieceGeneration(const QString& reason);
+    quint64 workpieceGeneration() const;
+    /// generation 与当前一致则 true；否则打日志并返回 false。
+    bool acceptWorkpieceGeneration(quint64 generation, const QString& tag) const;
 
     quint32 readTaskId(const QVector<quint16>& commandBlock) const;
     quint16 resolveScanSegmentIndex(const QVector<quint16>& commandBlock,
@@ -305,9 +327,13 @@ private:
     int m_lastInspectedPathId = -1;
     QString m_lastInspectedRunKey;
     QString m_codeReadCameraIp;
+    /// 发起编号等待时的工件世代；ResultReset 后迟到 OCR 丢弃。
+    quint64 m_codeReadWorkpieceGeneration = 0;
     QSet<int> m_emittedPathStarted;
     QSet<int> m_emittedPathFinished;
     bool m_emittedAllPathsFinished = false;
+    /// 工件世代：ResultReset / 整表失败 / stop 递增；异步检测与迟到回调须比对。
+    std::atomic<quint64> m_workpieceGeneration{0};
     quint16 m_heartbeatCounter = 0;
     quint16 m_alarmLevel = 0;
     quint16 m_alarmCode = 0;

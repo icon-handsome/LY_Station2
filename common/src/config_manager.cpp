@@ -719,6 +719,7 @@ void ConfigManager::writeDefaults(QSettings& settings)
     settings.setValue("pollIntervalMs", 100);
     settings.setValue("heartbeatIntervalMs", 1000);
     settings.setValue("simulatedProcessingMs", 300);
+    settings.setValue("scanFailurePolicy", QStringLiteral("segment"));
     settings.endGroup();
 
     settings.beginGroup("Tracking");
@@ -957,7 +958,25 @@ void ConfigManager::load(const QString& filePath)
     m_flowControlConfig.pollIntervalMs = settings.value("pollIntervalMs", 100).toInt();
     m_flowControlConfig.heartbeatIntervalMs = settings.value("heartbeatIntervalMs", 1000).toInt();
     m_flowControlConfig.simulatedProcessingMs = settings.value("simulatedProcessingMs", 300).toInt();
+    m_flowControlConfig.scanFailurePolicy =
+        settings.value("scanFailurePolicy", QStringLiteral("segment")).toString().trimmed().toLower();
     settings.endGroup();
+
+    // 兼容工位1配置键：若存在 [Resume] scanFailurePolicy 则覆盖（便于双工位共用 ini）
+    settings.beginGroup("Resume");
+    if (settings.contains(QStringLiteral("scanFailurePolicy"))) {
+        m_flowControlConfig.scanFailurePolicy =
+            settings.value("scanFailurePolicy").toString().trimmed().toLower();
+    }
+    settings.endGroup();
+
+    if (m_flowControlConfig.scanFailurePolicy != QStringLiteral("path")
+        && m_flowControlConfig.scanFailurePolicy != QStringLiteral("workpiece")) {
+        m_flowControlConfig.scanFailurePolicy = QStringLiteral("segment");
+    }
+    qInfo(LOG_CONFIG).noquote()
+        << QStringLiteral("扫描失败清理策略 scanFailurePolicy=")
+        << m_flowControlConfig.scanFailurePolicy;
 
     // --- [Tracking] ---
     settings.beginGroup("Tracking");

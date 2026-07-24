@@ -17,6 +17,8 @@ struct ActiveTaskState {
     int scanSegmentTotal = 0;
     int inspectionPathId = 0;
     quint64 captureRequestId = 0;
+    /// 接受本触发时的工件世代；异步回投须比对，ResultReset 后丢弃。
+    quint64 workpieceGeneration = 0;
 };
 
 struct TaskHandlerContext {

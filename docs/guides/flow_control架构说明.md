@@ -79,7 +79,7 @@ StateMachine::onBundleCaptureFinished → ScanSegmentCache 落盘 → completeSc
 | `SelfCheckHandler` | `self_check_handler.cpp` | Modbus + MechEye + Vision 就绪检查 |
 | `StationMaterialCheckHandler` | `station_material_check_handler.cpp` | 占位 OK |
 | `CodeReadHandler` | `code_read_handler.cpp` | 海康 C 编号 OCR（`NumberRecognition`） |
-| `ResultResetHandler` | `result_reset_handler.cpp` | 清空段缓存与安全字 |
+| `ResultResetHandler` | `result_reset_handler.cpp` | 新工件复位：`executeResultResetTask`（清缓存/路径进度/检测标记，路径回首条；递增 `workpieceGeneration` 作废在途回调） |
 
 ---
 

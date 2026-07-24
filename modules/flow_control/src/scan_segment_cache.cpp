@@ -38,6 +38,12 @@ void ScanSegmentCache::clearSegmentsKeepRunRoot()
     m_entries.clear();
 }
 
+bool ScanSegmentCache::removeSegment(common::ScanDeviceKind device, int localIndex)
+{
+    const ScanSegmentCacheKey key{device, localIndex};
+    return m_entries.remove(key) > 0;
+}
+
 bool ScanSegmentCache::ensureRunRoot(quint32 taskId, QString* runRootOut, QString* timestampOut)
 {
     // 仅当 PLC 给出明确且变化的非 0 taskId 时，才换新的运行实例目录。

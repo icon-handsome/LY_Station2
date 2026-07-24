@@ -34,8 +34,12 @@ StateMachine::StateMachine(
         "scan_tracking::flow_control::ScanPathEventInfo");
 
     const auto* configMgr = common::ConfigManager::instance();
-    const auto flowConfig = configMgr ? configMgr->flowControlConfig()
-                                      : common::FlowControlConfig{100, 1000, 300};
+        const auto flowConfig = configMgr ? configMgr->flowControlConfig()
+                                          : common::FlowControlConfig{
+                                                100,
+                                                1000,
+                                                300,
+                                                QStringLiteral("segment")};
     if (configMgr) {
         const auto& profile = configMgr->stationProfile();
         qInfo(LOG_FLOW).noquote()
@@ -129,6 +133,12 @@ void StateMachine::start()
 {
     qInfo(LOG_FLOW) << QStringLiteral("状态机启动。");
     clearActiveTask();
+    // 无断点续跑：冷启动不得残留上一进程/上一轮段缓存与路径进度。
+    bumpWorkpieceGeneration(QStringLiteral("state_machine.start"));
+    clearTransientWorkpieceRuntimeState();
+    resetScanSegmentCache();
+    resetActivePathToFirstEnabled();
+    clearPathProgressTracking(QStringLiteral("state_machine.start"));
     m_isPollingPlc = false;
     m_ipcState = protocol::IpcState::Initializing;
     m_currentStage = protocol::Stage::Idle;
@@ -151,6 +161,8 @@ void StateMachine::stop()
     if (m_stopped.exchange(true)) {
         return;
     }
+
+    bumpWorkpieceGeneration(QStringLiteral("state_machine.stop"));
 
     blockSignals(true);
 
@@ -329,6 +341,107 @@ void StateMachine::resetSafetyInterlockState()
     m_personZoneAlarmActive = false;
 }
 
+void StateMachine::clearTransientWorkpieceRuntimeState()
+{
+    m_codeReadPending = false;
+    m_codeReadSoftPending = false;
+    m_codeReadCameraIp.clear();
+    m_codeReadWorkpieceGeneration = 0;
+    m_advancePathAfterTriggerRelease = false;
+    m_lastInspectedPathId = -1;
+    m_lastInspectedRunKey.clear();
+}
+
+quint64 StateMachine::bumpWorkpieceGeneration(const QString& reason)
+{
+    const quint64 next = m_workpieceGeneration.fetch_add(1, std::memory_order_acq_rel) + 1;
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("[WorkpieceGen] 已递增 generation=") << next
+        << QStringLiteral(" reason=") << reason;
+    return next;
+}
+
+quint64 StateMachine::workpieceGeneration() const
+{
+    return m_workpieceGeneration.load(std::memory_order_acquire);
+}
+
+bool StateMachine::acceptWorkpieceGeneration(quint64 generation, const QString& tag) const
+{
+    const quint64 current = workpieceGeneration();
+    if (generation == current) {
+        return true;
+    }
+    qWarning(LOG_FLOW).noquote()
+        << QStringLiteral("[WorkpieceGen] 忽略过期回调 tag=") << tag
+        << QStringLiteral(" generation=") << generation
+        << QStringLiteral(" current=") << current;
+    return false;
+}
+
+int StateMachine::resetActivePathToFirstEnabled()
+{
+    auto* cfgMgr = common::ConfigManager::instance();
+    if (cfgMgr == nullptr) {
+        return 0;
+    }
+
+    const QVector<int> ids = cfgMgr->enabledPathIds();
+    if (ids.isEmpty()) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("ResultReset/启动：无 enabled 路径可复位");
+        return 0;
+    }
+
+    const int fromPathId = cfgMgr->activePathId();
+    const int toPathId = ids.front();
+    if (!cfgMgr->setActivePathId(toPathId)) {
+        return 0;
+    }
+
+    if (fromPathId != toPathId) {
+        qInfo(LOG_FLOW).noquote()
+            << QStringLiteral("活跃路径已复位到首条 enabled：")
+            << fromPathId << QStringLiteral(" -> ") << toPathId
+            << QStringLiteral("(") << cfgMgr->activePathName() << QStringLiteral(")")
+            << QStringLiteral(" algorithm=") << cfgMgr->activePathAlgorithm();
+    }
+    return toPathId;
+}
+
+void StateMachine::executeResultResetTask()
+{
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("Trig_ResultReset：进入新工件复位（清缓存/路径进度/检测标记，路径回首条）");
+
+    const int fromPathId =
+        common::ConfigManager::instance() != nullptr
+            ? common::ConfigManager::instance()->activePathId()
+            : 0;
+
+    resetSafetyInterlockState();
+    bumpWorkpieceGeneration(QStringLiteral("result_reset"));
+    clearTransientWorkpieceRuntimeState();
+    resetScanSegmentCache();
+    const int toPathId = resetActivePathToFirstEnabled();
+    clearPathProgressTracking(QStringLiteral("result_reset"));
+
+    if (isModbusConnected()) {
+        clearScanSegmentDoneRegisters();
+        clearInspectionResultRegisters();
+        clearIpcSafetyActionWord();
+    }
+
+    completeActiveTask(1);
+    notifyResultResetFinished(1);
+
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("Trig_ResultReset 完成：activePathId=")
+        << toPathId
+        << QStringLiteral(" (was ") << fromPathId << QLatin1Char(')')
+        << QStringLiteral("，后续段号 1 按首条路径处理");
+}
+
 void StateMachine::notifyLoadGraspFinished(quint16 resultCode, const PoseSourceResult& pose)
 {
     emit loadGraspFinished(resultCode, pose.x, pose.y, pose.z, pose.rx, pose.ry, pose.rz);
@@ -361,7 +474,7 @@ void StateMachine::notifyCodeReadFinished(quint16 resultCode, const QString& cod
 
 void StateMachine::notifyResultResetFinished(quint16 resultCode)
 {
-    clearPathProgressTracking(QStringLiteral("cache_reset"));
+    // 路径进度清理由 executeResultResetTask / start 显式完成；此处只推 HMI 事件。
     emit resultResetFinished(resultCode);
 }
 

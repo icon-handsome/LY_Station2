@@ -59,6 +59,11 @@ void StateMachine::finishInspection(const InspectionResult& result)
     m_codeReadPending = false;
     m_codeReadCameraIp.clear();
 
+    if (!acceptWorkpieceGeneration(
+            m_activeTask.workpieceGeneration, QStringLiteral("finishInspection"))) {
+        return;
+    }
+
     publishInspectionOutcome(result, QStringLiteral("Trig_Inspection"));
     markCurrentPathInspectionDone();
     if (result.resultCode == 1) {
@@ -196,7 +201,12 @@ void StateMachine::maybeAutoRunInspectionBeforeLeavingPath()
         << m_scanSegmentCache.cachedCountForDevice(common::ScanDeviceKind::Telescopic)
         << QStringLiteral("/") << cfgMgr->enabledTelescopicPointCount();
 
+    // 预留：算法后台化后在回投处比对同一 generation。
+    const quint64 generation = workpieceGeneration();
     const InspectionResult result = evaluateCachedInspection(m_scanSegmentCache.runTaskId());
+    if (!acceptWorkpieceGeneration(generation, QStringLiteral("AutoInspection"))) {
+        return;
+    }
     publishInspectionOutcome(result, QStringLiteral("AutoInspection"));
     markCurrentPathInspectionDone();
     if (result.resultCode == 1) {
@@ -401,6 +411,7 @@ void StateMachine::startCodeReadCapture()
     m_codeReadPending = !fireAndForget;
     m_codeReadSoftPending = fireAndForget;
     m_codeReadCameraIp = cameraIp;
+    m_codeReadWorkpieceGeneration = workpieceGeneration();
     setTaskProgress(30);
     publishIpcStatus();
 
@@ -416,10 +427,12 @@ void StateMachine::startCodeReadCapture()
                 ? protocol::triggerName(*m_activeTask.definition)
                 : QStringLiteral("-"))
         << (fireAndForget ? QStringLiteral(" mode=fire_and_forget")
-                          : QStringLiteral(" mode=wait_ocr"));
+                          : QStringLiteral(" mode=wait_ocr"))
+        << QStringLiteral(" workpieceGen=") << m_codeReadWorkpieceGeneration;
 
     if (!hik->requestCapture(vision::CaptureType::NumberRecognition, cameraIp)) {
         m_codeReadSoftPending = false;
+        m_codeReadWorkpieceGeneration = 0;
         finishCodeRead(
             2,
             QString(),
@@ -428,9 +441,14 @@ void StateMachine::startCodeReadCapture()
     }
 
     if (fireAndForget) {
+        const quint64 generation = m_codeReadWorkpieceGeneration;
         QPointer<StateMachine> self(this);
-        QTimer::singleShot(150, this, [self]() {
+        QTimer::singleShot(150, this, [self, generation]() {
             if (self == nullptr) {
+                return;
+            }
+            if (!self->acceptWorkpieceGeneration(
+                    generation, QStringLiteral("codeRead.fireAndForgetAck"))) {
                 return;
             }
             // OCR 可能已先到并清掉 softPending；只要任务未收尾仍需写 Ack=Completed。
@@ -457,6 +475,10 @@ void StateMachine::onHikOcrTextReceived(QString cameraIp, QString text)
     }
 
     if (m_codeReadPending) {
+        if (!acceptWorkpieceGeneration(
+                m_codeReadWorkpieceGeneration, QStringLiteral("codeRead.ocrPending"))) {
+            return;
+        }
         if (!m_codeReadCameraIp.isEmpty() && cameraIp.trimmed() != m_codeReadCameraIp) {
             return;
         }
@@ -471,12 +493,20 @@ void StateMachine::onHikOcrTextReceived(QString cameraIp, QString text)
 
 void StateMachine::applyLateCodeReadOcr(const QString& cameraIp, const QString& codeValue)
 {
+    if (!acceptWorkpieceGeneration(
+            m_codeReadWorkpieceGeneration, QStringLiteral("codeRead.ocrLate"))) {
+        m_codeReadSoftPending = false;
+        m_codeReadCameraIp.clear();
+        m_codeReadWorkpieceGeneration = 0;
+        return;
+    }
     if (!m_codeReadCameraIp.isEmpty() && cameraIp.trimmed() != m_codeReadCameraIp) {
         return;
     }
 
     m_codeReadSoftPending = false;
     m_codeReadCameraIp.clear();
+    m_codeReadWorkpieceGeneration = 0;
 
     if (isModbusConnected()) {
         writeAsciiPlaceholder(
@@ -494,9 +524,14 @@ void StateMachine::scheduleCodeReadScanFinalizeWatchdog(int trigOffset)
 {
     // 给 PLC 留出采样 Done/Ack/Res 的时间；超时仍占着任务会导致后续触发全部被忽略。
     const int holdDoneMs = 500;
+    const quint64 generation = workpieceGeneration();
     QPointer<StateMachine> self(this);
-    QTimer::singleShot(holdDoneMs, this, [self, trigOffset, holdDoneMs]() {
+    QTimer::singleShot(holdDoneMs, this, [self, trigOffset, holdDoneMs, generation]() {
         if (self == nullptr) {
+            return;
+        }
+        if (!self->acceptWorkpieceGeneration(
+                generation, QStringLiteral("codeRead.finalizeWatchdog"))) {
             return;
         }
         if (self->m_activeTask.definition == nullptr ||

@@ -88,6 +88,9 @@ struct FlowControlConfig {
     int pollIntervalMs;           ///< 状态机主循环轮询间隔
     int heartbeatIntervalMs;      ///< Modbus 心跳写入间隔
     int simulatedProcessingMs;    ///< 模拟处理耗时（调试 / 占位）
+    /// 扫描失败清理策略（对齐工位1 [Resume] scanFailurePolicy；本工位暂无完整续跑）
+    /// segment=仅剔失败本段；path=清当前路径段缓存（保留 run_*）；workpiece=整表清零并解绑 run_*
+    QString scanFailurePolicy = QStringLiteral("segment");
 };
 
 /// 扫描跟踪相关参数，对应 config.ini [Tracking] 节。

@@ -329,13 +329,15 @@ void StateMachine::processTrigger(const protocol::TriggerDefinition& trigger, co
     }
     m_activeTask.completionAnnounced = false;
     m_activeTask.captureRequestId = 0;
+    m_activeTask.workpieceGeneration = workpieceGeneration();
 
     qInfo(LOG_FLOW).noquote()
         << QStringLiteral("已接受触发") << protocol::triggerName(trigger)
         << QStringLiteral(" pathId=") << m_activeTask.inspectionPathId
         << QStringLiteral(" 超时s=") << m_activeTask.timeoutSeconds
         << QStringLiteral(" 段号=") << m_activeTask.scanSegmentIndex
-        << QStringLiteral("/") << m_activeTask.scanSegmentTotal;
+        << QStringLiteral("/") << m_activeTask.scanSegmentTotal
+        << QStringLiteral(" workpieceGen=") << m_activeTask.workpieceGeneration;
 
     setAlarm(0, 0, QString());
     setState(AppState::Scanning);
@@ -475,6 +477,7 @@ void StateMachine::onProcessTimeout()
         m_codeReadSoftPending = false;
         m_codeReadCameraIp.clear();
         m_advancePathAfterTriggerRelease = false;
+        // Res=6：completeScanSegmentCapture 内按 scanFailurePolicy 清理。
         completeScanSegmentCapture(6, 0, 0, protocol::AckState::Failed, false);
         return;
     }
@@ -493,7 +496,11 @@ void StateMachine::onProcessTimeout()
         InspectionResult timeoutResult;
         timeoutResult.resultCode = kInspectionResTimeoutNg;
         timeoutResult.message = QStringLiteral("检测任务超时");
-        finishInspection(timeoutResult);
+        // 不走 finishInspection：避免 mark「已检测」并误切路径；对齐工位1超时清理策略。
+        publishInspectionOutcome(timeoutResult, QStringLiteral("Trig_Inspection"));
+        completeActiveTask(
+            kInspectionResTimeoutNg, protocol::AckState::Failed, false);
+        applyInspectionTimeoutFailurePolicy();
         return;
     }
 
@@ -701,10 +708,24 @@ void StateMachine::abortActiveTaskForFault(quint16 resultCode)
         return;
     }
 
-    if (m_activeTask.definition->stage == protocol::Stage::ScanSegment) {
-        writeScanSegmentResult(m_activeTask.scanSegmentIndex, 0, 0);
-    } else if (m_activeTask.definition->stage == protocol::Stage::TelescopicScan) {
-        writeTelescopicScanResult(m_activeTask.scanSegmentIndex, 0, 0);
+    if (isScanCaptureStage(m_activeTask.definition->stage)) {
+        // 与 completeScanSegmentCapture 失败路径一致：先按策略清缓存再写失败 Res。
+        if (!m_activeTask.completionAnnounced && resultCode >= 5) {
+            const int pathId =
+                common::ConfigManager::instance() != nullptr
+                    ? common::ConfigManager::instance()->activePathId()
+                    : 0;
+            applyScanFailurePolicy(
+                pathId,
+                activeScanDeviceKind(),
+                m_activeTask.scanSegmentIndex,
+                resultCode);
+        }
+        if (m_activeTask.definition->stage == protocol::Stage::ScanSegment) {
+            writeScanSegmentResult(m_activeTask.scanSegmentIndex, 0, 0);
+        } else {
+            writeTelescopicScanResult(m_activeTask.scanSegmentIndex, 0, 0);
+        }
     }
 
     if (m_modbus && m_modbus->isConnected()) {

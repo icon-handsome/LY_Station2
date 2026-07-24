@@ -85,6 +85,10 @@ public:
     virtual void resetScanSegmentCache() = 0;
     virtual void resetSafetyInterlockState() = 0;
 
+    /// Trig_ResultReset：新工件复位（清段缓存/路径进度/检测标记，活跃路径回到首条 enabled）。
+    /// 与工位1同信号；本工位无断点续跑时也以此为唯一安全开新件入口。
+    virtual void executeResultResetTask() = 0;
+
     /// 当前路径扫描已齐套且 PLC 再次下发本地段号 1 时：清缓存并切到下一路（不依赖 Inspection/ResultReset）。
     virtual void maybeAdvancePathOnNewCycleStart(int localIndex) = 0;
 
