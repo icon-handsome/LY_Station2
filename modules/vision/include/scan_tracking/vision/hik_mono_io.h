@@ -7,7 +7,7 @@
 namespace scan_tracking::vision {
 
 /// 生成分段海康 Mono BMP：
-/// .../P{pathId}_{Arm|Telescopic}_{hikA|hikB|hikC}_{segmentIndex}.bmp
+/// .../Path{pathId}_{Arm|Telescopic}_{hikA|hikB|hikC}_{segmentIndex}.bmp
 QString buildSegmentHikMonoPath(
     const QString& configuredRoot,
     int pathId,

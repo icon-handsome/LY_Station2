@@ -14,14 +14,14 @@ QString buildSegmentLbPoseDir(
     const QString& deviceTag,
     int segmentIndex);
 
-/// Rt_global 文本路径：.../P{pathId}_{Arm|Telescopic}_rt_global_{segmentIndex}.txt
+/// Rt_global 文本路径：.../Path{pathId}_{Arm|Telescopic}_rt_global_{segmentIndex}.txt
 QString buildSegmentLbPoseMatrixPath(
     const QString& configuredRoot,
     int pathId,
     const QString& deviceTag,
     int segmentIndex);
 
-/// 诊断文本路径：.../P{pathId}_{Arm|Telescopic}_diagnostic_{segmentIndex}.txt
+/// 诊断文本路径：.../Path{pathId}_{Arm|Telescopic}_diagnostic_{segmentIndex}.txt
 QString buildSegmentLbPoseDiagnosticPath(
     const QString& configuredRoot,
     int pathId,

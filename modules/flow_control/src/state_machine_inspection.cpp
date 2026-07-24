@@ -368,6 +368,16 @@ void StateMachine::maybeAdvancePathOnNewCycleStart(int localIndex)
 
 void StateMachine::startCodeReadCapture()
 {
+    // TEMP: 临时关闭 pathId=2 的编号识别算法执行。
+    if (const auto* cfgMgr = common::ConfigManager::instance();
+        cfgMgr != nullptr && cfgMgr->activePathId() == 2) {
+        finishCodeRead(
+            1,
+            QString(),
+            QStringLiteral("TEMP: pathId=2 算法执行已临时关闭"));
+        return;
+    }
+
     auto* hik = m_hikCameraCController;
     if (hik == nullptr || !hik->isStarted()) {
         finishCodeRead(2, QString(), QStringLiteral("海康智能相机 C 未启动，无法编号识别。"));

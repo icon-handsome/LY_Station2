@@ -101,7 +101,7 @@ QString buildCaptureArtifactFileName(
     if (ext.isEmpty()) {
         ext = QStringLiteral("bin");
     }
-    return QStringLiteral("P%1_%2_%3_%4.%5")
+    return QStringLiteral("Path%1_%2_%3_%4.%5")
         .arg(safePathId)
         .arg(captureDeviceTagForFileName(deviceTag))
         .arg(stem)

@@ -24,8 +24,8 @@ QString capturePointDirectory(
 /// 设备标签用于文件名：arm→Arm，telescopic→Telescopic，其它首字母大写
 QString captureDeviceTagForFileName(const QString& deviceTag);
 
-/// 段产物唯一文件名：P{pathId}_{Arm|Telescopic}_{artifact}_{pointIndex}.{ext}
-/// 例：P3_Arm_cloud_1.ply
+/// 段产物唯一文件名：Path{pathId}_{Arm|Telescopic}_{artifact}_{pointIndex}.{ext}
+/// 例：Path3_Arm_cloud_1.ply
 QString buildCaptureArtifactFileName(
     int pathId,
     const QString& deviceTag,

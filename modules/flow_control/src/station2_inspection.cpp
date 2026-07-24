@@ -1073,6 +1073,17 @@ InspectionResult evaluateStation2Inspection(
         effective.algorithm = QStringLiteral("weld_section");
     }
 
+    // TEMP: 临时关闭 pathId=1/2 的算法执行，只跑 3/4（路径本身不禁用）。
+    if (effective.pathId == 1 || effective.pathId == 2) {
+        InspectionResult result;
+        fillPathMeta(&result, effective);
+        result.resultCode = 1;
+        result.message = QStringLiteral(
+            "TEMP: pathId=%1 算法执行已临时关闭").arg(effective.pathId);
+        qWarning(LOG_STATION2_INSPECTION).noquote() << result.message;
+        return result;
+    }
+
     if (effective.algorithm == QLatin1String("weld_section")) {
         return evaluateWeldSectionInspection(cache, taskId, effective);
     }

@@ -10,7 +10,7 @@ namespace scan_tracking::mech_eye {
 QString defaultScanCacheDirectory();
 
 /// 生成分段 PLY 绝对路径：
-/// <runRoot>/path_{pathId}/{arm|telescopic}/{segmentIndex}/P{pathId}_{Arm|Telescopic}_cloud_{segmentIndex}.ply
+/// <runRoot>/path_{pathId}/{arm|telescopic}/{segmentIndex}/Path{pathId}_{Arm|Telescopic}_cloud_{segmentIndex}.ply
 QString buildSegmentPlyPath(
     const QString& configuredRoot,
     int pathId,
@@ -18,7 +18,7 @@ QString buildSegmentPlyPath(
     int segmentIndex);
 
 /// 生成分段拼接点云 PLY（与工位一 pointcloud_stitched 对应）：
-/// .../P{pathId}_{Arm|Telescopic}_cloud_stitched_{segmentIndex}.ply
+/// .../Path{pathId}_{Arm|Telescopic}_cloud_stitched_{segmentIndex}.ply
 QString buildSegmentStitchedPlyPath(
     const QString& configuredRoot,
     int pathId,
@@ -39,7 +39,7 @@ bool loadPointCloudFrameFromPly(const QString& absolutePath, PointCloudFrame* ou
 void releasePointCloudFrameBuffers(PointCloudFrame* frame);
 
 /// 生成分段 Mech 纹理 PNG：
-/// .../P{pathId}_{Arm|Telescopic}_texture_{segmentIndex}.png
+/// .../Path{pathId}_{Arm|Telescopic}_texture_{segmentIndex}.png
 QString buildSegmentMechTexturePngPath(
     const QString& configuredRoot,
     int pathId,
