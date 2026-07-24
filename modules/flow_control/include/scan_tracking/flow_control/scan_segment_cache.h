@@ -54,7 +54,7 @@ public:
         common::ScanDeviceKind device,
         int localIndex,
         quint32 taskId,
-        vision::MultiCameraCaptureBundle bundle);
+        vision::MultiCameraCaptureBundle&& bundle);
 
     bool persistSegment(
         common::ScanDeviceKind device,

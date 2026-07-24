@@ -25,6 +25,7 @@ void MechEyeService::registerMetaTypes()
     qRegisterMetaType<scan_tracking::mech_eye::CaptureErrorCode>("scan_tracking::mech_eye::CaptureErrorCode");
     qRegisterMetaType<scan_tracking::mech_eye::CameraRuntimeState>("scan_tracking::mech_eye::CameraRuntimeState");
     qRegisterMetaType<scan_tracking::mech_eye::CameraInfoSnapshot>("scan_tracking::mech_eye::CameraInfoSnapshot");
+    qRegisterMetaType<scan_tracking::mech_eye::GrayTextureFrame>("scan_tracking::mech_eye::GrayTextureFrame");
     qRegisterMetaType<scan_tracking::mech_eye::PointCloudFrame>("scan_tracking::mech_eye::PointCloudFrame");
     qRegisterMetaType<scan_tracking::mech_eye::CaptureRequest>("scan_tracking::mech_eye::CaptureRequest");
     qRegisterMetaType<scan_tracking::mech_eye::CaptureResult>("scan_tracking::mech_eye::CaptureResult");

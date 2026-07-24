@@ -10,6 +10,7 @@
 #include <exception>
 #include <fstream>
 #include <limits>
+#include <mutex>
 #include <vector>
 #include <qdir.h>
 #include <qcoreapplication.h>
@@ -29,6 +30,12 @@ namespace scan_tracking {
 namespace mech_eye {
 
 namespace {
+
+std::mutex& mechEyeSdkMutex()
+{
+    static std::mutex mutex;
+    return mutex;
+}
 
 bool isIpv4Address(const QString& text)
 {
@@ -161,6 +168,7 @@ MechEyeWorker::MechEyeWorker(const QString& roleName, QObject* parent)
 /* 析构函数：在对象销毁前先断开相机，再释放内部实现。 */
 MechEyeWorker::~MechEyeWorker()
 {
+    const std::lock_guard<std::mutex> sdkLock(mechEyeSdkMutex());
     QString errorMessage;
     disconnectCamera(&errorMessage);
     delete m_impl;
@@ -170,6 +178,7 @@ MechEyeWorker::~MechEyeWorker()
 /* 启动 worker：记录默认相机，并尝试建立初始连接。 */
 void MechEyeWorker::startWorker(const QString& defaultCameraKey)
 {
+    const std::lock_guard<std::mutex> sdkLock(mechEyeSdkMutex());
     m_defaultCameraKey = defaultCameraKey.trimmed();
 
     QString errorMessage;
@@ -188,6 +197,7 @@ void MechEyeWorker::startWorker(const QString& defaultCameraKey)
 /* 停止 worker：发出断开流程并把状态收束到 Stopped。 */
 void MechEyeWorker::stopWorker()
 {
+    const std::lock_guard<std::mutex> sdkLock(mechEyeSdkMutex());
     setRuntimeState(CameraRuntimeState::Disconnecting, QStringLiteral("正在断开相机连接"));
 
     QString errorMessage;
@@ -201,6 +211,7 @@ void MechEyeWorker::stopWorker()
 /* 刷新状态：必要时重新连接相机，并同步当前在线信息。 */
 void MechEyeWorker::refreshStatus()
 {
+    const std::lock_guard<std::mutex> sdkLock(mechEyeSdkMutex());
     if (!m_connected) {
         QString errorMessage;
         if (ensureConnected(m_defaultCameraKey, 3000, &errorMessage)) {
@@ -236,6 +247,7 @@ void MechEyeWorker::refreshStatus()
 /* 执行一次采集：先确保连接正常，再按采集模式调用 SDK。 */
 void MechEyeWorker::performCapture(const scan_tracking::mech_eye::CaptureRequest& request)
 {
+    const std::lock_guard<std::mutex> sdkLock(mechEyeSdkMutex());
     QElapsedTimer timer;
     timer.start();
     CaptureRequest normalized = request;

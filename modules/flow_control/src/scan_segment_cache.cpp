@@ -10,6 +10,7 @@
 #include <QtCore/QLoggingCategory>
 
 #include <algorithm>
+#include <utility>
 
 Q_LOGGING_CATEGORY(LOG_SCAN_CACHE, "flow_control.scan_cache")
 
@@ -91,7 +92,7 @@ void ScanSegmentCache::storeSegment(
     common::ScanDeviceKind device,
     int localIndex,
     quint32 taskId,
-    vision::MultiCameraCaptureBundle bundle)
+    vision::MultiCameraCaptureBundle&& bundle)
 {
     if (!ensureRunRoot(taskId)) {
         qWarning(LOG_SCAN_CACHE).noquote()
@@ -110,7 +111,7 @@ void ScanSegmentCache::storeSegment(
     entry.runCaptureRoot = m_runCaptureRoot;
     entry.captureTimestamp = m_runTimestamp;
     entry.bundle = std::move(bundle);
-    m_entries.insert(key, entry);
+    m_entries.insert(key, std::move(entry));
 }
 
 bool ScanSegmentCache::persistSegment(
@@ -237,18 +238,20 @@ bool persistScanSegmentBundle(
         pathId = configMgr->activePathId();
     }
 
-    if (bundle.mechEyeResult.pointCloud.isValid() ||
-        bundle.mechEyeResult.pointCloudRaw.isValid()) {
+    if (bundle.mechEyeResult.pointCloud.isValid()) {
         const scan_tracking::mech_eye::GrayTextureFrame* texture =
             bundle.mechEyeResult.texture2D.isValid() ? &bundle.mechEyeResult.texture2D : nullptr;
 
-        // 原始云：有 LB 拼接时写 pointCloudRaw；否则写当前 pointCloud
         const scan_tracking::mech_eye::PointCloudFrame& rawCloud =
-            bundle.mechEyeResult.pointCloudRaw.isValid()
-                ? bundle.mechEyeResult.pointCloudRaw
-                : bundle.mechEyeResult.pointCloud;
+            bundle.mechEyeResult.pointCloud;
         const QString plyPath = scan_tracking::mech_eye::buildSegmentPlyPath(
             runRoot, pathId, deviceLabel, segmentIndex);
+        qInfo(LOG_SCAN_CACHE).noquote()
+            << QStringLiteral("%1 段 %2 开始写 PLY cloud points=")
+                   .arg(deviceLabel)
+                   .arg(segmentIndex)
+            << rawCloud.pointCount
+            << QStringLiteral(" stitched=false");
         if (plyPath.isEmpty() ||
             !scan_tracking::mech_eye::savePointCloudFrameToPly(rawCloud, plyPath, texture)) {
             recordFailure(QStringLiteral("%1 段 %2 Mech-Eye 点云落盘失败")
@@ -256,26 +259,39 @@ bool persistScanSegmentBundle(
                               .arg(segmentIndex));
         }
 
-        // 拼接云：与工位一 pointcloud_stitched 对应；仅 LB 成功变换后另存
-        if (bundle.mechEyeResult.pointCloudRaw.isValid() &&
-            bundle.mechEyeResult.pointCloud.isValid()) {
-            const QString stitchedPath = scan_tracking::mech_eye::buildSegmentStitchedPlyPath(
-                runRoot, pathId, deviceLabel, segmentIndex);
-            if (stitchedPath.isEmpty() ||
-                !scan_tracking::mech_eye::savePointCloudFrameToPly(
-                    bundle.mechEyeResult.pointCloud, stitchedPath, texture)) {
-                recordFailure(QStringLiteral("%1 段 %2 Mech-Eye 拼接点云落盘失败")
-                                  .arg(deviceLabel)
-                                  .arg(segmentIndex));
-            }
-        }
+        // 拼接云落盘暂时关闭，保留代码便于后续恢复。
+        // if (hasLbStitchedCloud) {
+        //     const QString stitchedPath = scan_tracking::mech_eye::buildSegmentStitchedPlyPath(
+        //         runRoot, pathId, deviceLabel, segmentIndex);
+        //     qInfo(LOG_SCAN_CACHE).noquote()
+        //         << QStringLiteral("%1 段 %2 开始写 PLY cloud_stitched points=")
+        //                .arg(deviceLabel)
+        //                .arg(segmentIndex)
+        //         << bundle.mechEyeResult.pointCloud.pointCount;
+        //     if (stitchedPath.isEmpty() ||
+        //         !scan_tracking::mech_eye::savePointCloudFrameToPly(
+        //             bundle.mechEyeResult.pointCloud, stitchedPath, texture)) {
+        //         recordFailure(QStringLiteral("%1 段 %2 Mech-Eye 拼接点云落盘失败")
+        //                           .arg(deviceLabel)
+        //                           .arg(segmentIndex));
+        //     }
+        // }
     }
 
     if (bundle.mechEyeResult.success()) {
+        const bool textureValid = bundle.mechEyeResult.texture2D.isValid();
+        qInfo(LOG_SCAN_CACHE).noquote()
+            << QStringLiteral("%1 段 %2 开始写 Mech 纹理 PNG valid=")
+                   .arg(deviceLabel)
+                   .arg(segmentIndex)
+            << textureValid
+            << QStringLiteral(" size=")
+            << bundle.mechEyeResult.texture2D.width << QLatin1Char('x')
+            << bundle.mechEyeResult.texture2D.height;
         const QString pngPath = scan_tracking::mech_eye::buildSegmentMechTexturePngPath(
             runRoot, pathId, deviceLabel, segmentIndex);
         if (pngPath.isEmpty() ||
-            !bundle.mechEyeResult.texture2D.isValid() ||
+            !textureValid ||
             !scan_tracking::mech_eye::saveGrayTextureFrameToPng(
                 bundle.mechEyeResult.texture2D, pngPath)) {
             recordFailure(QStringLiteral("%1 段 %2 Mech-Eye 纹理落盘失败")
@@ -305,7 +321,8 @@ bool persistScanSegmentBundle(
                                   .arg(segmentIndex));
             }
         }
-    } else if (!cxpParticipated) {
+    } else if (bundle.hikCParticipated() && !bundle.hikCameraCTriggerOk && !cxpParticipated) {
+        // 海康 C 仅 trigger-only（已发 start）时允许无本地图；真正采集失败才记错。
         recordFailure(QStringLiteral("%1 段 %2 海康 C 无有效帧")
                           .arg(deviceLabel)
                           .arg(segmentIndex));

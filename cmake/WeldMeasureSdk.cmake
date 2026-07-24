@@ -76,8 +76,10 @@ function(scan_tracking_deploy_weld_measure_runtime target_name)
     get_property(_ort_release GLOBAL PROPERTY SCAN_TRACKING_WELD_MEASURE_ORT_RELEASE)
     get_property(_ort_debug GLOBAL PROPERTY SCAN_TRACKING_WELD_MEASURE_ORT_DEBUG)
     set(_models_dir "${_sdk_dir}/models")
+    set(_config_dir "${CMAKE_SOURCE_DIR}/config/weld_measure")
+    set(_config_ini "${_config_dir}/weld_measurement.ini")
 
-    add_custom_command(TARGET ${target_name} POST_BUILD
+    set(_copy_cmds
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "$<IF:$<CONFIG:Debug>,${_dll_debug},${_dll_release}>"
             "$<TARGET_FILE_DIR:${target_name}>"
@@ -89,6 +91,43 @@ function(scan_tracking_deploy_weld_measure_runtime target_name)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${_models_dir}/pointnet_weld_seam_V7.3_good.onnx"
             "$<TARGET_FILE_DIR:${target_name}>/models/weld_measure/pointnet_weld_seam_V7.3_good.onnx"
+    )
+
+    if(EXISTS "${_config_ini}")
+        list(APPEND _copy_cmds
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_FILE_DIR:${target_name}>/config/weld_measure"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_config_ini}"
+                "$<TARGET_FILE_DIR:${target_name}>/config/weld_measure/weld_measurement.ini"
+        )
+        # Prefer ASCII-safe aliases; fall back to Chinese names if present.
+        set(_arm_ini "${_config_dir}/weld_measurement-arm.ini")
+        set(_tele_ini "${_config_dir}/weld_measurement-telescopic.ini")
+        if(NOT EXISTS "${_arm_ini}")
+            set(_arm_ini "${_config_dir}/weld_measurement-机械臂直焊缝.ini")
+        endif()
+        if(NOT EXISTS "${_tele_ini}")
+            set(_tele_ini "${_config_dir}/weld_measurement-伸缩杆直焊缝.ini")
+        endif()
+        if(EXISTS "${_arm_ini}")
+            list(APPEND _copy_cmds
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_arm_ini}"
+                    "$<TARGET_FILE_DIR:${target_name}>/config/weld_measure/weld_measurement-arm.ini"
+            )
+        endif()
+        if(EXISTS "${_tele_ini}")
+            list(APPEND _copy_cmds
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_tele_ini}"
+                    "$<TARGET_FILE_DIR:${target_name}>/config/weld_measure/weld_measurement-telescopic.ini"
+            )
+        endif()
+    endif()
+
+    add_custom_command(TARGET ${target_name} POST_BUILD
+        ${_copy_cmds}
         COMMENT "Deploying WeldMeasure SDK runtime"
     )
 

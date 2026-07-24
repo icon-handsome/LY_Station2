@@ -81,23 +81,38 @@ QString incompleteQuotaMessage(
         .arg(quota.expectedArmCount);
 }
 
-scan_tracking::weld_measure::WeldMeasureService& sharedWeldMeasureService()
+scan_tracking::weld_measure::WeldMeasureService& sharedWeldMeasureServiceArm()
 {
     static scan_tracking::weld_measure::WeldMeasureService service;
     return service;
 }
 
-bool ensureWeldMeasureReady(QString* errorMessage)
+scan_tracking::weld_measure::WeldMeasureService& sharedWeldMeasureServiceTelescopic()
 {
-    auto& service = sharedWeldMeasureService();
+    static scan_tracking::weld_measure::WeldMeasureService service;
+    return service;
+}
+
+bool ensureWeldMeasureReadyForDevice(
+    common::ScanDeviceKind device,
+    QString* errorMessage)
+{
+    const bool isArm = (device == common::ScanDeviceKind::Arm);
+    auto& service = isArm ? sharedWeldMeasureServiceArm() : sharedWeldMeasureServiceTelescopic();
     if (service.isReady()) {
         return true;
     }
 
+    const QString configPath = isArm
+        ? scan_tracking::weld_measure::WeldMeasureService::defaultArmConfigPath()
+        : scan_tracking::weld_measure::WeldMeasureService::defaultTelescopicConfigPath();
+
     scan_tracking::weld_measure::WeldMeasureError error;
-    if (!service.initialize(QString(), &error)) {
+    if (!service.initializeFromIni(configPath, &error)) {
         if (errorMessage != nullptr) {
-            *errorMessage = error.message;
+            *errorMessage = error.message.isEmpty()
+                ? QStringLiteral("WeldMeasure initializeFromIni failed：%1").arg(configPath)
+                : error.message;
         }
         return false;
     }
@@ -285,23 +300,33 @@ InspectionResult evaluateWeldSectionInspection(
     }
 
     QString initError;
-    if (!ensureWeldMeasureReady(&initError)) {
+    if (!ensureWeldMeasureReadyForDevice(common::ScanDeviceKind::Arm, &initError)) {
         result.resultCode = 2;
         result.ngReasonWord0 = kNgReasonAlgorithmFailed;
         result.measurement.qualityCode = 2;
         result.measureItemCount = 1;
-        result.message = QStringLiteral("pathId=%1 焊缝测量算法初始化失败：%2")
+        result.message = QStringLiteral("pathId=%1 机械臂焊缝测量算法初始化失败：%2")
+                             .arg(quota.pathId)
+                             .arg(initError);
+        return result;
+    }
+    if (quota.expectedTelescopicCount > 0 &&
+        !ensureWeldMeasureReadyForDevice(common::ScanDeviceKind::Telescopic, &initError)) {
+        result.resultCode = 2;
+        result.ngReasonWord0 = kNgReasonAlgorithmFailed;
+        result.measurement.qualityCode = 2;
+        result.measureItemCount = 1;
+        result.message = QStringLiteral("pathId=%1 伸缩杆焊缝测量算法初始化失败：%2")
                              .arg(quota.pathId)
                              .arg(initError);
         return result;
     }
 
-    auto& weldService = sharedWeldMeasureService();
     std::vector<float> xyz;
     int measuredOk = 0;
 
     qInfo(LOG_STATION2_INSPECTION).noquote()
-        << QStringLiteral("开始焊缝截面测量 pathId=") << quota.pathId
+        << QStringLiteral("开始焊缝正式流程测量 pathId=") << quota.pathId
         << QStringLiteral(" name=") << quota.pathName
         << QStringLiteral(" algorithm=") << quota.algorithm
         << QStringLiteral(" 配额臂=") << quota.expectedArmCount
@@ -329,10 +354,15 @@ InspectionResult evaluateWeldSectionInspection(
             return result;
         }
 
-        scan_tracking::weld_measure::WeldSectionMeasurement section;
+        auto& weldService = (key.device == common::ScanDeviceKind::Arm)
+            ? sharedWeldMeasureServiceArm()
+            : sharedWeldMeasureServiceTelescopic();
+
+        scan_tracking::weld_measure::WeldFrameMeasurement frame;
         scan_tracking::weld_measure::WeldMeasureError error;
         const size_t pointCount = static_cast<size_t>(finiteCount);
-        if (!weldService.measureSection(xyz.data(), pointCount, &section, &error)) {
+        // Formal V2.0 flow: FrameN <-> localIndex, ICP+section extract inside DLL.
+        if (!weldService.measureFrame(key.localIndex, xyz.data(), pointCount, &frame, &error)) {
             result.resultCode = 2;
             result.ngReasonWord0 = kNgReasonAlgorithmFailed;
             result.measurement.qualityCode = 2;
@@ -347,21 +377,25 @@ InspectionResult evaluateWeldSectionInspection(
                 << "pathId" << quota.pathId
                 << common::ConfigManager::scanDeviceKindToString(key.device)
                 << "localIndex" << key.localIndex
-                << "measure failed:" << error.message
+                << "measureFrame failed:" << error.message
                 << "points=" << finiteCount;
             return result;
         }
 
-        accumulateMeasurement(&result.measurement, section);
+        accumulateMeasurement(&result.measurement, frame.average);
+
         ++measuredOk;
         qInfo(LOG_STATION2_INSPECTION)
             << "pathId" << quota.pathId
             << common::ConfigManager::scanDeviceKindToString(key.device)
             << "localIndex" << key.localIndex
-            << "mismatch=" << section.mismatchMm
-            << "reinforcement=" << section.reinforcementMm
-            << "angularity=" << section.angularityMm
-            << "maxUndercut=" << section.maxUndercutMm
+            << "validSections=" << frame.validSections << "/" << frame.totalSections
+            << "mismatch=" << frame.average.mismatchMm
+            << "reinforcement=" << frame.average.reinforcementMm
+            << "angularity=" << frame.average.angularityMm
+            << "maxUndercutDepth=" << frame.average.maxUndercutMm
+            << "undercutLengthL/R=" << frame.leftUndercutLengthMm << "/"
+            << frame.rightUndercutLengthMm
             << "points=" << finiteCount;
     }
 

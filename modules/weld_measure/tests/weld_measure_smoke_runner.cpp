@@ -94,7 +94,7 @@ bool WriteSmokeJson(
     obj.insert(QStringLiteral("source"),
                QStringLiteral("IPC WeldMeasureService + third_party WeldMeasure.dll"));
     obj.insert(QStringLiteral("input_cloud"), cloudPath);
-    obj.insert(QStringLiteral("onnx_model"), modelPath);
+    obj.insert(QStringLiteral("onnx_model"), modelPath.isEmpty() ? QStringLiteral("(from_ini)") : modelPath);
     obj.insert(QStringLiteral("loaded_points"), static_cast<qint64>(pointCount));
     obj.insert(QStringLiteral("mismatch_mm"), r.mismatchMm);
     obj.insert(QStringLiteral("reinforcement_mm"), r.reinforcementMm);
@@ -165,10 +165,18 @@ int main(int argc, char* argv[])
 
     WeldMeasureService service;
     WeldMeasureError error;
-    if (!service.initialize(modelArg, &error)) {
+    const bool ok = modelArg.isEmpty()
+        ? service.initializeFromIni(QString(), &error)
+        : (QFileInfo(modelArg).suffix().compare(QStringLiteral("ini"), Qt::CaseInsensitive) == 0
+               ? service.initializeFromIni(modelArg, &error)
+               : service.initialize(modelArg, &error));
+    if (!ok) {
         std::fprintf(stderr, "initialize failed: %s (code=%d)\n",
                      qPrintable(error.message), error.statusCode);
         return 3;
+    }
+    if (!service.configPath().isEmpty()) {
+        std::printf("Config: %s\n", qPrintable(service.configPath()));
     }
     std::printf("Model: %s\n", qPrintable(service.modelPath()));
     std::printf("WeldMeasureService ready\n");

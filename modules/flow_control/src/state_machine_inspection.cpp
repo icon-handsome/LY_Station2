@@ -13,6 +13,7 @@
 #include <QtCore/QTimer>
 
 #include <cstring>
+#include <utility>
 
 namespace scan_tracking::flow_control {
 
@@ -566,7 +567,7 @@ void StateMachine::finishCodeRead(quint16 resultCode, const QString& codeValue, 
                 device,
                 m_activeTask.scanSegmentIndex,
                 m_activeTask.taskId,
-                placeholder);
+                std::move(placeholder));
 
             const auto* configMgr = common::ConfigManager::instance();
             const int armExpected =

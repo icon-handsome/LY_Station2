@@ -29,6 +29,7 @@ void applyLbPoseStitchingIfNeeded(vision::MultiCameraCaptureBundle* bundle)
     if (bundle == nullptr) {
         return;
     }
+
     const auto& lb = bundle->lbPoseResult;
     if (!lb.invoked) {
         return;
@@ -56,8 +57,7 @@ void applyLbPoseStitchingIfNeeded(vision::MultiCameraCaptureBundle* bundle)
         return;
     }
 
-    bundle->mechEyeResult.pointCloudRaw = bundle->mechEyeResult.pointCloud;
-    bundle->mechEyeResult.pointCloud = stitched;
+    bundle->mechEyeResult.pointCloud = std::move(stitched);
     qInfo(LOG_FLOW).noquote()
         << QStringLiteral("点云已按 LB Rt_global 变换：") << stitchMessage
         << QStringLiteral(" framePoints=") << lb.framePointCount;
@@ -105,11 +105,23 @@ void StateMachine::onBundleCaptureFinished(vision::MultiCameraCaptureBundle bund
         return;
     }
 
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("bundleCaptureFinished 处理 requestId=")
+        << bundle.request.requestId
+        << QStringLiteral(" segment=") << bundle.request.segmentIndex
+        << QStringLiteral(" points=") << bundle.mechEyeResult.pointCloud.pointCount
+        << QStringLiteral(" texture=") << bundle.mechEyeResult.texture2D.width
+        << QLatin1Char('x') << bundle.mechEyeResult.texture2D.height
+        << QStringLiteral(" textureValid=") << bundle.mechEyeResult.texture2D.isValid()
+        << QStringLiteral(" lbInvoked=") << bundle.lbPoseResult.invoked;
+
     const QString triggerLabel = protocol::triggerName(*m_activeTask.definition);
 
     int imageCount = 0;
     int cloudFrameCount = 0;
     countBundleFrames(bundle, &imageCount, &cloudFrameCount);
+    const QString bundleSummary = bundle.summary();
+    const quint32 bundleTaskId = bundle.request.taskId;
 
     if (bundle.success()) {
         const auto device =
@@ -117,13 +129,14 @@ void StateMachine::onBundleCaptureFinished(vision::MultiCameraCaptureBundle bund
                 ? common::ScanDeviceKind::Telescopic
                 : common::ScanDeviceKind::Arm;
 
-        applyLbPoseStitchingIfNeeded(&bundle);
+        // 点云拼接及 cloud_stitched 落盘暂时关闭，保留实现便于后续恢复。
+        // applyLbPoseStitchingIfNeeded(&bundle);
 
         m_scanSegmentCache.storeSegment(
             device,
             bundle.request.segmentIndex,
             bundle.request.taskId,
-            bundle);
+            std::move(bundle));
 
         // 按运行实例（taskId）唯一目录落盘本段全部 3D+2D 数据（Mech PLY 为 binary）。
         QString persistError;
@@ -132,7 +145,7 @@ void StateMachine::onBundleCaptureFinished(vision::MultiCameraCaptureBundle bund
             qWarning(LOG_FLOW).noquote()
                 << triggerLabel << QStringLiteral("：采集成功但落盘失败")
                 << persistError
-                << QStringLiteral(" taskId=") << bundle.request.taskId
+                << QStringLiteral(" taskId=") << bundleTaskId
                 << QStringLiteral(" runRoot=")
                 << m_scanSegmentCache.runCaptureRoot();
         } else {
@@ -148,7 +161,7 @@ void StateMachine::onBundleCaptureFinished(vision::MultiCameraCaptureBundle bund
             configMgr != nullptr ? configMgr->enabledTelescopicPointCount() : 0;
         const int pathId = configMgr != nullptr ? configMgr->activePathId() : 0;
         qInfo(LOG_FLOW).noquote()
-            << triggerLabel << QStringLiteral("：采集成功") << bundle.summary()
+            << triggerLabel << QStringLiteral("：采集成功") << bundleSummary
             << QStringLiteral(" pathId=") << pathId
             << QStringLiteral(" imageCount=") << imageCount
             << QStringLiteral(" cloudFrameCount=") << cloudFrameCount

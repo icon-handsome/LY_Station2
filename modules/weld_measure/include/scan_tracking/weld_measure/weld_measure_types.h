@@ -23,6 +23,17 @@ struct WeldSectionMeasurement {
     bool valid = false;
 };
 
+/// Formal V2.0 one-frame result (multi-section average + undercut length).
+struct WeldFrameMeasurement {
+    WeldSectionMeasurement average;
+    int validSections = 0;
+    int totalSections = 0;
+    double leftUndercutLengthMm = 0.0;
+    double rightUndercutLengthMm = 0.0;
+    double leftMaxUndercutDepthMm = 0.0;
+    double rightMaxUndercutDepthMm = 0.0;
+};
+
 struct WeldMeasureError {
     int statusCode = 0;
     QString message;

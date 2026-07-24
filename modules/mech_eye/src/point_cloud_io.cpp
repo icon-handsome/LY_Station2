@@ -433,21 +433,39 @@ QString buildSegmentMechTexturePngPath(
 
 bool saveGrayTextureFrameToPng(const GrayTextureFrame& frame, const QString& absolutePath)
 {
-    if (!frame.isValid() || absolutePath.trimmed().isEmpty()) {
+    if (!frame.isValid() || absolutePath.trimmed().isEmpty() || frame.pixels == nullptr) {
         return false;
     }
 
+    const auto& pixels = *frame.pixels;
+    const auto expected = static_cast<std::size_t>(frame.width) * static_cast<std::size_t>(frame.height);
+    if (frame.width <= 0 || frame.height <= 0 || pixels.size() < expected) {
+        qWarning(LOG_POINT_CLOUD_IO).noquote()
+            << QStringLiteral("saveGrayTextureFrameToPng：像素尺寸不匹配")
+            << frame.width << QLatin1Char('x') << frame.height
+            << QStringLiteral(" pixels=") << static_cast<qint64>(pixels.size());
+        return false;
+    }
+
+    QFileInfo fileInfo(absolutePath);
+    QDir().mkpath(fileInfo.absolutePath());
+
     QImage image(frame.width, frame.height, QImage::Format_Grayscale8);
     if (image.isNull()) {
+        qWarning(LOG_POINT_CLOUD_IO).noquote()
+            << QStringLiteral("saveGrayTextureFrameToPng：无法分配 QImage")
+            << frame.width << QLatin1Char('x') << frame.height;
         return false;
     }
 
     for (int row = 0; row < frame.height; ++row) {
         auto* scanLine = image.scanLine(row);
-        const auto offset = static_cast<std::size_t>(row * frame.width);
-        for (int col = 0; col < frame.width; ++col) {
-            scanLine[col] = (*frame.pixels)[offset + static_cast<std::size_t>(col)];
+        if (scanLine == nullptr) {
+            qWarning(LOG_POINT_CLOUD_IO) << QStringLiteral("saveGrayTextureFrameToPng：scanLine 为空");
+            return false;
         }
+        const auto offset = static_cast<std::size_t>(row * frame.width);
+        std::memcpy(scanLine, pixels.data() + offset, static_cast<std::size_t>(frame.width));
     }
 
     if (!image.save(absolutePath, "PNG")) {

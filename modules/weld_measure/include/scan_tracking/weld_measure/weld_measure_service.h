@@ -17,16 +17,37 @@ public:
     WeldMeasureService(const WeldMeasureService&) = delete;
     WeldMeasureService& operator=(const WeldMeasureService&) = delete;
 
+    /// Default: <applicationDir>/config/weld_measure/weld_measurement.ini
+    static QString defaultConfigPath();
+    /// Arm straight-weld ini (11 frames).
+    static QString defaultArmConfigPath();
+    /// Telescopic straight-weld ini (7 frames).
+    static QString defaultTelescopicConfigPath();
     /// Default model: <applicationDir>/models/weld_measure/pointnet_weld_seam_V7.3_good.onnx
     static QString defaultModelPath();
 
     bool isReady() const;
+    QString configPath() const;
     QString modelPath() const;
 
+    /// Preferred: load ONNX + Frame/ICP/Undercut via wm_create_from_ini.
+    bool initializeFromIni(const QString& configPath = QString(), WeldMeasureError* error = nullptr);
+
+    /// Legacy/smoke: create context from ONNX model path only.
     bool initialize(const QString& modelPath = QString(), WeldMeasureError* error = nullptr);
+
     void shutdown();
 
-    /// @param xyz Interleaved x,y,z; non-finite points are skipped inside the DLL.
+    /// Formal V2.0 frame pipeline: downsample -> ICP -> multi-section -> average.
+    /// @param frameIndex1Based matches Frame1..N in the loaded ini.
+    bool measureFrame(
+        int frameIndex1Based,
+        const float* xyz,
+        size_t pointCount,
+        WeldFrameMeasurement* out,
+        WeldMeasureError* error = nullptr);
+
+    /// Legacy: measure one already-cut section cloud.
     bool measureSection(
         const float* xyz,
         size_t pointCount,
