@@ -8,6 +8,14 @@ tools/*
 first/
 .cmake/
 CMakeLists.txt.user
+
+# Local scratch / transfer helpers (not part of product)
+_xfer/
+
+# Large point-cloud templates (deploy offline; keep weld_measure ini tracked)
+config/weld_measure/Data/
+*.pcd
+
 # JetBrains IDE (local)
 .idea/
 # Office temp lock files
