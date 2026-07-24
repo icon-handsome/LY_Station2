@@ -368,16 +368,6 @@ void StateMachine::maybeAdvancePathOnNewCycleStart(int localIndex)
 
 void StateMachine::startCodeReadCapture()
 {
-    // TEMP: 临时关闭 pathId=2 的编号识别算法执行。
-    if (const auto* cfgMgr = common::ConfigManager::instance();
-        cfgMgr != nullptr && cfgMgr->activePathId() == 2) {
-        finishCodeRead(
-            1,
-            QString(),
-            QStringLiteral("TEMP: pathId=2 算法执行已临时关闭"));
-        return;
-    }
-
     auto* hik = m_hikCameraCController;
     if (hik == nullptr || !hik->isStarted()) {
         finishCodeRead(2, QString(), QStringLiteral("海康智能相机 C 未启动，无法编号识别。"));
@@ -414,8 +404,8 @@ void StateMachine::startCodeReadCapture()
         m_activeTask.definition != nullptr &&
         m_activeTask.definition->stage == protocol::Stage::Inspection &&
         algorithm == QLatin1String("code_read");
-    // 段扫/检测上的编号：发完 start 即放行。须晚于 Ack=Running 一拍，
-    // 否则 PLC 可能抽不到 Ack=1→2 边沿，Trig 一直拉高导致整线卡死。
+    // 段扫/检测上的编号：发完 start 即放行。延后一拍再写终态 Ack，
+    // 给 PLC 采样时间（段扫已无 Ack=1，终态为 Idle→2/3）。
     const bool fireAndForget = scanStage || inspectionCodeRead;
 
     m_codeReadPending = !fireAndForget;

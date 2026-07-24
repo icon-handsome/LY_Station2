@@ -347,7 +347,15 @@ void StateMachine::processTrigger(const protocol::TriggerDefinition& trigger, co
     m_dataValid = false;
     publishIpcStatus();
 
-    sendAck(trigger, protocol::AckState::Running);
+    // 段扫（臂/伸缩杆）：与现场 PLC 简化握手对齐——不再发 Ack=1(Running)，
+    // 仅在本段全部参与相机拍完后写 Ack=2/3，避免 PLC 见 Running 即离位。
+    if (!isScanCaptureStage(trigger.stage)) {
+        sendAck(trigger, protocol::AckState::Running);
+    } else {
+        qInfo(LOG_FLOW).noquote()
+            << QStringLiteral("段扫简化握手：跳过 Ack=1，待全部相机完成后写 Ack=2/3")
+            << protocol::triggerName(trigger);
+    }
 
     if (m_activeTask.taskId != 0) {
         const bool taskIdWritten = m_modbus->writeRegisters(protocol::registers::kTaskIdEchoHigh, {
@@ -369,7 +377,10 @@ void StateMachine::rejectDisabledTrigger(const protocol::TriggerDefinition& trig
         << QStringLiteral("[Station] 触发器")
         << protocol::triggerName(trigger)
         << QStringLiteral("在当前 profile 未启用，已拒绝，Res=8");
-    sendAck(trigger, protocol::AckState::Running);
+    // 段扫同样跳过 Ack=1；其它业务仍先 Running 再 Failed，保持原边沿。
+    if (!isScanCaptureStage(trigger.stage)) {
+        sendAck(trigger, protocol::AckState::Running);
+    }
     sendRes(trigger, 8);
     sendAck(trigger, protocol::AckState::Failed);
 }

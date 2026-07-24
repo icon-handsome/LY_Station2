@@ -21,7 +21,7 @@ namespace {
 
 Q_LOGGING_CATEGORY(LOG_VISION_PIPELINE, "vision.pipeline")
 
-constexpr int kMechToHikCaptureDelayMs = 800;
+constexpr int kMechToHikCaptureDelayMs = 1500;
 
 QString captureTypeLabel(CaptureType type)
 {

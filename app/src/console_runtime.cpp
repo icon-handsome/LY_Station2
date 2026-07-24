@@ -14,9 +14,14 @@
 #endif
 
 #include <QtCore/QCoreApplication>
+#include <QtCore/QDir>
+#include <QtCore/QElapsedTimer>
+#include <QtCore/QEventLoop>
+#include <QtCore/QFile>
 #include <QtCore/QLoggingCategory>
 #include <QtCore/QMetaObject>
 #include <QtCore/QPointer>
+#include <QtCore/QThread>
 #include <QtCore/QTimer>
 
 #include "scan_tracking/common/application_info.h"
@@ -28,6 +33,7 @@
 #include "scan_tracking/modbus/modbus_service.h"
 #include "scan_tracking/flow_control/inspection_types.h"
 #include "scan_tracking/vision/hik_cxp_camera_service.h"
+#include "scan_tracking/vision/hik_mono_io.h"
 #include "scan_tracking/vision/vision_pipeline_service.h"
 #include "scan_tracking/vision/hik_camera_c_controller.h"
 #include "scan_tracking/vision/vision_types.h"
@@ -38,6 +44,9 @@ Q_LOGGING_CATEGORY(appLog, "app")
 namespace scan_tracking::app {
 
 namespace {
+
+constexpr int kCxpWarmupConnectWaitMs = 15000;
+constexpr int kCxpWarmupDelayAfterStartMs = 3000;
 
 #ifdef _WIN32
 // Windows 控制台 Ctrl+C：在独立线程中仅排队 QCoreApplication::quit()，禁止在此调用 Qt 对象或 lambda。
@@ -58,6 +67,64 @@ BOOL WINAPI handleConsoleSignal(DWORD signal)
     }
 }
 #endif
+
+bool waitCxpConnected(scan_tracking::vision::HikCxpCameraService* service, int timeoutMs)
+{
+    if (service == nullptr) {
+        return false;
+    }
+    QElapsedTimer timer;
+    timer.start();
+    while (!service->isConnected() && timer.elapsed() < timeoutMs) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        QThread::msleep(50);
+    }
+    return service->isConnected();
+}
+
+bool captureCxpWarmupFrame(
+    scan_tracking::vision::HikCxpCameraService* service,
+    const QString& cameraKey,
+    int timeoutMs,
+    scan_tracking::vision::HikPoseCaptureResult* outResult)
+{
+    if (service == nullptr) {
+        return false;
+    }
+
+    QEventLoop loop;
+    scan_tracking::vision::HikPoseCaptureResult captured;
+    bool finished = false;
+
+    const QMetaObject::Connection conn = QObject::connect(
+        service,
+        &scan_tracking::vision::HikCxpCameraService::monoCaptureFinished,
+        &loop,
+        [&](const scan_tracking::vision::HikPoseCaptureResult& result) {
+            captured = result;
+            finished = true;
+            loop.quit();
+        });
+
+    QTimer watchdog;
+    watchdog.setSingleShot(true);
+    QObject::connect(&watchdog, &QTimer::timeout, &loop, &QEventLoop::quit);
+    watchdog.start(timeoutMs + 10000);
+
+    const quint64 requestId = service->requestMonoCapture(cameraKey, timeoutMs);
+    if (requestId == 0) {
+        QObject::disconnect(conn);
+        return false;
+    }
+
+    loop.exec();
+    QObject::disconnect(conn);
+
+    if (outResult != nullptr) {
+        *outResult = captured;
+    }
+    return finished && captured.success() && captured.frame.isValid();
+}
 
 }  // namespace
 
@@ -125,6 +192,102 @@ void ConsoleRuntime::runDeferredStartupTasks()
         tfminiPlusService_->start();
         qInfo(appLog) << QStringLiteral("[TfminiPlus] service started.");
     }
+
+    // 给后台异步 Open 一点时间，再串行预热 A/B，避免 path3 首点才第一次连 CXP。
+    if (hikCxpCameraAService_ != nullptr && hikCxpCameraBService_ != nullptr) {
+        QTimer::singleShot(
+            kCxpWarmupDelayAfterStartMs,
+            this,
+            &ConsoleRuntime::warmupCxpStereoOnStartup);
+    }
+}
+
+void ConsoleRuntime::warmupCxpStereoOnStartup()
+{
+    if (shuttingDown_) {
+        return;
+    }
+    if (hikCxpCameraAService_ == nullptr || hikCxpCameraBService_ == nullptr) {
+        return;
+    }
+
+    const auto* configManager = scan_tracking::common::ConfigManager::instance();
+    if (configManager == nullptr) {
+        return;
+    }
+    const auto& visionConfig = configManager->visionConfig();
+    if (!visionConfig.hikCxpEnabled) {
+        return;
+    }
+
+    const int timeoutMs =
+        visionConfig.hikCxpCaptureTimeoutMs > 0 ? visionConfig.hikCxpCaptureTimeoutMs : 5000;
+
+    qInfo(appLog).noquote()
+        << QStringLiteral("[CXP预热] 等待双目连接并试拍出流（拍完即删临时文件）…");
+
+    const bool aConnected =
+        waitCxpConnected(hikCxpCameraAService_.get(), kCxpWarmupConnectWaitMs);
+    const bool bConnected =
+        waitCxpConnected(hikCxpCameraBService_.get(), kCxpWarmupConnectWaitMs);
+    qInfo(appLog).noquote()
+        << QStringLiteral("[CXP预热] 连接状态 A=%1 B=%2（未连上将在采图时重试 Open）")
+               .arg(aConnected ? QStringLiteral("已连接") : QStringLiteral("未连接"))
+               .arg(bConnected ? QStringLiteral("已连接") : QStringLiteral("未连接"));
+
+    const QString warmupDir =
+        QDir(QDir::tempPath()).filePath(QStringLiteral("scan_tracking_cxp_warmup"));
+    QDir().mkpath(warmupDir);
+
+    auto warmupOne = [&](scan_tracking::vision::HikCxpCameraService* service,
+                         const QString& cameraKey,
+                         const QString& tag) {
+        scan_tracking::vision::HikPoseCaptureResult result;
+        if (!captureCxpWarmupFrame(service, cameraKey, timeoutMs, &result)) {
+            qWarning(appLog).noquote()
+                << QStringLiteral("[CXP预热] %1 试拍失败：%2")
+                       .arg(tag, result.errorMessage.isEmpty()
+                                     ? QStringLiteral("无有效帧")
+                                     : result.errorMessage);
+            return;
+        }
+
+        const QString bmpPath = QDir(warmupDir).filePath(
+            QStringLiteral("%1_warmup.bmp").arg(tag));
+        if (scan_tracking::vision::saveHikMonoFrameToBmp(result.frame, bmpPath)) {
+            const bool removed = QFile::remove(bmpPath);
+            qInfo(appLog).noquote()
+                << QStringLiteral("[CXP预热] %1 出流成功 %2x%3 frameId=%4 临时BMP已%5")
+                       .arg(tag)
+                       .arg(result.frame.width)
+                       .arg(result.frame.height)
+                       .arg(result.frame.frameId)
+                       .arg(removed ? QStringLiteral("删除") : QStringLiteral("删除失败"));
+        } else {
+            qInfo(appLog).noquote()
+                << QStringLiteral("[CXP预热] %1 出流成功 %2x%3 frameId=%4（未落盘）")
+                       .arg(tag)
+                       .arg(result.frame.width)
+                       .arg(result.frame.height)
+                       .arg(result.frame.frameId);
+        }
+        scan_tracking::vision::releaseHikMonoFrameBuffers(&result.frame);
+    };
+
+    // 串行：SDK 开设备有互斥，与正式段扫一致先 A 后 B。
+    warmupOne(
+        hikCxpCameraAService_.get(),
+        visionConfig.hikCxpCameraA.cameraKey,
+        QStringLiteral("ch250_a"));
+    warmupOne(
+        hikCxpCameraBService_.get(),
+        visionConfig.hikCxpCameraB.cameraKey,
+        QStringLiteral("ch250_b"));
+
+    qInfo(appLog).noquote()
+        << QStringLiteral("[CXP预热] 完成。A连接=%1 B连接=%2")
+               .arg(hikCxpCameraAService_->isConnected() ? 1 : 0)
+               .arg(hikCxpCameraBService_->isConnected() ? 1 : 0);
 }
 
 void ConsoleRuntime::onOrbbecOpenFinished(

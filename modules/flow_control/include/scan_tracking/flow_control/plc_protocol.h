@@ -68,8 +68,8 @@ enum class IpcState : quint16 {
  */
 enum class AckState : quint16 {
     Idle = 0,       ///< 空闲：未收到触发或已完成复位
-    Running = 1,    ///< 执行中：正在处理触发的任务
-    Completed = 2,  ///< 已完成：任务成功执行完毕
+    Running = 1,    ///< 执行中：正在处理触发的任务（段扫已跳过，仅终态 Ack=2/3）
+    Completed = 2,  ///< 已完成：任务成功执行完毕（段扫=全部参与相机拍完）
     Failed = 3,     ///< 失败：任务执行出错
 };
 

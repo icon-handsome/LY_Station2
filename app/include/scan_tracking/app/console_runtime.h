@@ -36,6 +36,7 @@ public:
 private slots:
     void handleAboutToQuit();
     void runDeferredStartupTasks();
+    void warmupCxpStereoOnStartup();
 
 private:
     void printStartupStatus();
