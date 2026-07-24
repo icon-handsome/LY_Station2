@@ -181,7 +181,8 @@ void StateMachine::maybeAutoRunInspectionBeforeLeavingPath()
     const QString algorithm = cfgMgr->activePathAlgorithm().trimmed();
     if (algorithm.isEmpty() ||
         algorithm == QLatin1String("code_read") ||
-        algorithm == QLatin1String("self_check")) {
+        algorithm == QLatin1String("self_check") ||
+        algorithm == QLatin1String("weld_pending")) {
         qInfo(LOG_FLOW).noquote()
             << QStringLiteral("切路前跳过自动检测：algorithm=")
             << (algorithm.isEmpty() ? QStringLiteral("<empty>") : algorithm)

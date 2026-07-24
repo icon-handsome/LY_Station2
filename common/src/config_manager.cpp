@@ -764,6 +764,7 @@ void ConfigManager::writeDefaults(QSettings& settings)
     settings.beginGroup("TfminiPlus");
     settings.setValue("tfminiPlusEnabled", false);
     settings.setValue("tfminiPlusPort", QString());
+    settings.setValue("tfminiPlusPort2", QString());
     settings.setValue("tfminiPlusBaudRate", 115200);
     settings.setValue("collisionThresholdMm", 0);
     settings.setValue("tfminiPlusLogFrames", false);
@@ -1052,6 +1053,8 @@ void ConfigManager::load(const QString& filePath)
     settings.beginGroup("TfminiPlus");
     m_tfminiPlusConfig.enabled = settings.value("tfminiPlusEnabled", false).toBool();
     m_tfminiPlusConfig.portName = settings.value("tfminiPlusPort", QString()).toString().trimmed();
+    m_tfminiPlusConfig.portName2 =
+        settings.value("tfminiPlusPort2", QString()).toString().trimmed();
     m_tfminiPlusConfig.baudRate = settings.value("tfminiPlusBaudRate", 115200).toInt();
     m_tfminiPlusConfig.collisionThresholdMm =
         settings.value("collisionThresholdMm", 0).toInt();

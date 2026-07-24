@@ -40,9 +40,12 @@ private:
     void parseBuffer();
     void teardownSerial();
 
+    QString logPrefix() const;
+
     QSerialPort* m_serialPort = nullptr;
     QByteArray m_buffer;
     bool m_logFrames = false;
+    QString m_deviceLabel;
 };
 
 }  // namespace tfmini_plus

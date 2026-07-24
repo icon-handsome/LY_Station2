@@ -4,6 +4,9 @@
 
 #include <QtCore/QCoreApplication>
 
+#include <memory>
+#include <vector>
+
 namespace scan_tracking {
 namespace modbus { class ModbusService; }
 namespace mech_eye { class MechEyeService; }
@@ -54,7 +57,8 @@ private:
     std::unique_ptr<scan_tracking::mech_eye::MechEyeService> mechEyeArmService_;
     std::unique_ptr<scan_tracking::orbbec_gemini::OrbbecGeminiService> orbbecGeminiService_;
     std::unique_ptr<scan_tracking::livox_mid360::LivoxMid360Service> livoxMid360Service_;
-    std::unique_ptr<scan_tracking::tfmini_plus::TfminiPlusService> tfminiPlusService_;
+    /// 最多两路 TF（TF1/TF2），各占独立 COM。
+    std::vector<std::unique_ptr<scan_tracking::tfmini_plus::TfminiPlusService>> tfminiPlusServices_;
     std::unique_ptr<scan_tracking::vision::HikCxpCameraService> hikCxpCameraAService_;
     std::unique_ptr<scan_tracking::vision::HikCxpCameraService> hikCxpCameraBService_;
     std::unique_ptr<scan_tracking::vision::VisionPipelineService> visionPipelineService_;

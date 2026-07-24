@@ -20,10 +20,14 @@ public:
     explicit TfminiPlusService(QObject* parent = nullptr);
     ~TfminiPlusService() override;
 
+    /// 启动前设置串口参数；未调用时 start() 从 ConfigManager 读取单口配置。
+    void configure(const TfminiPlusOpenConfig& config);
+
     void start();
     void stop();
 
     TfminiPlusRuntimeState state() const { return m_currentState; }
+    QString deviceLabel() const { return m_openConfig.deviceLabel; }
 
 signals:
     void openFinished(bool success, QString errorMessage);
@@ -51,6 +55,7 @@ private:
     QThread* m_workerThread = nullptr;
     TfminiPlusWorker* m_worker = nullptr;
     TfminiPlusOpenConfig m_openConfig;
+    bool m_openConfigSet = false;
     TfminiPlusRuntimeState m_currentState = TfminiPlusRuntimeState::Idle;
     bool m_started = false;
 };

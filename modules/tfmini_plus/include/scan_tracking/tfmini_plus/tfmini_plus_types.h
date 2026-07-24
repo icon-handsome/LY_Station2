@@ -18,6 +18,8 @@ struct TfminiPlusOpenConfig {
     QString portName;
     int baudRate = 115200;
     bool logFrames = false;
+    /// 日志/信号标识，如 TF1、TF2；空则用默认 [TfminiPlus]。
+    QString deviceLabel;
 };
 
 /// 串口 9 字节数据帧解析结果（不含 Byte6/7 温度）。

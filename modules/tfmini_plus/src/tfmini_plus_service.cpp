@@ -35,6 +35,12 @@ TfminiPlusService::~TfminiPlusService()
     stop();
 }
 
+void TfminiPlusService::configure(const TfminiPlusOpenConfig& config)
+{
+    m_openConfig = config;
+    m_openConfigSet = true;
+}
+
 void TfminiPlusService::start()
 {
     if (m_started) {
@@ -43,12 +49,15 @@ void TfminiPlusService::start()
 
     registerMetaTypes();
 
-    const auto* configManager = common::ConfigManager::instance();
-    if (configManager != nullptr) {
-        const auto& config = configManager->tfminiPlusConfig();
-        m_openConfig.portName = config.portName;
-        m_openConfig.baudRate = config.baudRate;
-        m_openConfig.logFrames = config.logFrames;
+    if (!m_openConfigSet) {
+        const auto* configManager = common::ConfigManager::instance();
+        if (configManager != nullptr) {
+            const auto& config = configManager->tfminiPlusConfig();
+            m_openConfig.portName = config.portName;
+            m_openConfig.baudRate = config.baudRate;
+            m_openConfig.logFrames = config.logFrames;
+            m_openConfig.deviceLabel = QStringLiteral("TF1");
+        }
     }
 
     m_workerThread = new QThread();
@@ -69,7 +78,10 @@ void TfminiPlusService::start()
     connect(m_worker, &TfminiPlusWorker::logMessage,
             this, &TfminiPlusService::onWorkerLogMessage, Qt::QueuedConnection);
 
-    m_workerThread->setObjectName(QStringLiteral("TfminiPlusWorkerThread"));
+    const QString threadName = m_openConfig.deviceLabel.trimmed().isEmpty()
+        ? QStringLiteral("TfminiPlusWorkerThread")
+        : QStringLiteral("%1WorkerThread").arg(m_openConfig.deviceLabel.trimmed());
+    m_workerThread->setObjectName(threadName);
     m_workerThread->start();
 
     m_started = true;
@@ -124,7 +136,6 @@ void TfminiPlusService::onWorkerStateChanged(
 
 void TfminiPlusService::onWorkerDistanceUpdated(int distanceCm, int strength)
 {
-    // TODO: Worker 恢复 emit distanceUpdated 后，在此转发或做业务过滤。
     emit distanceUpdated(distanceCm, strength);
 }
 

@@ -188,9 +188,16 @@ void ConsoleRuntime::runDeferredStartupTasks()
         livoxMid360Service_->start();
         qInfo(appLog) << QStringLiteral("[LivoxMid360] service started.");
     }
-    if (tfminiPlusService_) {
-        tfminiPlusService_->start();
-        qInfo(appLog) << QStringLiteral("[TfminiPlus] service started.");
+    for (const auto& service : tfminiPlusServices_) {
+        if (!service) {
+            continue;
+        }
+        service->start();
+        const QString label = service->deviceLabel().trimmed().isEmpty()
+            ? QStringLiteral("TfminiPlus")
+            : service->deviceLabel().trimmed();
+        qInfo(appLog).noquote()
+            << QStringLiteral("[%1] service started.").arg(label);
     }
 
     // 给后台异步 Open 一点时间，再串行预热 A/B，避免 path3 首点才第一次连 CXP。
@@ -506,36 +513,75 @@ void ConsoleRuntime::initModules()
         if (!tfminiConfig.enabled) {
             qInfo(appLog) << QStringLiteral("[TfminiPlus] disabled (tfminiPlusEnabled=false)");
         } else {
-            // 第二工位吊装/内壁防碰辅助测距；Worker 按协议解析后丢弃，不写 PLC 安全位。
-            tfminiPlusService_ = std::make_unique<scan_tracking::tfmini_plus::TfminiPlusService>();
-            QObject::connect(
-                tfminiPlusService_.get(),
-                &scan_tracking::tfmini_plus::TfminiPlusService::logMessage,
-                [](const QString& message) {
-                    qInfo(appLog).noquote() << message;
-                });
-            QObject::connect(
-                tfminiPlusService_.get(),
-                &scan_tracking::tfmini_plus::TfminiPlusService::stateChanged,
-                [](scan_tracking::tfmini_plus::TfminiPlusRuntimeState state,
-                   const QString& description) {
-                    qInfo(appLog).noquote()
-                        << QStringLiteral("[TfminiPlus] state=")
-                        << static_cast<int>(state)
-                        << description;
-                });
-            QObject::connect(
-                tfminiPlusService_.get(),
-                &scan_tracking::tfmini_plus::TfminiPlusService::openFinished,
-                [](bool success, const QString& errorMessage) {
-                    if (!success && !errorMessage.isEmpty()) {
-                        qWarning(appLog).noquote()
-                            << QStringLiteral("[TfminiPlus] Open failed:")
-                            << errorMessage;
-                    }
-                });
-            // TODO: Worker 恢复 emit distanceUpdated 后，在此接入打印/告警/碰撞阈值过滤。
-            qInfo(appLog) << QStringLiteral("[TfminiPlus] service created (deferred start).");
+            // 第二工位吊装/内壁防碰辅助测距；本阶段打印测距，不写 PLC 安全位。
+            auto addTfminiService = [this](
+                const QString& portName,
+                const QString& deviceLabel,
+                int baudRate,
+                bool logFrames) {
+                if (portName.trimmed().isEmpty()) {
+                    return;
+                }
+
+                scan_tracking::tfmini_plus::TfminiPlusOpenConfig openConfig;
+                openConfig.portName = portName.trimmed();
+                openConfig.baudRate = baudRate;
+                openConfig.logFrames = logFrames;
+                openConfig.deviceLabel = deviceLabel;
+
+                auto service =
+                    std::make_unique<scan_tracking::tfmini_plus::TfminiPlusService>();
+                service->configure(openConfig);
+
+                const QString label = deviceLabel;
+                QObject::connect(
+                    service.get(),
+                    &scan_tracking::tfmini_plus::TfminiPlusService::logMessage,
+                    [](const QString& message) {
+                        qInfo(appLog).noquote() << message;
+                    });
+                QObject::connect(
+                    service.get(),
+                    &scan_tracking::tfmini_plus::TfminiPlusService::stateChanged,
+                    [label](scan_tracking::tfmini_plus::TfminiPlusRuntimeState state,
+                            const QString& description) {
+                        qInfo(appLog).noquote()
+                            << QStringLiteral("[%1] state=").arg(label)
+                            << static_cast<int>(state)
+                            << description;
+                    });
+                QObject::connect(
+                    service.get(),
+                    &scan_tracking::tfmini_plus::TfminiPlusService::openFinished,
+                    [label](bool success, const QString& errorMessage) {
+                        if (!success && !errorMessage.isEmpty()) {
+                            qWarning(appLog).noquote()
+                                << QStringLiteral("[%1] Open failed:").arg(label)
+                                << errorMessage;
+                        }
+                    });
+
+                qInfo(appLog).noquote()
+                    << QStringLiteral("[%1] service created port=%2 (deferred start).")
+                           .arg(label, openConfig.portName);
+                tfminiPlusServices_.push_back(std::move(service));
+            };
+
+            addTfminiService(
+                tfminiConfig.portName,
+                QStringLiteral("TF1"),
+                tfminiConfig.baudRate,
+                tfminiConfig.logFrames);
+            addTfminiService(
+                tfminiConfig.portName2,
+                QStringLiteral("TF2"),
+                tfminiConfig.baudRate,
+                tfminiConfig.logFrames);
+
+            if (tfminiPlusServices_.empty()) {
+                qWarning(appLog) << QStringLiteral(
+                    "[TfminiPlus] enabled but both ports empty; set tfminiPlusPort / tfminiPlusPort2");
+            }
         }
     }
 
@@ -756,10 +802,13 @@ void ConsoleRuntime::printShutdownStatus()
         livoxMid360Service_->stop();
         livoxMid360Service_.reset();
     }
-    if (tfminiPlusService_) {
-        tfminiPlusService_->stop();
-        tfminiPlusService_.reset();
+    for (auto& service : tfminiPlusServices_) {
+        if (service) {
+            service->stop();
+            service.reset();
+        }
     }
+    tfminiPlusServices_.clear();
     if (mechEyeTelescopicService_) {
         mechEyeTelescopicService_->stop();
         mechEyeTelescopicService_.reset();

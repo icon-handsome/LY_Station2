@@ -143,9 +143,11 @@ struct LivoxMid360Config {
 };
 
 /// TFmini Plus 测距 / 碰撞监测配置，对应 config.ini [TfminiPlus] 节。
+/// 支持最多两路串口（现场双 TF，各自 USB 转串口对应不同 COM）。
 struct TfminiPlusConfig {
     bool enabled = false;
-    QString portName;               ///< 串口名，如 COM3
+    QString portName;               ///< TF1 串口名，如 COM3
+    QString portName2;              ///< TF2 串口名，如 COM4；空则仅开一路
     int baudRate = 115200;
     int collisionThresholdMm = 0;   ///< 碰撞阈值（毫米），0 表示禁用
     bool logFrames = false;         ///< 是否逐帧打印测距日志

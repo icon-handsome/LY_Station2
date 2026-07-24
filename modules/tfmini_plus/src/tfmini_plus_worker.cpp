@@ -11,11 +11,6 @@ namespace tfmini_plus {
 
 namespace {
 
-QString logPrefix()
-{
-    return QStringLiteral("[TfminiPlus]");
-}
-
 int byteAt(const QByteArray& data, int index)
 {
     return static_cast<unsigned char>(data.at(index));
@@ -78,16 +73,25 @@ TfminiPlusWorker::~TfminiPlusWorker()
     stopWorker();
 }
 
+QString TfminiPlusWorker::logPrefix() const
+{
+    if (m_deviceLabel.trimmed().isEmpty()) {
+        return QStringLiteral("[TfminiPlus]");
+    }
+    return QStringLiteral("[%1]").arg(m_deviceLabel.trimmed());
+}
+
 void TfminiPlusWorker::startWorker(const TfminiPlusOpenConfig& config)
 {
     stopWorker();
 
     m_buffer.clear();
     m_logFrames = config.logFrames;
+    m_deviceLabel = config.deviceLabel.trimmed();
 
     const QString portName = config.portName.trimmed();
     if (portName.isEmpty()) {
-        const QString message = QStringLiteral("Serial port is empty; set tfminiPlusPort in [TfminiPlus]");
+        const QString message = QStringLiteral("Serial port is empty; set tfminiPlusPort / tfminiPlusPort2 in [TfminiPlus]");
         emit logMessage(QStringLiteral("%1 %2").arg(logPrefix(), message));
         emit openFinished(false, message);
         emit stateChanged(TfminiPlusRuntimeState::Failed, message);
@@ -210,7 +214,7 @@ void TfminiPlusWorker::parseBuffer()
                        .arg(frame.isReliable ? QStringLiteral("yes")
                                              : QStringLiteral("no"));
         }
-        // TODO: emit distanceUpdated、碰撞阈值过滤、写 PLC 安全位等。
+        emit distanceUpdated(frame.distanceCm, frame.strength);
         m_buffer.remove(0, kFrameSize);
     }
 }
