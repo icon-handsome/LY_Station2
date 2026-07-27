@@ -126,10 +126,24 @@ bool extractFiniteXyz(
     }
 
     xyzOut->clear();
-    xyzOut->reserve(static_cast<size_t>(frame.pointCount) * 3u);
-    int finite = 0;
     const auto& points = *frame.pointsXYZ;
-    const int count = frame.pointCount;
+    // pointCount 与缓冲区可能不一致（异常包/半截云）；按实际 float 三元组长度钳制，避免越界读。
+    const int maxByBuffer = static_cast<int>(points.size() / 3u);
+    const int declared = frame.pointCount > 0 ? frame.pointCount : 0;
+    const int count = std::min(declared, maxByBuffer);
+    if (count <= 0) {
+        *finitePointCount = 0;
+        return false;
+    }
+    if (declared > maxByBuffer) {
+        qWarning(LOG_STATION2_INSPECTION)
+            << "pointCount exceeds pointsXYZ size, clamped"
+            << "declared=" << declared
+            << "bufferPoints=" << maxByBuffer;
+    }
+
+    xyzOut->reserve(static_cast<size_t>(count) * 3u);
+    int finite = 0;
     for (int i = 0; i < count; ++i) {
         const float x = points[static_cast<size_t>(i) * 3u + 0u];
         const float y = points[static_cast<size_t>(i) * 3u + 1u];
@@ -1090,17 +1104,11 @@ InspectionResult evaluateLengthVolumeInspection(
     return result;
 }
 
-}  // namespace
-
-InspectionResult evaluateStation2Inspection(
+InspectionResult evaluateStation2InspectionUnlocked(
     const ScanSegmentCache& cache,
     quint32 taskId,
     const InspectionQuota& quota)
 {
-    // 共享算法 Service 非可重入整路径状态；后台多路径并发时串行化整次评估。
-    static std::mutex s_evaluateMutex;
-    std::lock_guard<std::mutex> lock(s_evaluateMutex);
-
     InspectionQuota effective = quota;
     if (effective.pathId <= 0 || effective.algorithm.isEmpty()) {
         if (const auto* cfgMgr = common::ConfigManager::instance()) {
@@ -1156,6 +1164,52 @@ InspectionResult evaluateStation2Inspection(
     }
 
     return rejectUnsupportedAlgorithm(effective);
+}
+
+InspectionResult makeEvaluateBusyResult(const InspectionQuota& quota)
+{
+    InspectionResult result;
+    fillPathMeta(&result, quota);
+    result.resultCode = 3;
+    result.message = QStringLiteral(
+        "算法解算繁忙（后台任务进行中），请稍后复测");
+    return result;
+}
+
+std::mutex& station2EvaluateMutex()
+{
+    static std::mutex mutex;
+    return mutex;
+}
+
+}  // namespace
+
+InspectionResult evaluateStation2Inspection(
+    const ScanSegmentCache& cache,
+    quint32 taskId,
+    const InspectionQuota& quota)
+{
+    // 共享算法 Service 非可重入整路径状态；后台多路径并发时串行化整次评估。
+    std::lock_guard<std::mutex> lock(station2EvaluateMutex());
+    return evaluateStation2InspectionUnlocked(cache, taskId, quota);
+}
+
+bool tryEvaluateStation2Inspection(
+    const ScanSegmentCache& cache,
+    quint32 taskId,
+    const InspectionQuota& quota,
+    InspectionResult* out)
+{
+    if (out == nullptr) {
+        return false;
+    }
+    std::unique_lock<std::mutex> lock(station2EvaluateMutex(), std::try_to_lock);
+    if (!lock.owns_lock()) {
+        *out = makeEvaluateBusyResult(quota);
+        return false;
+    }
+    *out = evaluateStation2InspectionUnlocked(cache, taskId, quota);
+    return true;
 }
 
 }  // namespace scan_tracking::flow_control

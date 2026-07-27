@@ -158,11 +158,16 @@ void StateMachine::start()
 
 void StateMachine::stop()
 {
-    if (m_stopped.exchange(true)) {
+    const bool firstStop = !m_stopped.exchange(true);
+    if (firstStop) {
+        bumpWorkpieceGeneration(QStringLiteral("state_machine.stop"));
+    }
+    // 先关回投门闩再 join：工作线程只读 shared atomic，不再碰 QPointer。
+    m_bgSolveAcceptResults->store(false, std::memory_order_release);
+    joinBackgroundInspectionSolves();
+    if (!firstStop) {
         return;
     }
-
-    bumpWorkpieceGeneration(QStringLiteral("state_machine.stop"));
 
     blockSignals(true);
 

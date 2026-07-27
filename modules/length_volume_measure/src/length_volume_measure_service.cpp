@@ -132,7 +132,7 @@ void FillResult(const lvm_result& src, LengthVolumeMeasurement* dst)
 }  // namespace
 
 struct LengthVolumeMeasureService::Impl {
-    std::mutex mutex;
+    mutable std::mutex mutex;
     lvm_context* ctx = nullptr;
     QString configPath;
 };
@@ -157,7 +157,11 @@ QString LengthVolumeMeasureService::defaultConfigPath()
 
 bool LengthVolumeMeasureService::isReady() const
 {
-    return m_impl != nullptr && m_impl->ctx != nullptr;
+    if (m_impl == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(m_impl->mutex);
+    return m_impl->ctx != nullptr;
 }
 
 QString LengthVolumeMeasureService::configPath() const

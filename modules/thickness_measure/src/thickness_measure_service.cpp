@@ -95,7 +95,7 @@ void FillPairResult(const tm_pair_result& src, ThicknessPairMeasurement* dst)
 }  // namespace
 
 struct ThicknessMeasureService::Impl {
-    std::mutex mutex;
+    mutable std::mutex mutex;
     tm_context* ctx = nullptr;
     QString configPath;
 };
@@ -120,7 +120,11 @@ QString ThicknessMeasureService::defaultConfigPath()
 
 bool ThicknessMeasureService::isReady() const
 {
-    return m_impl != nullptr && m_impl->ctx != nullptr;
+    if (m_impl == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(m_impl->mutex);
+    return m_impl->ctx != nullptr;
 }
 
 QString ThicknessMeasureService::configPath() const

@@ -85,7 +85,7 @@ std::vector<ulm_section> ToCApiSections(const QVector<UndercutSectionInput>& sec
 }  // namespace
 
 struct UndercutLengthMeasureService::Impl {
-    std::mutex mutex;
+    mutable std::mutex mutex;
     ulm_context* ctx = nullptr;
     QString configPath;
 };
@@ -110,7 +110,11 @@ QString UndercutLengthMeasureService::defaultConfigPath()
 
 bool UndercutLengthMeasureService::isReady() const
 {
-    return m_impl != nullptr && m_impl->ctx != nullptr;
+    if (m_impl == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(m_impl->mutex);
+    return m_impl->ctx != nullptr;
 }
 
 QString UndercutLengthMeasureService::configPath() const

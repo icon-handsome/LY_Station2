@@ -10,6 +10,9 @@
 
 #include <atomic>
 #include <memory>
+#include <mutex>
+#include <optional>
+#include <thread>
 
 #include "scan_tracking/flow_control/inspection_types.h"
 #include "scan_tracking/flow_control/plc_task_host.h"
@@ -104,6 +107,7 @@ public:
     void setAlarm(quint16 level, quint16 code, const QString& message);
     bool reportPersonZoneAlarm(bool alarm);
 
+    /// 基于当前段缓存同步评估。主线程走 try_lock（繁忙立即返回），避免卡死 GUI/Modbus。
     InspectionResult evaluateCachedInspection(quint32 taskId = 0) const;
     /// 最近一次后台（或同步）检测真结果；无结果时 resultCode=0。
     InspectionResult lastInspectionResult() const;
@@ -276,16 +280,27 @@ private:
     InspectionQuota buildActiveInspectionQuota() const;
     static bool isBackgroundMeasurableAlgorithm(const QString& algorithm);
     /// 快照缓存后后台解算（真结果经 generation 校验后仅推 HMI）。
+    /// 单飞：最多 1 个执行中 + 1 个 pending；新任务覆盖未执行的 pending，避免多套点云堆积。
     void startBackgroundInspectionSolve(
         const ScanSegmentCache& cacheSnapshot,
         quint32 taskId,
         const InspectionQuota& quota,
         quint64 generation,
         const QString& triggerLabel);
+    /// stop/析构前接合后台解算线程，避免 detach 后静态析构竞态。
+    void joinBackgroundInspectionSolves();
     void applyBackgroundInspectionResult(
         quint64 generation,
         const InspectionResult& result,
         const QString& triggerLabel);
+
+    struct BackgroundInspectionJob {
+        ScanSegmentCache cacheSnapshot;
+        quint32 taskId = 0;
+        InspectionQuota quota;
+        quint64 generation = 0;
+        QString triggerLabel;
+    };
     /// 当前活跃路径的臂+伸缩杆缓存是否已齐套。
     bool isActivePathQuotaComplete() const;
     /// 读取 PLC ScanPathId(40047) 并热切换活跃路径；0=未指定则忽略。
@@ -376,6 +391,14 @@ private:
     protocol::registers::Pose6f m_robotTcpPose;
     ScanSegmentCache m_scanSegmentCache;
     std::atomic_bool m_stopped{false};
+    /// 后台解算：单线程 + 最多 1 个 pending；stop/析构时必须 join。
+    std::mutex m_bgSolveThreadsMutex;
+    std::thread m_bgSolveThread;
+    bool m_bgSolveWorkerBusy = false;
+    std::optional<BackgroundInspectionJob> m_bgSolvePending;
+    /// 工作线程只读此 gate（shared_ptr），禁止跨线程读 QPointer / StateMachine 成员判活。
+    std::shared_ptr<std::atomic_bool> m_bgSolveAcceptResults{
+        std::make_shared<std::atomic_bool>(true)};
 };
 
 }  // namespace flow_control

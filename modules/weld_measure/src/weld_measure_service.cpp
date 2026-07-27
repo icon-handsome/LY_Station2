@@ -57,7 +57,7 @@ void FillSection(const wm_section_result& src, WeldSectionMeasurement* dst)
 }  // namespace
 
 struct WeldMeasureService::Impl {
-    std::mutex mutex;
+    mutable std::mutex mutex;
     wm_context* ctx = nullptr;
     QString configPath;
     QString modelPath;
@@ -109,7 +109,11 @@ QString WeldMeasureService::defaultModelPath()
 
 bool WeldMeasureService::isReady() const
 {
-    return m_impl != nullptr && m_impl->ctx != nullptr;
+    if (m_impl == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(m_impl->mutex);
+    return m_impl->ctx != nullptr;
 }
 
 QString WeldMeasureService::configPath() const

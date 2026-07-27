@@ -76,7 +76,7 @@ void FillFrameResult(const ism_frame_result& src, InnerSurfaceFrameMeasurement* 
 }  // namespace
 
 struct InnerSurfaceMeasureService::Impl {
-    std::mutex mutex;
+    mutable std::mutex mutex;
     ism_context* ctx = nullptr;
     QString configPath;
 };
@@ -101,7 +101,11 @@ QString InnerSurfaceMeasureService::defaultConfigPath()
 
 bool InnerSurfaceMeasureService::isReady() const
 {
-    return m_impl != nullptr && m_impl->ctx != nullptr;
+    if (m_impl == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(m_impl->mutex);
+    return m_impl->ctx != nullptr;
 }
 
 QString InnerSurfaceMeasureService::configPath() const

@@ -11,6 +11,8 @@
 
 #include <QtCore/QPointer>
 #include <QtCore/QTimer>
+#include <QtCore/QCoreApplication>
+#include <QtCore/QThread>
 
 #include <cstring>
 #include <thread>
@@ -60,8 +62,20 @@ bool StateMachine::isBackgroundMeasurableAlgorithm(const QString& algorithm)
 InspectionResult StateMachine::evaluateCachedInspection(quint32 taskId) const
 {
     const quint32 effectiveTaskId = taskId != 0 ? taskId : m_scanSegmentCache.runTaskId();
-    return evaluateStation2Inspection(
-        m_scanSegmentCache, effectiveTaskId, buildActiveInspectionQuota());
+    const InspectionQuota quota = buildActiveInspectionQuota();
+
+    // GUI/主线程禁止阻塞抢评估锁，否则会卡死事件循环与 Modbus 轮询。
+    if (QCoreApplication::instance() != nullptr &&
+        QThread::currentThread() == QCoreApplication::instance()->thread()) {
+        InspectionResult result;
+        if (!tryEvaluateStation2Inspection(
+                m_scanSegmentCache, effectiveTaskId, quota, &result)) {
+            qWarning(LOG_FLOW).noquote() << result.message;
+        }
+        return result;
+    }
+
+    return evaluateStation2Inspection(m_scanSegmentCache, effectiveTaskId, quota);
 }
 
 InspectionResult StateMachine::lastInspectionResult() const
@@ -161,6 +175,33 @@ void StateMachine::applyBackgroundInspectionResult(
     publishInspectionOutcomeToHmiOnly(result, triggerLabel);
 }
 
+void StateMachine::joinBackgroundInspectionSolves()
+{
+    std::thread running;
+    {
+        std::lock_guard<std::mutex> lock(m_bgSolveThreadsMutex);
+        // 立刻丢掉未执行快照，避免 stop 期间继续拖住点云。
+        m_bgSolvePending.reset();
+        running = std::move(m_bgSolveThread);
+    }
+    if (!running.joinable()) {
+        std::lock_guard<std::mutex> lock(m_bgSolveThreadsMutex);
+        m_bgSolveWorkerBusy = false;
+        return;
+    }
+
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("等待后台解算线程结束…");
+    running.join();
+    {
+        std::lock_guard<std::mutex> lock(m_bgSolveThreadsMutex);
+        m_bgSolveWorkerBusy = false;
+        m_bgSolvePending.reset();
+    }
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("后台解算线程已接合。");
+}
+
 void StateMachine::startBackgroundInspectionSolve(
     const ScanSegmentCache& cacheSnapshot,
     quint32 taskId,
@@ -177,28 +218,93 @@ void StateMachine::startBackgroundInspectionSolve(
         << QStringLiteral(" cacheSeg=") << cacheSnapshot.cachedSegmentCount()
         << QStringLiteral(" workpieceGen=") << generation;
 
-    QPointer<StateMachine> self(this);
-    std::thread([self,
-                 cacheSnapshot,
-                 taskId,
-                 quota,
-                 generation,
-                 triggerLabel]() mutable {
-        const InspectionResult result =
-            evaluateStation2Inspection(cacheSnapshot, taskId, quota);
-        if (self == nullptr) {
+    // 工作线程禁止使用 QPointer（非线程安全）。判活/是否回投只读 shared atomic；
+    // receiver 仅在 gate 仍开且 stop 尚未 join 完成时用于 invokeMethod（对象仍存活）。
+    const auto acceptResults = m_bgSolveAcceptResults;
+    StateMachine* const receiver = this;
+
+    BackgroundInspectionJob job;
+    job.cacheSnapshot = cacheSnapshot;
+    job.taskId = taskId;
+    job.quota = quota;
+    job.generation = generation;
+    job.triggerLabel = triggerLabel;
+
+    std::thread finishedThread;
+    {
+        std::lock_guard<std::mutex> lock(m_bgSolveThreadsMutex);
+        if (m_stopped.load(std::memory_order_acquire) ||
+            !acceptResults->load(std::memory_order_acquire)) {
+            qWarning(LOG_FLOW).noquote()
+                << triggerLabel << QStringLiteral("：StateMachine 已 stop，跳过后台解算。");
             return;
         }
-        QMetaObject::invokeMethod(
-            self,
-            [self, generation, result, triggerLabel]() {
-                if (self == nullptr) {
-                    return;
+
+        // 已有执行中任务：只保留最新 pending，丢掉更早未执行快照（内存上限=执行中+1）。
+        if (m_bgSolveWorkerBusy) {
+            if (m_bgSolvePending.has_value()) {
+                qWarning(LOG_FLOW).noquote()
+                    << QStringLiteral("后台解算繁忙，丢弃未执行任务 pathId=")
+                    << m_bgSolvePending->quota.pathId
+                    << QStringLiteral(" algorithm=") << m_bgSolvePending->quota.algorithm
+                    << QStringLiteral("，改排 pathId=") << quota.pathId
+                    << QStringLiteral(" algorithm=") << quota.algorithm;
+            } else {
+                qInfo(LOG_FLOW).noquote()
+                    << QStringLiteral("后台解算进行中，新任务进入唯一等待槽 pathId=")
+                    << quota.pathId
+                    << QStringLiteral(" algorithm=") << quota.algorithm;
+            }
+            m_bgSolvePending = std::move(job);
+            return;
+        }
+
+        m_bgSolveWorkerBusy = true;
+        if (m_bgSolveThread.joinable()) {
+            finishedThread = std::move(m_bgSolveThread);
+        }
+        m_bgSolveThread = std::thread(
+            [acceptResults, receiver, job = std::move(job)]() mutable {
+                for (;;) {
+                    const quint64 generation = job.generation;
+                    const QString triggerLabel = job.triggerLabel;
+                    const InspectionResult result = evaluateStation2Inspection(
+                        job.cacheSnapshot, job.taskId, job.quota);
+                    // 解算结束立刻丢掉点云快照，只保留结果回投所需字段。
+                    job.cacheSnapshot.reset();
+
+                    if (acceptResults->load(std::memory_order_acquire)) {
+                        QMetaObject::invokeMethod(
+                            receiver,
+                            [acceptResults, receiver, generation, result, triggerLabel]() {
+                                if (!acceptResults->load(std::memory_order_acquire)) {
+                                    return;
+                                }
+                                receiver->applyBackgroundInspectionResult(
+                                    generation, result, triggerLabel);
+                            },
+                            Qt::QueuedConnection);
+                    }
+
+                    {
+                        std::lock_guard<std::mutex> lock(receiver->m_bgSolveThreadsMutex);
+                        if (!acceptResults->load(std::memory_order_acquire) ||
+                            !receiver->m_bgSolvePending.has_value()) {
+                            receiver->m_bgSolvePending.reset();
+                            receiver->m_bgSolveWorkerBusy = false;
+                            return;
+                        }
+                        job = std::move(*receiver->m_bgSolvePending);
+                        receiver->m_bgSolvePending.reset();
+                    }
                 }
-                self->applyBackgroundInspectionResult(generation, result, triggerLabel);
-            },
-            Qt::QueuedConnection);
-    }).detach();
+            });
+    }
+
+    // 上一轮已退出的线程在锁外接合，避免 joinable std::thread 泄漏堆积。
+    if (finishedThread.joinable()) {
+        finishedThread.join();
+    }
 }
 
 void StateMachine::releaseInspectionAndSolveInBackground()
