@@ -15,6 +15,7 @@
 #include "scan_tracking/flow_control/plc_task_host.h"
 #include "scan_tracking/flow_control/plc_protocol.h"
 #include "scan_tracking/flow_control/scan_segment_cache.h"
+#include "scan_tracking/flow_control/station2_inspection.h"
 #include "scan_tracking/flow_control/task_handler_context.h"
 #include "scan_tracking/mech_eye/mech_eye_types.h"
 #include "scan_tracking/modbus/modbus_service.h"
@@ -104,6 +105,9 @@ public:
     bool reportPersonZoneAlarm(bool alarm);
 
     InspectionResult evaluateCachedInspection(quint32 taskId = 0) const;
+    /// 最近一次后台（或同步）检测真结果；无结果时 resultCode=0。
+    InspectionResult lastInspectionResult() const;
+    bool hasLastInspectionResult() const { return m_hasLastInspectionResult; }
 
     const ScanSegmentCache& scanSegmentCache() const { return m_scanSegmentCache; }
 
@@ -148,6 +152,7 @@ public:
 
     InspectionResult evaluateInspectionForActiveTask() const override;
     void finishInspection(const InspectionResult& result) override;
+    void releaseInspectionAndSolveInBackground() override;
     void startCodeReadCapture() override;
     void startSelfCheckCapture() override;
 
@@ -258,12 +263,29 @@ private:
     void finishSelfCheckCapture(const vision::MultiCameraCaptureBundle& bundle);
     /// 当前路径检测成功后：清空段缓存/扫描完成寄存器，并自动切到下一条启用路径（不依赖 PLC ResultReset）。
     void prepareNextScanPathAfterSuccess();
-    /// 临时策略（PLC 暂不发 Trig_Inspection）：离开当前路径前，若已齐套则自动跑对应算法并写结果寄存器。
+    /// 临时策略（PLC 暂不发 Trig_Inspection）：离开当前路径前，若已齐套则后台跑算法（PLC 假成功）。
     void maybeAutoRunInspectionBeforeLeavingPath();
     void markCurrentPathInspectionDone();
     bool alreadyInspectedCurrentPathRun() const;
     QString currentInspectionRunKey() const;
     void publishInspectionOutcome(const InspectionResult& result, const QString& triggerLabel);
+    /// 真结果仅内存 + Qt/HMI，不写 Modbus。
+    void publishInspectionOutcomeToHmiOnly(const InspectionResult& result, const QString& triggerLabel);
+    /// 向 PLC 写入检测通道假成功（Res/相关字），便于放行流程。
+    void writeFakeInspectionPlcSuccess();
+    InspectionQuota buildActiveInspectionQuota() const;
+    static bool isBackgroundMeasurableAlgorithm(const QString& algorithm);
+    /// 快照缓存后后台解算（真结果经 generation 校验后仅推 HMI）。
+    void startBackgroundInspectionSolve(
+        const ScanSegmentCache& cacheSnapshot,
+        quint32 taskId,
+        const InspectionQuota& quota,
+        quint64 generation,
+        const QString& triggerLabel);
+    void applyBackgroundInspectionResult(
+        quint64 generation,
+        const InspectionResult& result,
+        const QString& triggerLabel);
     /// 当前活跃路径的臂+伸缩杆缓存是否已齐套。
     bool isActivePathQuotaComplete() const;
     /// 读取 PLC ScanPathId(40047) 并热切换活跃路径；0=未指定则忽略。
@@ -326,6 +348,9 @@ private:
     /// 本轮段缓存已做过检测（Trig_Inspection 或切路前自动检测），避免重复跑算法。
     int m_lastInspectedPathId = -1;
     QString m_lastInspectedRunKey;
+    /// 后台/同步检测真结果（不依赖 PLC 寄存器）。
+    InspectionResult m_lastInspectionResult;
+    bool m_hasLastInspectionResult = false;
     QString m_codeReadCameraIp;
     /// 发起编号等待时的工件世代；ResultReset 后迟到 OCR 丢弃。
     quint64 m_codeReadWorkpieceGeneration = 0;

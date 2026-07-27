@@ -13,6 +13,7 @@
 #include <QtCore/QTimer>
 
 #include <cstring>
+#include <thread>
 #include <utility>
 
 namespace scan_tracking::flow_control {
@@ -32,9 +33,8 @@ int StateMachine::resolveExpectedScanSegmentCount() const
     return configMgr->trackingConfig().scanSegmentTotal;
 }
 
-InspectionResult StateMachine::evaluateCachedInspection(quint32 taskId) const
+InspectionQuota StateMachine::buildActiveInspectionQuota() const
 {
-    const quint32 effectiveTaskId = taskId != 0 ? taskId : m_scanSegmentCache.runTaskId();
     InspectionQuota quota;
     if (const auto* configMgr = common::ConfigManager::instance()) {
         quota.expectedArmCount = configMgr->enabledArmPointCount();
@@ -46,7 +46,27 @@ InspectionResult StateMachine::evaluateCachedInspection(quint32 taskId) const
             quota.expectedArmCount = resolveExpectedScanSegmentCount();
         }
     }
-    return evaluateStation2Inspection(m_scanSegmentCache, effectiveTaskId, quota);
+    return quota;
+}
+
+bool StateMachine::isBackgroundMeasurableAlgorithm(const QString& algorithm)
+{
+    const QString trimmed = algorithm.trimmed();
+    return trimmed == QLatin1String("weld_section") ||
+           trimmed == QLatin1String("thickness_inner_surface") ||
+           trimmed == QLatin1String("length_volume");
+}
+
+InspectionResult StateMachine::evaluateCachedInspection(quint32 taskId) const
+{
+    const quint32 effectiveTaskId = taskId != 0 ? taskId : m_scanSegmentCache.runTaskId();
+    return evaluateStation2Inspection(
+        m_scanSegmentCache, effectiveTaskId, buildActiveInspectionQuota());
+}
+
+InspectionResult StateMachine::lastInspectionResult() const
+{
+    return m_lastInspectionResult;
 }
 
 InspectionResult StateMachine::evaluateInspectionForActiveTask() const
@@ -63,6 +83,9 @@ void StateMachine::finishInspection(const InspectionResult& result)
             m_activeTask.workpieceGeneration, QStringLiteral("finishInspection"))) {
         return;
     }
+
+    m_lastInspectionResult = result;
+    m_hasLastInspectionResult = true;
 
     publishInspectionOutcome(result, QStringLiteral("Trig_Inspection"));
     markCurrentPathInspectionDone();
@@ -84,6 +107,137 @@ void StateMachine::finishInspection(const InspectionResult& result)
     if (result.resultCode == 1) {
         prepareNextScanPathAfterSuccess();
     }
+}
+
+void StateMachine::writeFakeInspectionPlcSuccess()
+{
+    InspectionSummary summary;
+    summary.resultCode = 1;
+    summary.ngReasonWord0 = 0;
+    summary.ngReasonWord1 = 0;
+    summary.measureItemCount = 0;
+    writeInspectionResult(summary);
+}
+
+void StateMachine::publishInspectionOutcomeToHmiOnly(
+    const InspectionResult& result,
+    const QString& triggerLabel)
+{
+    m_lastInspectionResult = result;
+    m_hasLastInspectionResult = true;
+
+    emit inspectionFinished(
+        result.resultCode,
+        result.ngReasonWord0,
+        result.ngReasonWord1,
+        result.measureItemCount,
+        result.measurement,
+        result.message);
+
+    emit inspectionResultReady(result);
+
+    qInfo(LOG_FLOW).noquote()
+        << triggerLabel << QStringLiteral("：后台真结果（仅 HMI/内存） Res=")
+        << result.resultCode
+        << QStringLiteral(" pathId=") << result.pathId
+        << QStringLiteral(" pathName=") << result.pathName
+        << QStringLiteral(" algorithm=") << result.algorithm
+        << QStringLiteral(" qualityCode=") << result.measurement.qualityCode
+        << QStringLiteral(" lengthMm=") << result.measurement.lengthMm
+        << QStringLiteral(" volumeL=") << result.measurement.volumeLiters
+        << QStringLiteral(" thicknessMm=") << result.measurement.thicknessMm
+        << QStringLiteral(" segments=") << result.sourcePointCount
+        << QStringLiteral(" message=") << result.message;
+}
+
+void StateMachine::applyBackgroundInspectionResult(
+    quint64 generation,
+    const InspectionResult& result,
+    const QString& triggerLabel)
+{
+    if (!acceptWorkpieceGeneration(generation, triggerLabel + QStringLiteral(".bgDone"))) {
+        return;
+    }
+    publishInspectionOutcomeToHmiOnly(result, triggerLabel);
+}
+
+void StateMachine::startBackgroundInspectionSolve(
+    const ScanSegmentCache& cacheSnapshot,
+    quint32 taskId,
+    const InspectionQuota& quota,
+    quint64 generation,
+    const QString& triggerLabel)
+{
+    qInfo(LOG_FLOW).noquote()
+        << triggerLabel << QStringLiteral("：PLC 假成功放行，启动后台解算 pathId=")
+        << quota.pathId
+        << QStringLiteral(" name=") << quota.pathName
+        << QStringLiteral(" algorithm=") << quota.algorithm
+        << QStringLiteral(" taskId=") << taskId
+        << QStringLiteral(" cacheSeg=") << cacheSnapshot.cachedSegmentCount()
+        << QStringLiteral(" workpieceGen=") << generation;
+
+    QPointer<StateMachine> self(this);
+    std::thread([self,
+                 cacheSnapshot,
+                 taskId,
+                 quota,
+                 generation,
+                 triggerLabel]() mutable {
+        const InspectionResult result =
+            evaluateStation2Inspection(cacheSnapshot, taskId, quota);
+        if (self == nullptr) {
+            return;
+        }
+        QMetaObject::invokeMethod(
+            self,
+            [self, generation, result, triggerLabel]() {
+                if (self == nullptr) {
+                    return;
+                }
+                self->applyBackgroundInspectionResult(generation, result, triggerLabel);
+            },
+            Qt::QueuedConnection);
+    }).detach();
+}
+
+void StateMachine::releaseInspectionAndSolveInBackground()
+{
+    const InspectionQuota quota = buildActiveInspectionQuota();
+    const QString algorithm = quota.algorithm.trimmed();
+
+    if (!isBackgroundMeasurableAlgorithm(algorithm)) {
+        // 未接入/不适用：仍同步回真实 Res，避免 PLC 误以为测完。
+        const InspectionResult result = evaluateInspectionForActiveTask();
+        finishInspection(result);
+        return;
+    }
+
+    if (!isActivePathQuotaComplete() || m_scanSegmentCache.cachedSegmentCount() == 0) {
+        const InspectionResult result = evaluateInspectionForActiveTask();
+        finishInspection(result);
+        return;
+    }
+
+    // 先快照再假成功/切路，点云经 shared_ptr 共享，切路清缓存不影响快照存活。
+    const ScanSegmentCache cacheSnapshot = m_scanSegmentCache;
+    const quint32 taskId =
+        m_activeTask.taskId != 0 ? m_activeTask.taskId : cacheSnapshot.runTaskId();
+    const quint64 generation = workpieceGeneration();
+
+    markCurrentPathInspectionDone();
+    writeFakeInspectionPlcSuccess();
+    maybeEmitPathFinished(quota.pathId, 1);
+    completeActiveTask(1, protocol::AckState::Completed, true);
+
+    // 启动后台后再清缓存切路（prepareNext 内 AutoInspection 因已 mark 而跳过）。
+    startBackgroundInspectionSolve(
+        cacheSnapshot,
+        taskId,
+        quota,
+        generation,
+        QStringLiteral("Trig_Inspection"));
+    prepareNextScanPathAfterSuccess();
 }
 
 bool StateMachine::isActiveCodeReadTrigger() const
@@ -173,16 +327,13 @@ void StateMachine::maybeAutoRunInspectionBeforeLeavingPath()
         return;
     }
 
-    const auto* cfgMgr = common::ConfigManager::instance();
-    if (cfgMgr == nullptr) {
-        return;
-    }
-
-    const QString algorithm = cfgMgr->activePathAlgorithm().trimmed();
+    const InspectionQuota quota = buildActiveInspectionQuota();
+    const QString algorithm = quota.algorithm.trimmed();
     if (algorithm.isEmpty() ||
         algorithm == QLatin1String("code_read") ||
         algorithm == QLatin1String("self_check") ||
-        algorithm == QLatin1String("weld_pending")) {
+        algorithm == QLatin1String("weld_pending") ||
+        !isBackgroundMeasurableAlgorithm(algorithm)) {
         qInfo(LOG_FLOW).noquote()
             << QStringLiteral("切路前跳过自动检测：algorithm=")
             << (algorithm.isEmpty() ? QStringLiteral("<empty>") : algorithm)
@@ -190,42 +341,34 @@ void StateMachine::maybeAutoRunInspectionBeforeLeavingPath()
         return;
     }
 
-    qInfo(LOG_FLOW).noquote()
-        << QStringLiteral("临时策略：切路前自动执行检测（等价 Trig_Inspection） pathId=")
-        << cfgMgr->activePathId()
-        << QStringLiteral(" name=") << cfgMgr->activePathName()
-        << QStringLiteral(" algorithm=") << algorithm
-        << QStringLiteral(" cache arm=") << m_scanSegmentCache.cachedCountForDevice(
-               common::ScanDeviceKind::Arm)
-        << QStringLiteral("/") << cfgMgr->enabledArmPointCount()
-        << QStringLiteral(" telescopic=")
-        << m_scanSegmentCache.cachedCountForDevice(common::ScanDeviceKind::Telescopic)
-        << QStringLiteral("/") << cfgMgr->enabledTelescopicPointCount();
-
-    // 预留：算法后台化后在回投处比对同一 generation。
-    const quint64 generation = workpieceGeneration();
-    const InspectionResult result = evaluateCachedInspection(m_scanSegmentCache.runTaskId());
-    if (!acceptWorkpieceGeneration(generation, QStringLiteral("AutoInspection"))) {
+    if (m_scanSegmentCache.cachedSegmentCount() == 0) {
         return;
     }
-    publishInspectionOutcome(result, QStringLiteral("AutoInspection"));
-    markCurrentPathInspectionDone();
-    if (result.resultCode == 1) {
-        maybeEmitPathFinished(cfgMgr->activePathId(), result.resultCode);
-    }
 
-    // 无活动 Trig_Inspection 任务时，仍把 Inspection 通道 Ack/Res 写成完成态，便于 HMI 观察。
+    const ScanSegmentCache cacheSnapshot = m_scanSegmentCache;
+    const quint32 taskId = cacheSnapshot.runTaskId();
+    const quint64 generation = workpieceGeneration();
+
+    markCurrentPathInspectionDone();
+
+    // PLC 假成功：写检测结果字 + Inspection 通道 Ack/Res，放行观察/联锁。
+    writeFakeInspectionPlcSuccess();
+    maybeEmitPathFinished(quota.pathId, 1);
     if (m_activeTask.definition == nullptr ||
         m_activeTask.definition->stage != protocol::Stage::Inspection) {
         if (const protocol::TriggerDefinition* inspectionTrig = protocol::triggerByOffset(
                 protocol::registers::modbusIndexFromPlcAddress(40024))) {
-            const bool dataValid = result.resultCode == 1 || result.resultCode == 2;
-            sendRes(*inspectionTrig, result.resultCode);
-            sendAck(
-                *inspectionTrig,
-                dataValid ? protocol::AckState::Completed : protocol::AckState::Failed);
+            sendRes(*inspectionTrig, 1);
+            sendAck(*inspectionTrig, protocol::AckState::Completed);
         }
     }
+
+    startBackgroundInspectionSolve(
+        cacheSnapshot,
+        taskId,
+        quota,
+        generation,
+        QStringLiteral("AutoInspection"));
 }
 
 void StateMachine::prepareNextScanPathAfterSuccess()

@@ -350,6 +350,8 @@ void StateMachine::clearTransientWorkpieceRuntimeState()
     m_advancePathAfterTriggerRelease = false;
     m_lastInspectedPathId = -1;
     m_lastInspectedRunKey.clear();
+    m_lastInspectionResult = {};
+    m_hasLastInspectionResult = false;
 }
 
 quint64 StateMachine::bumpWorkpieceGeneration(const QString& reason)

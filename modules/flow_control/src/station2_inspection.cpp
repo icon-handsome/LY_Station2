@@ -11,6 +11,7 @@
 #include <QtCore/QVector>
 
 #include <algorithm>
+#include <mutex>
 #include <utility>
 #include <vector>
 
@@ -460,10 +461,17 @@ struct SegmentCloud {
     int finiteCount = 0;
 };
 
-QString purposeForLocalIndex(int localIndex)
+/// 按 pathId 查 purpose，避免后台解算期间 activePath 已切走读到错误点表。
+QString purposeForLocalIndex(int pathId, int localIndex)
 {
     if (const auto* cfgMgr = common::ConfigManager::instance()) {
-        return cfgMgr->pointPurpose(localIndex);
+        if (const common::ScanPathConfig* path = cfgMgr->findScanPathById(pathId)) {
+            for (const auto& point : path->points) {
+                if (point.pointIndex == localIndex) {
+                    return point.purpose;
+                }
+            }
+        }
     }
     return {};
 }
@@ -503,7 +511,7 @@ bool loadQuotaSegmentClouds(
 
         SegmentCloud cloud;
         cloud.localIndex = key.localIndex;
-        cloud.purpose = classifyPointPurpose(purposeForLocalIndex(key.localIndex));
+        cloud.purpose = classifyPointPurpose(purposeForLocalIndex(quota.pathId, key.localIndex));
         if (!extractFiniteXyz(entry->bundle.mechEyeResult.pointCloud, &cloud.xyz, &cloud.finiteCount)) {
             failResult->resultCode = 2;
             failResult->ngReasonWord0 = kNgReasonPointCloudInvalid;
@@ -1089,6 +1097,10 @@ InspectionResult evaluateStation2Inspection(
     quint32 taskId,
     const InspectionQuota& quota)
 {
+    // 共享算法 Service 非可重入整路径状态；后台多路径并发时串行化整次评估。
+    static std::mutex s_evaluateMutex;
+    std::lock_guard<std::mutex> lock(s_evaluateMutex);
+
     InspectionQuota effective = quota;
     if (effective.pathId <= 0 || effective.algorithm.isEmpty()) {
         if (const auto* cfgMgr = common::ConfigManager::instance()) {

@@ -22,8 +22,8 @@ void InspectionHandler::execute(TaskHandlerContext& ctx)
         return;
     }
 
-    const InspectionResult result = ctx.host.evaluateInspectionForActiveTask();
-    ctx.host.finishInspection(result);
+    // 测量算法：PLC 假成功放行 + 后台解算；真结果仅 HMI。
+    ctx.host.releaseInspectionAndSolveInBackground();
 }
 
 }  // namespace scan_tracking::flow_control
