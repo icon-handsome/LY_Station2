@@ -132,6 +132,12 @@ StateMachine::~StateMachine()
 void StateMachine::start()
 {
     qInfo(LOG_FLOW) << QStringLiteral("状态机启动。");
+
+    // HMI CmdStop → CmdStart/CmdReset 同实例重启：恢复 stop 关掉的门闩，否则后台解算永久跳过。
+    m_stopped.store(false, std::memory_order_release);
+    m_bgSolveAcceptResults = std::make_shared<std::atomic_bool>(true);
+    blockSignals(false);
+
     clearActiveTask();
     // 无断点续跑：冷启动不得残留上一进程/上一轮段缓存与路径进度。
     bumpWorkpieceGeneration(QStringLiteral("state_machine.start"));

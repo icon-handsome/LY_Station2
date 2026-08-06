@@ -66,6 +66,7 @@ include(ThicknessMeasureSdk)
 include(InnerSurfaceMeasureSdk)
 include(UndercutLengthMeasureSdk)
 include(LengthVolumeMeasureSdk)
+include(CollisionDetectionSdk)
 
 option(SCAN_TRACKING_ENABLE_LB_POSE_DETECTION
     "Build and link LB (optical stereo marker) pose detection"

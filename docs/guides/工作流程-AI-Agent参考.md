@@ -280,6 +280,8 @@ flowchart TD
 
 **设备**：2 个激光雷达
 
+**IPC 算法**：点云防碰 DLL 已打包（`third_party/collision_detection`，见 `docs/算法接入与调用.md` §9）；`CollisionMonitorService` / 雷达点云流待接。
+
 **逻辑**：
 
 ```

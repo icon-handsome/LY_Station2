@@ -116,7 +116,7 @@ bool ensureWeldMeasureReadyForDevice(
     return true;
 }
 
-bool extractFiniteXyz(
+bool appendFiniteXyz(
     const scan_tracking::mech_eye::PointCloudFrame& frame,
     std::vector<float>* xyzOut,
     int* finitePointCount)
@@ -125,7 +125,6 @@ bool extractFiniteXyz(
         return false;
     }
 
-    xyzOut->clear();
     const auto& points = *frame.pointsXYZ;
     // pointCount 与缓冲区可能不一致（异常包/半截云）；按实际 float 三元组长度钳制，避免越界读。
     const int maxByBuffer = static_cast<int>(points.size() / 3u);
@@ -142,7 +141,9 @@ bool extractFiniteXyz(
             << "bufferPoints=" << maxByBuffer;
     }
 
-    xyzOut->reserve(static_cast<size_t>(count) * 3u);
+    const size_t oldSize = xyzOut->size();
+    xyzOut->resize(oldSize + static_cast<size_t>(count) * 3u);
+    size_t write = oldSize;
     int finite = 0;
     for (int i = 0; i < count; ++i) {
         const float x = points[static_cast<size_t>(i) * 3u + 0u];
@@ -151,14 +152,27 @@ bool extractFiniteXyz(
         if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
             continue;
         }
-        xyzOut->push_back(x);
-        xyzOut->push_back(y);
-        xyzOut->push_back(z);
+        (*xyzOut)[write++] = x;
+        (*xyzOut)[write++] = y;
+        (*xyzOut)[write++] = z;
         ++finite;
     }
+    xyzOut->resize(write);
 
     *finitePointCount = finite;
     return finite > 0;
+}
+
+bool extractFiniteXyz(
+    const scan_tracking::mech_eye::PointCloudFrame& frame,
+    std::vector<float>* xyzOut,
+    int* finitePointCount)
+{
+    if (xyzOut == nullptr || finitePointCount == nullptr) {
+        return false;
+    }
+    xyzOut->clear();
+    return appendFiniteXyz(frame, xyzOut, finitePointCount);
 }
 
 /// Mech-Eye 整幅云可达约 432 万点；WeldMeasure.dll 内 std::map 体素降采样会 AV/卡死。
@@ -954,6 +968,113 @@ double resolveVolumeRadiusMm(const InspectionQuota& quota)
     return 600.0;
 }
 
+/// path3 专用：校验 LB 后把各臂段有限点直接写入 mergedXyz，避免「每段临时向量 → 再合并」二次拷贝。
+/// 段顺序与 loadQuotaSegmentClouds 一致（按 localIndex 升序），保证送入 DLL 的点序不变。
+bool mergeArmLengthVolumeClouds(
+    const ScanSegmentCache& cache,
+    const InspectionQuota& quota,
+    std::vector<float>* mergedXyz,
+    size_t* mergedCount,
+    int* segmentCount,
+    InspectionResult* failResult)
+{
+    if (mergedXyz == nullptr || mergedCount == nullptr || segmentCount == nullptr ||
+        failResult == nullptr) {
+        return false;
+    }
+
+    mergedXyz->clear();
+    *mergedCount = 0;
+    *segmentCount = 0;
+
+    QVector<int> localIndices;
+    localIndices.reserve(quota.expectedArmCount > 0 ? quota.expectedArmCount : 8);
+    size_t reserveFloats = 0;
+    for (const ScanSegmentCacheKey& key : cache.cachedKeys()) {
+        if (!isWithinDeviceQuota(key.device, key.localIndex, quota) ||
+            key.device != common::ScanDeviceKind::Arm) {
+            continue;
+        }
+        localIndices.push_back(key.localIndex);
+        if (const ScanSegmentCacheEntry* entry = cache.entry(key.device, key.localIndex)) {
+            const auto& frame = entry->bundle.mechEyeResult.pointCloud;
+            if (frame.isValid() && frame.pointCount > 0) {
+                reserveFloats += static_cast<size_t>(frame.pointCount) * 3u;
+            }
+        }
+    }
+    std::sort(localIndices.begin(), localIndices.end());
+    if (localIndices.isEmpty()) {
+        failResult->resultCode = 3;
+        failResult->ngReasonWord0 = kNgReasonIncompleteSegments;
+        failResult->message =
+            QStringLiteral("pathId=%1：无可用机械臂点云段。").arg(quota.pathId);
+        return false;
+    }
+
+    mergedXyz->reserve(reserveFloats);
+
+    for (const int localIndex : localIndices) {
+        const ScanSegmentCacheEntry* entry =
+            cache.entry(common::ScanDeviceKind::Arm, localIndex);
+        if (entry == nullptr || !entry->bundle.success()) {
+            failResult->resultCode = 2;
+            failResult->ngReasonWord0 = kNgReasonBundleInvalid;
+            failResult->measurement.qualityCode = 2;
+            failResult->measureItemCount = 1;
+            failResult->message =
+                QStringLiteral("pathId=%1 段 %2 采集数据无效，无法检测。")
+                    .arg(quota.pathId)
+                    .arg(localIndex);
+            return false;
+        }
+
+        // 源码要求单一统一坐标系外表面云：CXP 参与段必须已用 LB Rt_global 变换后再合并。
+        const auto& bundle = entry->bundle;
+        if (bundle.cxpParticipated()) {
+            const auto& lb = bundle.lbPoseResult;
+            if (!lb.invoked || !lb.success || !lb.poseMatrix.valid) {
+                failResult->resultCode = 2;
+                failResult->ngReasonWord0 = kNgReasonPointCloudInvalid;
+                failResult->measurement.qualityCode = 2;
+                failResult->measureItemCount = 1;
+                failResult->message = QStringLiteral(
+                                         "pathId=%1 段 %2：CXP 已参与但 LB 位姿无效，无法按源码合并外表面点云（%3）")
+                                         .arg(quota.pathId)
+                                         .arg(localIndex)
+                                         .arg(lb.message.isEmpty() ? QStringLiteral("lb missing")
+                                                                  : lb.message);
+                return false;
+            }
+        }
+
+        int finiteCount = 0;
+        if (!appendFiniteXyz(bundle.mechEyeResult.pointCloud, mergedXyz, &finiteCount)) {
+            failResult->resultCode = 2;
+            failResult->ngReasonWord0 = kNgReasonPointCloudInvalid;
+            failResult->measurement.qualityCode = 2;
+            failResult->measureItemCount = 1;
+            failResult->message =
+                QStringLiteral("pathId=%1 段 %2 点云无效或无可测点。")
+                    .arg(quota.pathId)
+                    .arg(localIndex);
+            return false;
+        }
+        *mergedCount += static_cast<size_t>(finiteCount);
+        ++(*segmentCount);
+    }
+
+    if (*mergedCount == 0 || mergedXyz->empty()) {
+        failResult->resultCode = 2;
+        failResult->ngReasonWord0 = kNgReasonPointCloudInvalid;
+        failResult->measurement.qualityCode = 2;
+        failResult->measureItemCount = 1;
+        failResult->message = QStringLiteral("pathId=%1：合并点云为空。").arg(quota.pathId);
+        return false;
+    }
+    return true;
+}
+
 InspectionResult evaluateLengthVolumeInspection(
     const ScanSegmentCache& cache,
     quint32 taskId,
@@ -990,57 +1111,12 @@ InspectionResult evaluateLengthVolumeInspection(
         return result;
     }
 
-    QVector<SegmentCloud> clouds;
-    if (!loadQuotaSegmentClouds(cache, quota, &clouds, &result)) {
-        fillPathMeta(&result, quota);
-        return result;
-    }
-    if (clouds.isEmpty()) {
-        result.resultCode = 3;
-        result.ngReasonWord0 = kNgReasonIncompleteSegments;
-        result.message = QStringLiteral("pathId=%1：无可用机械臂点云段。").arg(quota.pathId);
-        return result;
-    }
-
-    // 源码要求单一统一坐标系外表面云：CXP 参与段必须已用 LB Rt_global 变换后再合并。
-    for (const SegmentCloud& cloud : clouds) {
-        const ScanSegmentCacheEntry* entry =
-            cache.entry(common::ScanDeviceKind::Arm, cloud.localIndex);
-        if (entry == nullptr) {
-            continue;
-        }
-        const auto& bundle = entry->bundle;
-        if (!bundle.cxpParticipated()) {
-            continue;
-        }
-        const auto& lb = bundle.lbPoseResult;
-        if (!lb.invoked || !lb.success || !lb.poseMatrix.valid) {
-            result.resultCode = 2;
-            result.ngReasonWord0 = kNgReasonPointCloudInvalid;
-            result.measurement.qualityCode = 2;
-            result.measureItemCount = 1;
-            result.message = QStringLiteral(
-                                 "pathId=%1 段 %2：CXP 已参与但 LB 位姿无效，无法按源码合并外表面点云（%3）")
-                                 .arg(quota.pathId)
-                                 .arg(cloud.localIndex)
-                                 .arg(lb.message.isEmpty() ? QStringLiteral("lb missing")
-                                                          : lb.message);
-            return result;
-        }
-    }
-
     std::vector<float> mergedXyz;
     size_t mergedCount = 0;
-    for (const SegmentCloud& cloud : clouds) {
-        mergedXyz.insert(mergedXyz.end(), cloud.xyz.begin(), cloud.xyz.end());
-        mergedCount += static_cast<size_t>(cloud.finiteCount);
-    }
-    if (mergedCount == 0 || mergedXyz.empty()) {
-        result.resultCode = 2;
-        result.ngReasonWord0 = kNgReasonPointCloudInvalid;
-        result.measurement.qualityCode = 2;
-        result.measureItemCount = 1;
-        result.message = QStringLiteral("pathId=%1：合并点云为空。").arg(quota.pathId);
+    int segmentCount = 0;
+    if (!mergeArmLengthVolumeClouds(
+            cache, quota, &mergedXyz, &mergedCount, &segmentCount, &result)) {
+        fillPathMeta(&result, quota);
         return result;
     }
 
@@ -1063,7 +1139,7 @@ InspectionResult evaluateLengthVolumeInspection(
     qInfo(LOG_STATION2_INSPECTION).noquote()
         << QStringLiteral("开始长度容积测量 pathId=") << quota.pathId
         << QStringLiteral(" name=") << quota.pathName
-        << QStringLiteral(" 段数=") << clouds.size()
+        << QStringLiteral(" 段数=") << segmentCount
         << QStringLiteral(" 合并点数=") << static_cast<qulonglong>(mergedCount)
         << QStringLiteral(" volumeRadiusMm=") << volumeRadiusMm;
 
@@ -1086,7 +1162,7 @@ InspectionResult evaluateLengthVolumeInspection(
     result.resultCode = 1;
     result.measureItemCount = 2;
     result.measurement.qualityCode = 1;
-    result.measurement.measuredSegmentCount = clouds.size();
+    result.measurement.measuredSegmentCount = segmentCount;
     result.measurement.lengthMm = measurement.lengthMm;
     result.measurement.volumeLiters = measurement.volumeLiters;
     result.measurement.volumeRadiusMm = measurement.volumeRadiusMm;
@@ -1099,7 +1175,7 @@ InspectionResult evaluateLengthVolumeInspection(
                          .arg(measurement.volumeLiters, 0, 'f', 3)
                          .arg(measurement.volumeRadiusMm, 0, 'f', 3)
                          .arg(measurement.fittedOuterRadiusMm, 0, 'f', 3)
-                         .arg(clouds.size());
+                         .arg(segmentCount);
     qInfo(LOG_STATION2_INSPECTION).noquote() << result.message;
     return result;
 }
