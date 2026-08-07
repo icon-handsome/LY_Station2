@@ -11,6 +11,7 @@
 #include <QtCore/QVector>
 
 #include <algorithm>
+#include <memory>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -1260,6 +1261,159 @@ std::mutex& station2EvaluateMutex()
 
 }  // namespace
 
+void InspectionCloudSnapshot::clear()
+{
+    runTaskId = 0;
+    segments.clear();
+}
+
+int InspectionCloudSnapshot::countForDevice(common::ScanDeviceKind device) const
+{
+    int count = 0;
+    for (const InspectionSegmentCloud& segment : segments) {
+        if (segment.device == device) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+bool InspectionCloudSnapshot::meetsDeviceQuotas(
+    int expectedArmCount,
+    int expectedTelescopicCount) const
+{
+    if (expectedArmCount > 0 && countForDevice(common::ScanDeviceKind::Arm) < expectedArmCount) {
+        return false;
+    }
+    if (expectedTelescopicCount > 0 &&
+        countForDevice(common::ScanDeviceKind::Telescopic) < expectedTelescopicCount) {
+        return false;
+    }
+    return segmentCount() > 0;
+}
+
+const InspectionSegmentCloud* InspectionCloudSnapshot::find(
+    common::ScanDeviceKind device,
+    int localIndex) const
+{
+    for (const InspectionSegmentCloud& segment : segments) {
+        if (segment.device == device && segment.localIndex == localIndex) {
+            return &segment;
+        }
+    }
+    return nullptr;
+}
+
+InspectionCloudSnapshot buildInspectionCloudSnapshot(const ScanSegmentCache& cache)
+{
+    InspectionCloudSnapshot snapshot;
+    snapshot.runTaskId = cache.runTaskId();
+    snapshot.segments.reserve(cache.cachedSegmentCount());
+
+    for (const ScanSegmentCacheKey& key : cache.cachedKeys()) {
+        const ScanSegmentCacheEntry* entry = cache.entry(key.device, key.localIndex);
+        if (entry == nullptr) {
+            continue;
+        }
+
+        InspectionSegmentCloud segment;
+        segment.device = key.device;
+        segment.localIndex = key.localIndex;
+        segment.captureOk = entry->bundle.success();
+        segment.cxpParticipated = entry->bundle.cxpParticipated();
+        const auto& lb = entry->bundle.lbPoseResult;
+        segment.lbPoseOk = lb.invoked && lb.success && lb.poseMatrix.valid;
+
+        if (segment.captureOk) {
+            if (!extractFiniteXyz(
+                    entry->bundle.mechEyeResult.pointCloud,
+                    &segment.xyz,
+                    &segment.finiteCount)) {
+                segment.captureOk = false;
+                segment.xyz.clear();
+                segment.finiteCount = 0;
+            }
+        }
+
+        snapshot.segments.push_back(std::move(segment));
+    }
+
+    std::sort(
+        snapshot.segments.begin(),
+        snapshot.segments.end(),
+        [](const InspectionSegmentCloud& a, const InspectionSegmentCloud& b) {
+            if (a.device != b.device) {
+                return static_cast<int>(a.device) < static_cast<int>(b.device);
+            }
+            return a.localIndex < b.localIndex;
+        });
+
+    qInfo(LOG_STATION2_INSPECTION).noquote()
+        << QStringLiteral("已构建检测轻量快照 segments=") << snapshot.segmentCount()
+        << QStringLiteral(" taskId=") << snapshot.runTaskId
+        << QStringLiteral(" arm=") << snapshot.countForDevice(common::ScanDeviceKind::Arm)
+        << QStringLiteral(" telescopic=")
+        << snapshot.countForDevice(common::ScanDeviceKind::Telescopic);
+    return snapshot;
+}
+
+/// 将轻量快照物化为仅含有限 XYZ 的临时段缓存，供既有 evaluate* 复用。
+ScanSegmentCache materializeInspectionCache(const InspectionCloudSnapshot& snapshot)
+{
+    ScanSegmentCache cache;
+    cache.ensureRunRoot(snapshot.runTaskId);
+
+    for (const InspectionSegmentCloud& segment : snapshot.segments) {
+        vision::MultiCameraCaptureBundle bundle;
+        if (segment.captureOk) {
+            bundle.mechEyeResult.errorCode = mech_eye::CaptureErrorCode::Success;
+        } else {
+            bundle.mechEyeResult.errorCode = mech_eye::CaptureErrorCode::CaptureFailed;
+            bundle.mechEyeResult.errorMessage = QStringLiteral("snapshot captureOk=false");
+        }
+
+        if (!segment.xyz.empty() && segment.finiteCount > 0) {
+            auto points = std::make_shared<std::vector<float>>(segment.xyz);
+            bundle.mechEyeResult.pointCloud.pointsXYZ = std::move(points);
+            bundle.mechEyeResult.pointCloud.pointCount = segment.finiteCount;
+            bundle.mechEyeResult.pointCloud.width = segment.finiteCount;
+            bundle.mechEyeResult.pointCloud.height = 1;
+        }
+
+        if (segment.cxpParticipated) {
+            // cxpParticipated() 依据 request 键非空。
+            bundle.request.hikCameraAKey = QStringLiteral("snapshot-cxp-a");
+            bundle.request.hikCameraBKey = QStringLiteral("snapshot-cxp-b");
+            bundle.hikCameraAResult.errorCode = vision::VisionErrorCode::Success;
+            bundle.hikCameraBResult.errorCode = vision::VisionErrorCode::Success;
+            bundle.lbPoseResult.invoked = true;
+            bundle.lbPoseResult.success = segment.lbPoseOk;
+            bundle.lbPoseResult.poseMatrix.valid = segment.lbPoseOk;
+            if (!segment.lbPoseOk) {
+                bundle.lbPoseResult.message = QStringLiteral("snapshot lbPoseOk=false");
+            }
+        }
+
+        cache.storeSegment(
+            segment.device,
+            segment.localIndex,
+            snapshot.runTaskId,
+            std::move(bundle));
+    }
+    return cache;
+}
+
+InspectionResult evaluateStation2Inspection(
+    const InspectionCloudSnapshot& snapshot,
+    quint32 taskId,
+    const InspectionQuota& quota)
+{
+    // 物化仅含有限 XYZ 的临时缓存；原全量 PointCloudFrame/纹理/CXP 不再进入后台解算持有。
+    const ScanSegmentCache cache = materializeInspectionCache(snapshot);
+    std::lock_guard<std::mutex> lock(station2EvaluateMutex());
+    return evaluateStation2InspectionUnlocked(cache, taskId, quota);
+}
+
 InspectionResult evaluateStation2Inspection(
     const ScanSegmentCache& cache,
     quint32 taskId,
@@ -1268,6 +1422,25 @@ InspectionResult evaluateStation2Inspection(
     // 共享算法 Service 非可重入整路径状态；后台多路径并发时串行化整次评估。
     std::lock_guard<std::mutex> lock(station2EvaluateMutex());
     return evaluateStation2InspectionUnlocked(cache, taskId, quota);
+}
+
+bool tryEvaluateStation2Inspection(
+    const InspectionCloudSnapshot& snapshot,
+    quint32 taskId,
+    const InspectionQuota& quota,
+    InspectionResult* out)
+{
+    if (out == nullptr) {
+        return false;
+    }
+    std::unique_lock<std::mutex> lock(station2EvaluateMutex(), std::try_to_lock);
+    if (!lock.owns_lock()) {
+        *out = makeEvaluateBusyResult(quota);
+        return false;
+    }
+    const ScanSegmentCache cache = materializeInspectionCache(snapshot);
+    *out = evaluateStation2InspectionUnlocked(cache, taskId, quota);
+    return true;
 }
 
 bool tryEvaluateStation2Inspection(

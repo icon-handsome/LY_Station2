@@ -283,7 +283,7 @@ private:
     /// 快照缓存后后台解算（真结果经 generation 校验后仅推 HMI）。
     /// 单飞：最多 1 个执行中 + 1 个 pending；新任务覆盖未执行的 pending，避免多套点云堆积。
     void startBackgroundInspectionSolve(
-        const ScanSegmentCache& cacheSnapshot,
+        InspectionCloudSnapshot snapshot,
         quint32 taskId,
         const InspectionQuota& quota,
         quint64 generation,
@@ -304,7 +304,7 @@ private:
         const QString& triggerLabel);
 
     struct BackgroundInspectionJob {
-        ScanSegmentCache cacheSnapshot;
+        InspectionCloudSnapshot cloudSnapshot;
         quint32 taskId = 0;
         InspectionQuota quota;
         quint64 generation = 0;

@@ -203,7 +203,7 @@ void StateMachine::joinBackgroundInspectionSolves()
 }
 
 void StateMachine::startBackgroundInspectionSolve(
-    const ScanSegmentCache& cacheSnapshot,
+    InspectionCloudSnapshot snapshot,
     quint32 taskId,
     const InspectionQuota& quota,
     quint64 generation,
@@ -215,7 +215,7 @@ void StateMachine::startBackgroundInspectionSolve(
         << QStringLiteral(" name=") << quota.pathName
         << QStringLiteral(" algorithm=") << quota.algorithm
         << QStringLiteral(" taskId=") << taskId
-        << QStringLiteral(" cacheSeg=") << cacheSnapshot.cachedSegmentCount()
+        << QStringLiteral(" snapSeg=") << snapshot.segmentCount()
         << QStringLiteral(" workpieceGen=") << generation;
 
     // 工作线程禁止使用 QPointer（非线程安全）。判活/是否回投只读 shared atomic；
@@ -224,7 +224,7 @@ void StateMachine::startBackgroundInspectionSolve(
     StateMachine* const receiver = this;
 
     BackgroundInspectionJob job;
-    job.cacheSnapshot = cacheSnapshot;
+    job.cloudSnapshot = std::move(snapshot);
     job.taskId = taskId;
     job.quota = quota;
     job.generation = generation;
@@ -269,9 +269,9 @@ void StateMachine::startBackgroundInspectionSolve(
                     const quint64 generation = job.generation;
                     const QString triggerLabel = job.triggerLabel;
                     const InspectionResult result = evaluateStation2Inspection(
-                        job.cacheSnapshot, job.taskId, job.quota);
+                        job.cloudSnapshot, job.taskId, job.quota);
                     // 解算结束立刻丢掉点云快照，只保留结果回投所需字段。
-                    job.cacheSnapshot.reset();
+                    job.cloudSnapshot.clear();
 
                     if (acceptResults->load(std::memory_order_acquire)) {
                         QMetaObject::invokeMethod(
@@ -325,10 +325,10 @@ void StateMachine::releaseInspectionAndSolveInBackground()
         return;
     }
 
-    // 先快照再假成功/切路，点云经 shared_ptr 共享，切路清缓存不影响快照存活。
-    const ScanSegmentCache cacheSnapshot = m_scanSegmentCache;
+    // 先抽轻量 XYZ 快照再假成功/切路；切路清缓存后全量 PointCloudFrame 可释放。
+    InspectionCloudSnapshot cloudSnapshot = buildInspectionCloudSnapshot(m_scanSegmentCache);
     const quint32 taskId =
-        m_activeTask.taskId != 0 ? m_activeTask.taskId : cacheSnapshot.runTaskId();
+        m_activeTask.taskId != 0 ? m_activeTask.taskId : cloudSnapshot.runTaskId;
     const quint64 generation = workpieceGeneration();
 
     markCurrentPathInspectionDone();
@@ -338,7 +338,7 @@ void StateMachine::releaseInspectionAndSolveInBackground()
 
     // 启动后台后再清缓存切路（prepareNext 内 AutoInspection 因已 mark 而跳过）。
     startBackgroundInspectionSolve(
-        cacheSnapshot,
+        std::move(cloudSnapshot),
         taskId,
         quota,
         generation,
@@ -451,8 +451,8 @@ void StateMachine::maybeAutoRunInspectionBeforeLeavingPath()
         return;
     }
 
-    const ScanSegmentCache cacheSnapshot = m_scanSegmentCache;
-    const quint32 taskId = cacheSnapshot.runTaskId();
+    InspectionCloudSnapshot cloudSnapshot = buildInspectionCloudSnapshot(m_scanSegmentCache);
+    const quint32 taskId = cloudSnapshot.runTaskId;
     const quint64 generation = workpieceGeneration();
 
     markCurrentPathInspectionDone();
@@ -470,7 +470,7 @@ void StateMachine::maybeAutoRunInspectionBeforeLeavingPath()
     }
 
     startBackgroundInspectionSolve(
-        cacheSnapshot,
+        std::move(cloudSnapshot),
         taskId,
         quota,
         generation,
