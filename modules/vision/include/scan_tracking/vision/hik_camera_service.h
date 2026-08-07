@@ -2,13 +2,17 @@
 
 // 海康 GigE / USB 相机服务（MVS SDK）。
 //
-// 通过设备枚举与序列号/IP 匹配打开相机，连接与采图在独立 std::thread 中执行，
+// 通过设备枚举与序列号/IP 匹配打开相机，连接与采图在可接合的 std::thread 中执行，
 // 避免阻塞主线程和 PLC 轮询。用于非 CXP 场景或 monitor 只读模式（可与 SCMVS 共存）。
 // 支持运行时读写曝光、增益等 GenICam 参数。
+// stop() 会关闭异步回投闸门并 join 工作线程，避免 detach 悬空 this。
 
 #include <QtCore/QObject>
 
 #include <atomic>
+#include <memory>
+#include <mutex>
+#include <thread>
 
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/vision/vision_types.h"
@@ -64,7 +68,9 @@ private:
     bool captureMonoFrame(int timeoutMs, const QString& cameraKey, QString* errorMessage, HikMonoFrame* outFrame = nullptr);
     bool openMatchedDevice(const QString& preferredCameraKey, QString* errorMessage);
     void closeDevice();
+    void closeDeviceUnlocked();
     void startAsyncConnect();
+    void joinWorkerThreads();
 
     QString m_roleName;
     scan_tracking::common::VisionCameraEndpointConfig m_endpointConfig;
@@ -75,6 +81,13 @@ private:
     bool m_started = false;
     std::atomic_bool m_connectInFlight = false;
     std::atomic_bool m_captureInFlight = false;
+    // 工作线程拷贝 shared_ptr；stop 置 false 后禁止回投主线程，避免悬空 this。
+    std::shared_ptr<std::atomic_bool> m_acceptAsyncResults;
+    std::mutex m_workerThreadsMutex;
+    std::thread m_connectThread;
+    std::thread m_captureThread;
+    // 串行化 open/close，避免连接线程与采图线程并行开设备踩句柄。
+    std::mutex m_deviceLifecycleMutex;
     Impl* m_impl = nullptr;
 };
 

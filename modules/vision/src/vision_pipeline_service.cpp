@@ -1,10 +1,12 @@
 #include "scan_tracking/vision/vision_pipeline_service.h"
 
 #include <thread>
+#include <utility>
 
 #include <QtCore/QLoggingCategory>
 #include <QtCore/QDateTime>
 #include <QtCore/QFile>
+#include <QtCore/QMetaObject>
 #include <QtCore/QMetaType>
 #include <QtCore/QPointer>
 #include <QtCore/QTimer>
@@ -71,6 +73,7 @@ VisionPipelineService::VisionPipelineService(
     , m_hikCameraAService(hikCameraAService)
     , m_hikCameraBService(hikCameraBService)
     , m_hikCameraCController(hikCameraCController)
+    , m_acceptLbResults(std::make_shared<std::atomic_bool>(false))
 {
     registerMetaTypes();
 
@@ -120,14 +123,34 @@ VisionPipelineService::VisionPipelineService(
     }
 }
 
+VisionPipelineService::~VisionPipelineService()
+{
+    stop();
+}
+
+void VisionPipelineService::joinLbPoseThread()
+{
+    std::thread lbThread;
+    {
+        std::lock_guard<std::mutex> lock(m_lbPoseThreadMutex);
+        lbThread = std::move(m_lbPoseThread);
+    }
+    if (lbThread.joinable()) {
+        lbThread.join();
+    }
+}
+
 void VisionPipelineService::start(const scan_tracking::common::VisionConfig& config)
 {
+    // 若上次 stop 后仍有未接合线程，先收口再开闸。
+    joinLbPoseThread();
     m_config = config;
     if (const auto* cfg = scan_tracking::common::ConfigManager::instance()) {
         m_lbPoseConfig = cfg->lbPoseConfig();
     }
     m_pending = PendingCaptureContext{};
     m_processing = false;
+    m_acceptLbResults->store(true, std::memory_order_release);
     m_started = true;
     setState(
         VisionPipelineState::Ready,
@@ -136,14 +159,15 @@ void VisionPipelineService::start(const scan_tracking::common::VisionConfig& con
 
 void VisionPipelineService::stop()
 {
-    if (!m_started) {
-        return;
-    }
-
+    m_acceptLbResults->store(false, std::memory_order_release);
     m_pending = PendingCaptureContext{};
-    m_processing = false;
+    const bool wasStarted = m_started;
     m_started = false;
-    setState(VisionPipelineState::Stopped, QStringLiteral("视觉流水线已停止。"));
+    joinLbPoseThread();
+    m_processing = false;
+    if (wasStarted) {
+        setState(VisionPipelineState::Stopped, QStringLiteral("视觉流水线已停止。"));
+    }
 }
 
 quint64 VisionPipelineService::requestCaptureBundle(
@@ -569,25 +593,51 @@ void VisionPipelineService::finishBundleIfReady()
     setState(VisionPipelineState::Capturing, QStringLiteral("正在执行 LB 位姿检测…"));
 
     const auto lbConfig = m_lbPoseConfig;
-    QPointer<VisionPipelineService> self(this);
-    std::thread([self, bundle, lbConfig]() mutable {
-        bundle.lbPoseResult = runLbPoseDetection(
-            bundle.hikCameraAResult.frame,
-            bundle.hikCameraBResult.frame,
-            lbConfig);
-        if (self == nullptr) {
+    const auto acceptResults = m_acceptLbResults;
+    VisionPipelineService* const receiver = this;
+
+    std::thread finishedThread;
+    {
+        std::lock_guard<std::mutex> lock(m_lbPoseThreadMutex);
+        if (!m_started ||
+            acceptResults == nullptr ||
+            !acceptResults->load(std::memory_order_acquire)) {
+            m_processing = false;
+            bundle.lbPoseResult.invoked = false;
+            bundle.lbPoseResult.success = false;
+            bundle.lbPoseResult.message = QStringLiteral("流水线已停止，跳过 LB 位姿检测。");
+            emitBundleFinished(std::move(bundle));
             return;
         }
-        QMetaObject::invokeMethod(
-            self,
-            [self, completed = std::move(bundle)]() mutable {
-                if (self == nullptr) {
+        if (m_lbPoseThread.joinable()) {
+            finishedThread = std::move(m_lbPoseThread);
+        }
+        m_lbPoseThread = std::thread(
+            [acceptResults, receiver, lbConfig, bundle = std::move(bundle)]() mutable {
+                bundle.lbPoseResult = runLbPoseDetection(
+                    bundle.hikCameraAResult.frame,
+                    bundle.hikCameraBResult.frame,
+                    lbConfig);
+
+                if (!acceptResults->load(std::memory_order_acquire)) {
                     return;
                 }
-                self->emitBundleFinished(std::move(completed));
-            },
-            Qt::QueuedConnection);
-    }).detach();
+
+                QMetaObject::invokeMethod(
+                    receiver,
+                    [acceptResults, receiver, completed = std::move(bundle)]() mutable {
+                        if (!acceptResults->load(std::memory_order_acquire)) {
+                            return;
+                        }
+                        receiver->emitBundleFinished(std::move(completed));
+                    },
+                    Qt::QueuedConnection);
+            });
+    }
+
+    if (finishedThread.joinable()) {
+        finishedThread.join();
+    }
 }
 
 }  // namespace vision

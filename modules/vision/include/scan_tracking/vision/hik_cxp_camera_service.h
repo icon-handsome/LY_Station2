@@ -2,13 +2,17 @@
 
 // 海康 CoaXPress（PCIe 采集卡）相机服务。
 //
-// 通过 MVS SDK 按序列号匹配 CXP 设备，在独立 std::thread 中执行连接与采图，
+// 通过 MVS SDK 按序列号匹配 CXP 设备，在可接合的 std::thread 中执行连接与采图，
 // 避免阻塞主线程及 PLC Modbus 轮询。供 VisionPipelineService 作为双目左 A / 右 B 使用。
 // 输出 Mono8 灰度帧，经 HikPoseCaptureResult 异步回传。
+// stop() 会关闭异步回投闸门并 join 工作线程，避免 detach 悬空 this。
 
 #include <QtCore/QObject>
 
 #include <atomic>
+#include <memory>
+#include <mutex>
+#include <thread>
 
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/vision/vision_types.h"
@@ -70,7 +74,9 @@ private:
         HikMonoFrame* outFrame = nullptr);
     bool openMatchedDevice(const QString& preferredCameraKey, QString* errorMessage);
     void closeDevice();
+    void closeDeviceUnlocked();
     void startAsyncConnect();
+    void joinWorkerThreads();
 
     QString m_roleName;
     scan_tracking::common::VisionCameraEndpointConfig m_endpointConfig;
@@ -81,6 +87,13 @@ private:
     bool m_started = false;
     std::atomic_bool m_connectInFlight{false};
     std::atomic_bool m_captureInFlight{false};
+    // 工作线程拷贝 shared_ptr；stop 置 false 后禁止回投主线程，避免悬空 this。
+    std::shared_ptr<std::atomic_bool> m_acceptAsyncResults;
+    std::mutex m_workerThreadsMutex;
+    std::thread m_connectThread;
+    std::thread m_captureThread;
+    // 串行化本实例 open/close（与全局 g_cxpSdkMutex 叠加），避免并行开设备踩句柄。
+    std::mutex m_deviceLifecycleMutex;
     Impl* m_impl = nullptr;
 };
 

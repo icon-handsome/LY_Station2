@@ -151,6 +151,7 @@ void HikCxpCameraService::registerMetaTypes()
 HikCxpCameraService::HikCxpCameraService(const QString& roleName, QObject* parent)
     : QObject(parent)
     , m_roleName(roleName)
+    , m_acceptAsyncResults(std::make_shared<std::atomic_bool>(false))
     , m_impl(new Impl())
 {
     registerMetaTypes();
@@ -181,6 +182,7 @@ void HikCxpCameraService::start(
     }
     m_impl->sdkReady = true;
 
+    m_acceptAsyncResults->store(true, std::memory_order_release);
     m_started = true;
     emit stateChanged(
         m_roleName,
@@ -189,26 +191,35 @@ void HikCxpCameraService::start(
     startAsyncConnect();
 }
 
+void HikCxpCameraService::joinWorkerThreads()
+{
+    std::thread connectThread;
+    std::thread captureThread;
+    {
+        std::lock_guard<std::mutex> lock(m_workerThreadsMutex);
+        connectThread = std::move(m_connectThread);
+        captureThread = std::move(m_captureThread);
+    }
+    if (connectThread.joinable()) {
+        connectThread.join();
+    }
+    if (captureThread.joinable()) {
+        captureThread.join();
+    }
+}
+
 void HikCxpCameraService::stop()
 {
     m_started = false;
-
-    int connectWait = 0;
-    while (m_connectInFlight.load() && connectWait < 300) {
-        QThread::msleep(10);
-        ++connectWait;
-    }
+    m_acceptAsyncResults->store(false, std::memory_order_release);
 
     if (m_impl != nullptr && m_impl->handle != nullptr) {
         MV_CC_StopGrabbing(m_impl->handle);
     }
 
-    int waitCount = 0;
-    const int maxWaitCount = 600;
-    while (m_captureInFlight.load() && waitCount < maxWaitCount) {
-        QThread::msleep(10);
-        ++waitCount;
-    }
+    joinWorkerThreads();
+    m_connectInFlight.store(false, std::memory_order_release);
+    m_captureInFlight.store(false, std::memory_order_release);
 
     closeDevice();
 
@@ -464,60 +475,88 @@ quint64 HikCxpCameraService::requestMonoCapture(const QString& preferredCameraKe
     seedResult.requestId = m_nextRequestId++;
     seedResult.cameraKey = resolveCameraKey(preferredCameraKey);
     seedResult.logicalName = m_endpointConfig.logicalName;
+    const quint64 requestId = seedResult.requestId;
     const int effectiveTimeoutMs = timeoutMs > 0 ? timeoutMs : m_defaultCaptureTimeoutMs;
+    const auto acceptResults = m_acceptAsyncResults;
+    HikCxpCameraService* const receiver = this;
 
-    std::thread([this, seedResult, preferredCameraKey, effectiveTimeoutMs]() mutable {
-        QElapsedTimer timer;
-        timer.start();
-        QString errorMessage;
-
-        if (!ensureConnected(preferredCameraKey, &errorMessage)) {
-            seedResult.errorCode = VisionErrorCode::DeviceOpenFailed;
-            seedResult.errorMessage = errorMessage;
-            seedResult.elapsedMs = timer.elapsed();
-        } else {
-            HikMonoFrame capturedFrame;
-            if (!captureMonoFrame(effectiveTimeoutMs, seedResult.cameraKey, &errorMessage, &capturedFrame)) {
-                seedResult.errorCode = VisionErrorCode::CaptureRejected;
-                seedResult.errorMessage = errorMessage.isEmpty()
-                    ? QStringLiteral("CXP Mono 采图失败。")
-                    : errorMessage;
-                seedResult.elapsedMs = timer.elapsed();
-            } else {
-                seedResult.errorCode = VisionErrorCode::Success;
-                seedResult.errorMessage = QStringLiteral("CXP Mono 采图完成。");
-                seedResult.frame = capturedFrame;
-                seedResult.frame.sourceCameraKey = seedResult.cameraKey;
-                seedResult.elapsedMs = timer.elapsed();
-            }
+    std::thread finishedThread;
+    {
+        std::lock_guard<std::mutex> lock(m_workerThreadsMutex);
+        if (!m_started ||
+            acceptResults == nullptr ||
+            !acceptResults->load(std::memory_order_acquire)) {
+            m_captureInFlight.store(false, std::memory_order_release);
+            return 0;
         }
+        if (m_captureThread.joinable()) {
+            finishedThread = std::move(m_captureThread);
+        }
+        m_captureThread = std::thread(
+            [acceptResults, receiver, preferredCameraKey, effectiveTimeoutMs,
+             seedResult = std::move(seedResult)]() mutable {
+                QElapsedTimer timer;
+                timer.start();
+                QString errorMessage;
 
-        QMetaObject::invokeMethod(
-            this,
-            [this, seedResult]() {
-                m_captureInFlight = false;
-                emit monoCaptureFinished(seedResult);
-                emit poseCaptureFinished(seedResult);
-                emit stateChanged(
-                    m_roleName,
-                    QStringLiteral("ready"),
-                    seedResult.success() ? QStringLiteral("CXP 采图完成。")
-                                         : QStringLiteral("CXP 采图失败。"));
-            },
-            Qt::QueuedConnection);
-    }).detach();
+                if (!receiver->ensureConnected(preferredCameraKey, &errorMessage)) {
+                    seedResult.errorCode = VisionErrorCode::DeviceOpenFailed;
+                    seedResult.errorMessage = errorMessage;
+                    seedResult.elapsedMs = timer.elapsed();
+                } else {
+                    HikMonoFrame capturedFrame;
+                    if (!receiver->captureMonoFrame(
+                            effectiveTimeoutMs,
+                            seedResult.cameraKey,
+                            &errorMessage,
+                            &capturedFrame)) {
+                        seedResult.errorCode = VisionErrorCode::CaptureRejected;
+                        seedResult.errorMessage = errorMessage.isEmpty()
+                            ? QStringLiteral("CXP Mono 采图失败。")
+                            : errorMessage;
+                        seedResult.elapsedMs = timer.elapsed();
+                    } else {
+                        seedResult.errorCode = VisionErrorCode::Success;
+                        seedResult.errorMessage = QStringLiteral("CXP Mono 采图完成。");
+                        seedResult.frame = std::move(capturedFrame);
+                        seedResult.frame.sourceCameraKey = seedResult.cameraKey;
+                        seedResult.elapsedMs = timer.elapsed();
+                    }
+                }
 
-    return seedResult.requestId;
+                receiver->m_captureInFlight.store(false, std::memory_order_release);
+
+                if (!acceptResults->load(std::memory_order_acquire)) {
+                    return;
+                }
+
+                QMetaObject::invokeMethod(
+                    receiver,
+                    [acceptResults, receiver, seedResult = std::move(seedResult)]() mutable {
+                        if (!acceptResults->load(std::memory_order_acquire)) {
+                            return;
+                        }
+                        const bool ok = seedResult.success();
+                        emit receiver->monoCaptureFinished(seedResult);
+                        emit receiver->poseCaptureFinished(std::move(seedResult));
+                        emit receiver->stateChanged(
+                            receiver->m_roleName,
+                            QStringLiteral("ready"),
+                            ok ? QStringLiteral("CXP 采图完成。")
+                               : QStringLiteral("CXP 采图失败。"));
+                    },
+                    Qt::QueuedConnection);
+            });
+    }
+
+    if (finishedThread.joinable()) {
+        finishedThread.join();
+    }
+    return requestId;
 }
 
 bool HikCxpCameraService::ensureConnected(const QString& preferredCameraKey, QString* errorMessage)
 {
-    {
-        QMutexLocker locker(&m_impl->mutex);
-        if (m_impl->connected && m_impl->handle != nullptr) {
-            return true;
-        }
-    }
     return openMatchedDevice(resolveCameraKey(preferredCameraKey), errorMessage);
 }
 
@@ -525,6 +564,8 @@ bool HikCxpCameraService::openMatchedDevice(const QString& preferredCameraKey, Q
 {
     // 与工位一相同：EnumDevices(MV_GENTL_CXP_DEVICE) → CreateHandle → OpenDevice。
     // 依赖 GENICAM_GENTL64_PATH 指向含 MvFGProducerCXP.cti 的目录（ensureHikGenTlEnvironment）。
+    // 锁序：本实例 lifecycle → 全局 SDK → impl，避免连接/采图并行开设备。
+    std::lock_guard<std::mutex> lifecycleLock(m_deviceLifecycleMutex);
     QMutexLocker sdkLocker(&g_cxpSdkMutex);
 
     if (m_impl == nullptr || !m_impl->sdkReady) {
@@ -534,14 +575,17 @@ bool HikCxpCameraService::openMatchedDevice(const QString& preferredCameraKey, Q
         return false;
     }
 
-    if (m_impl->handle != nullptr) {
-        MV_CC_StopGrabbing(m_impl->handle);
-        MV_CC_CloseDevice(m_impl->handle);
-        MV_CC_DestroyHandle(m_impl->handle);
-        m_impl->handle = nullptr;
-        m_impl->connected = false;
-        m_impl->grabbing = false;
+    {
+        QMutexLocker locker(&m_impl->mutex);
+        if (m_impl->connected && m_impl->handle != nullptr) {
+            if (errorMessage != nullptr) {
+                errorMessage->clear();
+            }
+            return true;
+        }
     }
+
+    closeDeviceUnlocked();
 
     MV_CC_DEVICE_INFO_LIST deviceList{};
     const int enumResult = MV_CC_EnumDevices(MV_GENTL_CXP_DEVICE, &deviceList);
@@ -683,12 +727,11 @@ bool HikCxpCameraService::openMatchedDevice(const QString& preferredCameraKey, Q
     return true;
 }
 
-void HikCxpCameraService::closeDevice()
+void HikCxpCameraService::closeDeviceUnlocked()
 {
     if (m_impl == nullptr) {
         return;
     }
-    QMutexLocker sdkLocker(&g_cxpSdkMutex);
     QMutexLocker locker(&m_impl->mutex);
     if (m_impl->handle != nullptr) {
         MV_CC_StopGrabbing(m_impl->handle);
@@ -700,42 +743,74 @@ void HikCxpCameraService::closeDevice()
     m_impl->grabbing = false;
 }
 
+void HikCxpCameraService::closeDevice()
+{
+    std::lock_guard<std::mutex> lifecycleLock(m_deviceLifecycleMutex);
+    QMutexLocker sdkLocker(&g_cxpSdkMutex);
+    closeDeviceUnlocked();
+}
+
 void HikCxpCameraService::startAsyncConnect()
 {
     if (!m_started || m_connectInFlight.exchange(true)) {
         return;
     }
 
-    std::thread([this]() {
-        const QString cameraKey = resolveCameraKey({});
-        QString errorMessage;
-        const bool ok = openMatchedDevice(cameraKey, &errorMessage);
+    const auto acceptResults = m_acceptAsyncResults;
+    HikCxpCameraService* const receiver = this;
 
-        QMetaObject::invokeMethod(
-            this,
-            [this, ok, cameraKey, errorMessage]() {
-                m_connectInFlight = false;
-                if (!m_started) {
-                    return;
-                }
-                if (ok) {
-                    emit stateChanged(
-                        m_roleName,
-                        QStringLiteral("connected"),
-                        QStringLiteral("CXP 相机已连接：%1 (%2)")
-                            .arg(m_impl->serialNumber, m_impl->modelName));
-                } else {
-                    emit stateChanged(
-                        m_roleName,
-                        QStringLiteral("ready"),
-                        QStringLiteral("CXP 服务已启动，尚未连接：%1").arg(errorMessage));
-                    emit fatalError(
-                        VisionErrorCode::DeviceNotFound,
-                        QStringLiteral("后台连接 CXP 相机失败：%1").arg(cameraKey));
-                }
-            },
-            Qt::QueuedConnection);
-    }).detach();
+    std::thread finishedThread;
+    {
+        std::lock_guard<std::mutex> lock(m_workerThreadsMutex);
+        if (!m_started ||
+            acceptResults == nullptr ||
+            !acceptResults->load(std::memory_order_acquire)) {
+            m_connectInFlight.store(false, std::memory_order_release);
+            return;
+        }
+        if (m_connectThread.joinable()) {
+            finishedThread = std::move(m_connectThread);
+        }
+        m_connectThread = std::thread([acceptResults, receiver]() {
+            const QString cameraKey = receiver->resolveCameraKey({});
+            QString errorMessage;
+            const bool ok = receiver->openMatchedDevice(cameraKey, &errorMessage);
+
+            receiver->m_connectInFlight.store(false, std::memory_order_release);
+
+            if (!acceptResults->load(std::memory_order_acquire)) {
+                return;
+            }
+
+            QMetaObject::invokeMethod(
+                receiver,
+                [acceptResults, receiver, ok, cameraKey, errorMessage]() {
+                    if (!acceptResults->load(std::memory_order_acquire) || !receiver->m_started) {
+                        return;
+                    }
+                    if (ok) {
+                        emit receiver->stateChanged(
+                            receiver->m_roleName,
+                            QStringLiteral("connected"),
+                            QStringLiteral("CXP 相机已连接：%1 (%2)")
+                                .arg(receiver->m_impl->serialNumber, receiver->m_impl->modelName));
+                    } else {
+                        emit receiver->stateChanged(
+                            receiver->m_roleName,
+                            QStringLiteral("ready"),
+                            QStringLiteral("CXP 服务已启动，尚未连接：%1").arg(errorMessage));
+                        emit receiver->fatalError(
+                            VisionErrorCode::DeviceNotFound,
+                            QStringLiteral("后台连接 CXP 相机失败：%1").arg(cameraKey));
+                    }
+                },
+                Qt::QueuedConnection);
+        });
+    }
+
+    if (finishedThread.joinable()) {
+        finishedThread.join();
+    }
 }
 
 }  // namespace vision

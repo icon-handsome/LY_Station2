@@ -4,6 +4,11 @@
 
 #include <QtCore/QObject>
 
+#include <atomic>
+#include <memory>
+#include <mutex>
+#include <thread>
+
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/mech_eye/mech_eye_service.h"
 #include "scan_tracking/vision/vision_types.h"
@@ -25,7 +30,7 @@ public:
         HikCxpCameraService* hikCameraBService,
         HikCameraCController* hikCameraCController = nullptr,
         QObject* parent = nullptr);
-    ~VisionPipelineService() override = default;
+    ~VisionPipelineService() override;
 
     void start(const scan_tracking::common::VisionConfig& config);
     void stop();
@@ -104,6 +109,7 @@ private:
     void onHikCameraCCaptureTimeout();
     void finishBundleIfReady();
     void emitBundleFinished(MultiCameraCaptureBundle bundle);
+    void joinLbPoseThread();
 
     scan_tracking::mech_eye::MechEyeService* m_mechEyeTelescopicService = nullptr;
     scan_tracking::mech_eye::MechEyeService* m_mechEyeArmService = nullptr;
@@ -117,6 +123,10 @@ private:
     bool m_started = false;
     bool m_processing = false;
     VisionPipelineState m_state = VisionPipelineState::Idle;
+    // LB 后台线程：可 join；stop 关闸后禁止回投，避免 detach 悬空。
+    std::shared_ptr<std::atomic_bool> m_acceptLbResults;
+    std::mutex m_lbPoseThreadMutex;
+    std::thread m_lbPoseThread;
 };
 
 }  // namespace vision

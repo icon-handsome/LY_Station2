@@ -84,6 +84,7 @@ void HikCameraService::registerMetaTypes()
 HikCameraService::HikCameraService(const QString& roleName, QObject* parent)
     : QObject(parent)
     , m_roleName(roleName)
+    , m_acceptAsyncResults(std::make_shared<std::atomic_bool>(false))
     , m_impl(new Impl())
 {
     registerMetaTypes();
@@ -116,46 +117,46 @@ void HikCameraService::start(
         m_impl->sdkReady = true;
     }
 
+    m_acceptAsyncResults->store(true, std::memory_order_release);
     m_started = true;
     emit stateChanged(m_roleName, QStringLiteral("ready"), QStringLiteral("海康相机服务已启动，后台正在尝试连接设备。"));
     startAsyncConnect();
 }
 
+void HikCameraService::joinWorkerThreads()
+{
+    std::thread connectThread;
+    std::thread captureThread;
+    {
+        std::lock_guard<std::mutex> lock(m_workerThreadsMutex);
+        connectThread = std::move(m_connectThread);
+        captureThread = std::move(m_captureThread);
+    }
+    if (connectThread.joinable()) {
+        connectThread.join();
+    }
+    if (captureThread.joinable()) {
+        captureThread.join();
+    }
+}
+
 void HikCameraService::stop()
 {
     m_started = false;
+    m_acceptAsyncResults->store(false, std::memory_order_release);
 
-    // 等待连接线程结束（最多等待3秒）
-    int connectWait = 0;
-    while (m_connectInFlight.load() && connectWait < 300) {
-        QThread::msleep(10);
-        ++connectWait;
-    }
-    if (m_connectInFlight.load()) {
-        qWarning() << QStringLiteral("[") << m_roleName << QStringLiteral("] 连接线程 3 秒内未结束");
-    }
-
-    // 先停止所有正在进行的操作
+    // 先停采集以打断 GetImageBuffer/GetOneFrameTimeout，再 join（勿在主线程 sleep 等 Queued 回调）。
     if (m_impl != nullptr && m_impl->handle != nullptr) {
-        // 停止采集 - 这应该会中断 GetImageBuffer/GetOneFrameTimeout
         const int stopResult = MV_CC_StopGrabbing(m_impl->handle);
         if (stopResult != MV_OK) {
             qWarning() << QStringLiteral("StopGrabbing 失败，错误码=0x") << QString::number(stopResult, 16);
         }
     }
-    
-    // 等待采集线程结束（最多等待6秒，因为采图超时是5秒）
-    int waitCount = 0;
-    const int maxWaitCount = 600;  // 6秒 = 600 * 10ms
-    while (m_captureInFlight.load() && waitCount < maxWaitCount) {
-        QThread::msleep(10);
-        ++waitCount;
-    }
-    
-    if (m_captureInFlight.load()) {
-        qWarning() << QStringLiteral("采集线程在") << (maxWaitCount / 100) << QStringLiteral("秒内未结束，强制关闭");
-    }
-    
+
+    joinWorkerThreads();
+    m_connectInFlight.store(false, std::memory_order_release);
+    m_captureInFlight.store(false, std::memory_order_release);
+
     closeDevice();
 
     if (m_impl != nullptr && m_impl->sdkReady) {
@@ -427,68 +428,104 @@ quint64 HikCameraService::requestPoseCapture(const QString& preferredCameraKey, 
     seedResult.requestId = m_nextRequestId++;
     seedResult.cameraKey = resolveCameraKey(preferredCameraKey);
     seedResult.logicalName = m_endpointConfig.logicalName;
+    const quint64 requestId = seedResult.requestId;
     const int effectiveTimeoutMs = timeoutMs > 0 ? timeoutMs : m_defaultCaptureTimeoutMs;
+    const auto acceptResults = m_acceptAsyncResults;
+    HikCameraService* const receiver = this;
 
-    std::thread([this, seedResult, preferredCameraKey, effectiveTimeoutMs]() mutable {
-        QElapsedTimer timer;
-        timer.start();
-        QString errorMessage;
-
-        if (!ensureConnected(preferredCameraKey, &errorMessage)) {
-            seedResult.errorCode = VisionErrorCode::DeviceOpenFailed;
-            seedResult.errorMessage = errorMessage;
-            seedResult.elapsedMs = timer.elapsed();
-        } else {
-            HikMonoFrame capturedFrame;
-            if (!captureMonoFrame(effectiveTimeoutMs, seedResult.cameraKey, &errorMessage, &capturedFrame)) {
-                seedResult.errorCode = VisionErrorCode::CaptureRejected;
-                seedResult.errorMessage = errorMessage.isEmpty()
-                    ? QStringLiteral("海康 Mono8 采图失败。")
-                    : errorMessage;
-                seedResult.elapsedMs = timer.elapsed();
-            } else {
-                seedResult.errorCode = VisionErrorCode::Success;
-                seedResult.errorMessage = QStringLiteral("海康 Mono8 黑白采图完成。");
-                seedResult.frame = capturedFrame;
-                seedResult.frame.frameId = seedResult.requestId;
-                seedResult.frame.sourceCameraKey = seedResult.cameraKey;
-                seedResult.elapsedMs = timer.elapsed();
-                qInfo() << QStringLiteral("[") << m_roleName << QStringLiteral("] 采图成功：帧=") << seedResult.frame.width << QStringLiteral("x") << seedResult.frame.height
-                        << QStringLiteral(" 像素=") << (seedResult.frame.pixels ? seedResult.frame.pixels->size() : 0) << QStringLiteral(" bytes");
-            }
+    std::thread finishedThread;
+    {
+        std::lock_guard<std::mutex> lock(m_workerThreadsMutex);
+        if (!m_started ||
+            acceptResults == nullptr ||
+            !acceptResults->load(std::memory_order_acquire)) {
+            m_captureInFlight.store(false, std::memory_order_release);
+            return 0;
         }
+        if (m_captureThread.joinable()) {
+            finishedThread = std::move(m_captureThread);
+        }
+        // pixels 已是 shared_ptr，进线程时帧为空；采图后 move 回投，避免多余拷贝。
+        m_captureThread = std::thread(
+            [acceptResults, receiver, preferredCameraKey, effectiveTimeoutMs,
+             seedResult = std::move(seedResult)]() mutable {
+                QElapsedTimer timer;
+                timer.start();
+                QString errorMessage;
 
-        QMetaObject::invokeMethod(
-            this,
-            [this, seedResult]() {
-                m_captureInFlight = false;
-                emit poseCaptureFinished(seedResult);
-                emit stateChanged(
-                    m_roleName,
-                    QStringLiteral("ready"),
-                    seedResult.success()
-                        ? QStringLiteral("海康相机完成 Mono8 黑白采图，等待下一次请求。")
-                        : QStringLiteral("海康相机黑白采图失败，请检查相机状态。"));
-            },
-            Qt::QueuedConnection);
-    }).detach();
+                if (!receiver->ensureConnected(preferredCameraKey, &errorMessage)) {
+                    seedResult.errorCode = VisionErrorCode::DeviceOpenFailed;
+                    seedResult.errorMessage = errorMessage;
+                    seedResult.elapsedMs = timer.elapsed();
+                } else {
+                    HikMonoFrame capturedFrame;
+                    if (!receiver->captureMonoFrame(
+                            effectiveTimeoutMs,
+                            seedResult.cameraKey,
+                            &errorMessage,
+                            &capturedFrame)) {
+                        seedResult.errorCode = VisionErrorCode::CaptureRejected;
+                        seedResult.errorMessage = errorMessage.isEmpty()
+                            ? QStringLiteral("海康 Mono8 采图失败。")
+                            : errorMessage;
+                        seedResult.elapsedMs = timer.elapsed();
+                    } else {
+                        seedResult.errorCode = VisionErrorCode::Success;
+                        seedResult.errorMessage = QStringLiteral("海康 Mono8 黑白采图完成。");
+                        seedResult.frame = std::move(capturedFrame);
+                        seedResult.frame.frameId = seedResult.requestId;
+                        seedResult.frame.sourceCameraKey = seedResult.cameraKey;
+                        seedResult.elapsedMs = timer.elapsed();
+                        qInfo() << QStringLiteral("[") << receiver->m_roleName
+                                << QStringLiteral("] 采图成功：帧=")
+                                << seedResult.frame.width << QStringLiteral("x")
+                                << seedResult.frame.height
+                                << QStringLiteral(" 像素=")
+                                << (seedResult.frame.pixels ? seedResult.frame.pixels->size() : 0)
+                                << QStringLiteral(" bytes");
+                    }
+                }
 
-    return seedResult.requestId;
+                // 先释放 busy，再回投；过期回调靠 accept 闸门丢弃。
+                receiver->m_captureInFlight.store(false, std::memory_order_release);
+
+                if (!acceptResults->load(std::memory_order_acquire)) {
+                    return;
+                }
+
+                QMetaObject::invokeMethod(
+                    receiver,
+                    [acceptResults, receiver, seedResult = std::move(seedResult)]() mutable {
+                        if (!acceptResults->load(std::memory_order_acquire)) {
+                            return;
+                        }
+                        const bool ok = seedResult.success();
+                        emit receiver->poseCaptureFinished(std::move(seedResult));
+                        emit receiver->stateChanged(
+                            receiver->m_roleName,
+                            QStringLiteral("ready"),
+                            ok ? QStringLiteral("海康相机完成 Mono8 黑白采图，等待下一次请求。")
+                               : QStringLiteral("海康相机黑白采图失败，请检查相机状态。"));
+                    },
+                    Qt::QueuedConnection);
+            });
+    }
+
+    if (finishedThread.joinable()) {
+        finishedThread.join();
+    }
+    return requestId;
 }
 
 bool HikCameraService::ensureConnected(const QString& preferredCameraKey, QString* errorMessage)
 {
-    {
-        QMutexLocker locker(&m_impl->mutex);
-        if (m_impl->connected && m_impl->handle != nullptr) {
-            return true;
-        }
-    }
     return openMatchedDevice(resolveCameraKey(preferredCameraKey), errorMessage);
 }
 
 bool HikCameraService::openMatchedDevice(const QString& preferredCameraKey, QString* errorMessage)
 {
+    std::lock_guard<std::mutex> lifecycleLock(m_deviceLifecycleMutex);
+
     if (m_impl == nullptr || !m_impl->sdkReady) {
         if (errorMessage) {
             *errorMessage = QStringLiteral("MVS SDK 尚未初始化。");
@@ -496,7 +533,18 @@ bool HikCameraService::openMatchedDevice(const QString& preferredCameraKey, QStr
         return false;
     }
 
-    closeDevice();
+    // 连接/采图线程可能并发进入：已连接则直接复用，禁止并行 close+open。
+    {
+        QMutexLocker locker(&m_impl->mutex);
+        if (m_impl->connected && m_impl->handle != nullptr) {
+            if (errorMessage) {
+                errorMessage->clear();
+            }
+            return true;
+        }
+    }
+
+    closeDeviceUnlocked();
 
     MV_CC_DEVICE_INFO_LIST deviceList;
     std::memset(&deviceList, 0, sizeof(deviceList));
@@ -933,7 +981,7 @@ bool HikCameraService::writeParams(const HikCameraParams& params, QString* error
     return allOk;
 }
 
-void HikCameraService::closeDevice()
+void HikCameraService::closeDeviceUnlocked()
 {
     if (m_impl == nullptr) {
         return;
@@ -947,78 +995,118 @@ void HikCameraService::closeDevice()
     m_impl->connected = false;
 }
 
+void HikCameraService::closeDevice()
+{
+    std::lock_guard<std::mutex> lifecycleLock(m_deviceLifecycleMutex);
+    closeDeviceUnlocked();
+}
+
 void HikCameraService::startAsyncConnect()
 {
     if (!m_started || m_connectInFlight.exchange(true)) {
         return;
     }
 
-    std::thread([this]() {
-        const QString cameraKey = resolveCameraKey({});
-        QString errorMessage;
-        const bool ok = openMatchedDevice(cameraKey, &errorMessage);
+    const auto acceptResults = m_acceptAsyncResults;
+    HikCameraService* const receiver = this;
 
-        QMetaObject::invokeMethod(
-            this,
-            [this, ok, cameraKey, errorMessage]() {
-                m_connectInFlight = false;
-                if (!m_started) {
-                    return;
-                }
-                if (ok) {
-                    emit stateChanged(m_roleName, QStringLiteral("ready"),
-                        QStringLiteral("海康相机已连接：%1 (%2)")
-                            .arg(m_impl->serialNumber, m_impl->ipAddress));
+    std::thread finishedThread;
+    {
+        std::lock_guard<std::mutex> lock(m_workerThreadsMutex);
+        if (!m_started ||
+            acceptResults == nullptr ||
+            !acceptResults->load(std::memory_order_acquire)) {
+            m_connectInFlight.store(false, std::memory_order_release);
+            return;
+        }
+        if (m_connectThread.joinable()) {
+            finishedThread = std::move(m_connectThread);
+        }
+        m_connectThread = std::thread([acceptResults, receiver]() {
+            const QString cameraKey = receiver->resolveCameraKey({});
+            QString errorMessage;
+            const bool ok = receiver->openMatchedDevice(cameraKey, &errorMessage);
 
-                    // 连接成功后立即读取并打印相机参数
-                    QString paramErr;
-                    const HikCameraParams p = readParams(&paramErr);
-                    if (p.valid) {
-                        qInfo().noquote()
-                            << QStringLiteral("[%1] 相机参数 | "
-                                              "曝光=%2 us (范围 %3~%4, 自动=%5) | "
-                                              "增益=%6 dB (范围 %7~%8, 自动=%9) | "
-                                              "帧率=%10 fps (使能=%11) | "
-                                              "触发=%12 | "
-                                              "分辨率=%13x%14 | "
-                                              "像素格式=%15")
-                                   .arg(m_roleName)
-                                   .arg(static_cast<double>(p.exposureTimeUs),    0, 'f', 1)
-                                   .arg(static_cast<double>(p.exposureTimeMinUs), 0, 'f', 0)
-                                   .arg(static_cast<double>(p.exposureTimeMaxUs), 0, 'f', 0)
-                                   .arg(p.autoExposureEnabled ? QStringLiteral("开") : QStringLiteral("关"))
-                                   .arg(static_cast<double>(p.gainDb),    0, 'f', 2)
-                                   .arg(static_cast<double>(p.gainMinDb), 0, 'f', 1)
-                                   .arg(static_cast<double>(p.gainMaxDb), 0, 'f', 1)
-                                   .arg(p.autoGainEnabled ? QStringLiteral("开") : QStringLiteral("关"))
-                                   .arg(static_cast<double>(p.frameRateFps), 0, 'f', 2)
-                                   .arg(p.frameRateEnabled ? QStringLiteral("开") : QStringLiteral("关"))
-                                   .arg(p.triggerMode == 0 ? QStringLiteral("连续") : QStringLiteral("触发"))
-                                   .arg(p.width)
-                                   .arg(p.height)
-                                   .arg(p.pixelFormatStr);
-                    } else {
-                        qWarning() << QStringLiteral("[%1] 读取相机参数失败：%2")
-                                          .arg(m_roleName, paramErr);
+            receiver->m_connectInFlight.store(false, std::memory_order_release);
+
+            if (!acceptResults->load(std::memory_order_acquire)) {
+                return;
+            }
+
+            QMetaObject::invokeMethod(
+                receiver,
+                [acceptResults, receiver, ok, cameraKey, errorMessage]() {
+                    if (!acceptResults->load(std::memory_order_acquire) || !receiver->m_started) {
+                        return;
                     }
-                } else {
-                    // 监控模式连接失败是预期的（SCMVS 可能正在独占），不报致命错误
-                    const bool isMonitor = m_endpointConfig.accessMode.compare(
-                        QStringLiteral("monitor"), Qt::CaseInsensitive) == 0;
-                    emit stateChanged(m_roleName, QStringLiteral("ready"),
-                        QStringLiteral("海康相机服务已启动，但尚未连接设备：%1").arg(errorMessage));
-                    if (!isMonitor) {
-                        emit fatalError(VisionErrorCode::DeviceNotFound,
-                            QStringLiteral("后台连接海康相机失败：%1").arg(cameraKey));
+                    if (ok) {
+                        emit receiver->stateChanged(
+                            receiver->m_roleName,
+                            QStringLiteral("ready"),
+                            QStringLiteral("海康相机已连接：%1 (%2)")
+                                .arg(receiver->m_impl->serialNumber, receiver->m_impl->ipAddress));
+
+                        QString paramErr;
+                        const HikCameraParams p = receiver->readParams(&paramErr);
+                        if (p.valid) {
+                            qInfo().noquote()
+                                << QStringLiteral("[%1] 相机参数 | "
+                                                  "曝光=%2 us (范围 %3~%4, 自动=%5) | "
+                                                  "增益=%6 dB (范围 %7~%8, 自动=%9) | "
+                                                  "帧率=%10 fps (使能=%11) | "
+                                                  "触发=%12 | "
+                                                  "分辨率=%13x%14 | "
+                                                  "像素格式=%15")
+                                       .arg(receiver->m_roleName)
+                                       .arg(static_cast<double>(p.exposureTimeUs), 0, 'f', 1)
+                                       .arg(static_cast<double>(p.exposureTimeMinUs), 0, 'f', 0)
+                                       .arg(static_cast<double>(p.exposureTimeMaxUs), 0, 'f', 0)
+                                       .arg(p.autoExposureEnabled ? QStringLiteral("开")
+                                                                  : QStringLiteral("关"))
+                                       .arg(static_cast<double>(p.gainDb), 0, 'f', 2)
+                                       .arg(static_cast<double>(p.gainMinDb), 0, 'f', 1)
+                                       .arg(static_cast<double>(p.gainMaxDb), 0, 'f', 1)
+                                       .arg(p.autoGainEnabled ? QStringLiteral("开")
+                                                              : QStringLiteral("关"))
+                                       .arg(static_cast<double>(p.frameRateFps), 0, 'f', 2)
+                                       .arg(p.frameRateEnabled ? QStringLiteral("开")
+                                                               : QStringLiteral("关"))
+                                       .arg(p.triggerMode == 0 ? QStringLiteral("连续")
+                                                              : QStringLiteral("触发"))
+                                       .arg(p.width)
+                                       .arg(p.height)
+                                       .arg(p.pixelFormatStr);
+                        } else {
+                            qWarning() << QStringLiteral("[%1] 读取相机参数失败：%2")
+                                              .arg(receiver->m_roleName, paramErr);
+                        }
                     } else {
-                        qWarning() << QStringLiteral("[%1] 监控模式连接失败（SCMVS 可能正在独占），"
-                                                     "参数读取不可用，TCP/FTP 通信不受影响：%2")
-                                          .arg(m_roleName, errorMessage);
+                        const bool isMonitor = receiver->m_endpointConfig.accessMode.compare(
+                            QStringLiteral("monitor"), Qt::CaseInsensitive) == 0;
+                        emit receiver->stateChanged(
+                            receiver->m_roleName,
+                            QStringLiteral("ready"),
+                            QStringLiteral("海康相机服务已启动，但尚未连接设备：%1")
+                                .arg(errorMessage));
+                        if (!isMonitor) {
+                            emit receiver->fatalError(
+                                VisionErrorCode::DeviceNotFound,
+                                QStringLiteral("后台连接海康相机失败：%1").arg(cameraKey));
+                        } else {
+                            qWarning()
+                                << QStringLiteral("[%1] 监控模式连接失败（SCMVS 可能正在独占），"
+                                                  "参数读取不可用，TCP/FTP 通信不受影响：%2")
+                                       .arg(receiver->m_roleName, errorMessage);
+                        }
                     }
-                }
-            },
-            Qt::QueuedConnection);
-    }).detach();
+                },
+                Qt::QueuedConnection);
+        });
+    }
+
+    if (finishedThread.joinable()) {
+        finishedThread.join();
+    }
 }
 
 }  // namespace vision
