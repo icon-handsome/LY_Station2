@@ -22,6 +22,7 @@ add_library(scan_tracking_flow_control STATIC
     src/station_trigger_policy.cpp
     src/inspection_types.cpp
     src/scan_segment_cache.cpp
+    src/scan_segment_persist_worker.cpp
     src/station2_inspection.cpp
     src/state_machine_helpers.cpp
     src/state_machine.cpp

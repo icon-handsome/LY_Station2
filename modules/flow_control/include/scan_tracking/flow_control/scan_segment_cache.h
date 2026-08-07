@@ -64,6 +64,8 @@ public:
         int localIndex,
         QString* errorMessage = nullptr);
 
+    bool stripHeavyPayloads(common::ScanDeviceKind device, int localIndex);
+
     const ScanSegmentCacheEntry* entry(common::ScanDeviceKind device, int localIndex) const;
     QVector<ScanSegmentCacheKey> cachedKeys() const;
     bool allCachedBundlesSuccessful() const;
@@ -88,5 +90,8 @@ bool persistScanSegmentBundle(
     const QString& timestamp,
     const vision::MultiCameraCaptureBundle& bundle,
     QString* errorMessage = nullptr);
+
+/// 落盘成功后剥离检测不需要的大块缓冲（保留 pointCloud 供 Trig_Inspection）。
+void stripScanSegmentHeavyPayloads(vision::MultiCameraCaptureBundle* bundle);
 
 }  // namespace scan_tracking::flow_control

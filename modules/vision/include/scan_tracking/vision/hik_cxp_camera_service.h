@@ -10,6 +10,8 @@
 #include <QtCore/QObject>
 
 #include <atomic>
+#include <condition_variable>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -78,6 +80,16 @@ private:
     void startAsyncConnect();
     void joinWorkerThreads();
 
+    struct CaptureJob {
+        HikPoseCaptureResult seedResult;
+        QString preferredCameraKey;
+        int effectiveTimeoutMs = 0;
+    };
+
+    quint64 enqueueCaptureJob(CaptureJob job);
+    void ensureCaptureWorkerRunning();
+    void captureWorkerLoop();
+
     QString m_roleName;
     scan_tracking::common::VisionCameraEndpointConfig m_endpointConfig;
     int m_defaultCaptureTimeoutMs = 5000;
@@ -90,8 +102,12 @@ private:
     // 工作线程拷贝 shared_ptr；stop 置 false 后禁止回投主线程，避免悬空 this。
     std::shared_ptr<std::atomic_bool> m_acceptAsyncResults;
     std::mutex m_workerThreadsMutex;
+    std::condition_variable m_captureQueueCv;
+    std::deque<CaptureJob> m_captureQueue;
     std::thread m_connectThread;
     std::thread m_captureThread;
+    bool m_captureWorkerStopping = false;
+    bool m_captureWorkerRunning = false;
     // 串行化本实例 open/close（与全局 g_cxpSdkMutex 叠加），避免并行开设备踩句柄。
     std::mutex m_deviceLifecycleMutex;
     Impl* m_impl = nullptr;

@@ -130,6 +130,12 @@ VisionPipelineService::~VisionPipelineService()
 
 void VisionPipelineService::joinLbPoseThread()
 {
+    {
+        std::lock_guard<std::mutex> lock(m_lbPoseThreadMutex);
+        m_lbPoseWorkerStopping = true;
+    }
+    m_lbPoseQueueCv.notify_all();
+
     std::thread lbThread;
     {
         std::lock_guard<std::mutex> lock(m_lbPoseThreadMutex);
@@ -138,6 +144,89 @@ void VisionPipelineService::joinLbPoseThread()
     if (lbThread.joinable()) {
         lbThread.join();
     }
+
+    std::lock_guard<std::mutex> lock(m_lbPoseThreadMutex);
+    m_lbPoseQueue.clear();
+    m_lbPoseWorkerRunning = false;
+    m_lbPoseWorkerStopping = false;
+}
+
+void VisionPipelineService::ensureLbPoseWorkerRunning()
+{
+    if (m_lbPoseWorkerRunning) {
+        return;
+    }
+    m_lbPoseThread = std::thread([this]() { lbPoseWorkerLoop(); });
+    m_lbPoseWorkerRunning = true;
+}
+
+void VisionPipelineService::enqueueLbPoseJob(MultiCameraCaptureBundle bundle)
+{
+    const auto acceptResults = m_acceptLbResults;
+
+    {
+        std::lock_guard<std::mutex> lock(m_lbPoseThreadMutex);
+        if (m_lbPoseWorkerStopping ||
+            !m_started ||
+            acceptResults == nullptr ||
+            !acceptResults->load(std::memory_order_acquire)) {
+            bundle.lbPoseResult.invoked = false;
+            bundle.lbPoseResult.success = false;
+            bundle.lbPoseResult.message = QStringLiteral("流水线已停止，跳过 LB 位姿检测。");
+            emitBundleFinished(std::move(bundle));
+            return;
+        }
+
+        LbPoseJob job;
+        job.bundle = std::move(bundle);
+        job.lbConfig = m_lbPoseConfig;
+        m_lbPoseQueue.push_back(std::move(job));
+        ensureLbPoseWorkerRunning();
+    }
+    m_lbPoseQueueCv.notify_one();
+}
+
+void VisionPipelineService::lbPoseWorkerLoop()
+{
+    const auto acceptResults = m_acceptLbResults;
+    VisionPipelineService* const receiver = this;
+
+    for (;;) {
+        LbPoseJob job;
+        {
+            std::unique_lock<std::mutex> lock(m_lbPoseThreadMutex);
+            m_lbPoseQueueCv.wait(lock, [this]() {
+                return m_lbPoseWorkerStopping || !m_lbPoseQueue.empty();
+            });
+            if (m_lbPoseWorkerStopping && m_lbPoseQueue.empty()) {
+                break;
+            }
+            job = std::move(m_lbPoseQueue.front());
+            m_lbPoseQueue.pop_front();
+        }
+
+        job.bundle.lbPoseResult = runLbPoseDetection(
+            job.bundle.hikCameraAResult.frame,
+            job.bundle.hikCameraBResult.frame,
+            job.lbConfig);
+
+        if (!acceptResults->load(std::memory_order_acquire)) {
+            continue;
+        }
+
+        QMetaObject::invokeMethod(
+            receiver,
+            [acceptResults, receiver, completed = std::move(job.bundle)]() mutable {
+                if (!acceptResults->load(std::memory_order_acquire)) {
+                    return;
+                }
+                receiver->emitBundleFinished(std::move(completed));
+            },
+            Qt::QueuedConnection);
+    }
+
+    std::lock_guard<std::mutex> lock(m_lbPoseThreadMutex);
+    m_lbPoseWorkerRunning = false;
 }
 
 void VisionPipelineService::start(const scan_tracking::common::VisionConfig& config)
@@ -591,53 +680,7 @@ void VisionPipelineService::finishBundleIfReady()
 
     m_processing = true;
     setState(VisionPipelineState::Capturing, QStringLiteral("正在执行 LB 位姿检测…"));
-
-    const auto lbConfig = m_lbPoseConfig;
-    const auto acceptResults = m_acceptLbResults;
-    VisionPipelineService* const receiver = this;
-
-    std::thread finishedThread;
-    {
-        std::lock_guard<std::mutex> lock(m_lbPoseThreadMutex);
-        if (!m_started ||
-            acceptResults == nullptr ||
-            !acceptResults->load(std::memory_order_acquire)) {
-            m_processing = false;
-            bundle.lbPoseResult.invoked = false;
-            bundle.lbPoseResult.success = false;
-            bundle.lbPoseResult.message = QStringLiteral("流水线已停止，跳过 LB 位姿检测。");
-            emitBundleFinished(std::move(bundle));
-            return;
-        }
-        if (m_lbPoseThread.joinable()) {
-            finishedThread = std::move(m_lbPoseThread);
-        }
-        m_lbPoseThread = std::thread(
-            [acceptResults, receiver, lbConfig, bundle = std::move(bundle)]() mutable {
-                bundle.lbPoseResult = runLbPoseDetection(
-                    bundle.hikCameraAResult.frame,
-                    bundle.hikCameraBResult.frame,
-                    lbConfig);
-
-                if (!acceptResults->load(std::memory_order_acquire)) {
-                    return;
-                }
-
-                QMetaObject::invokeMethod(
-                    receiver,
-                    [acceptResults, receiver, completed = std::move(bundle)]() mutable {
-                        if (!acceptResults->load(std::memory_order_acquire)) {
-                            return;
-                        }
-                        receiver->emitBundleFinished(std::move(completed));
-                    },
-                    Qt::QueuedConnection);
-            });
-    }
-
-    if (finishedThread.joinable()) {
-        finishedThread.join();
-    }
+    enqueueLbPoseJob(std::move(bundle));
 }
 
 }  // namespace vision

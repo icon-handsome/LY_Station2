@@ -5,6 +5,7 @@
 #include <QtCore/QObject>
 
 #include <atomic>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -110,6 +111,14 @@ private:
     void finishBundleIfReady();
     void emitBundleFinished(MultiCameraCaptureBundle bundle);
     void joinLbPoseThread();
+    void enqueueLbPoseJob(MultiCameraCaptureBundle bundle);
+    void ensureLbPoseWorkerRunning();
+    void lbPoseWorkerLoop();
+
+    struct LbPoseJob {
+        MultiCameraCaptureBundle bundle;
+        scan_tracking::common::LbPoseConfig lbConfig;
+    };
 
     scan_tracking::mech_eye::MechEyeService* m_mechEyeTelescopicService = nullptr;
     scan_tracking::mech_eye::MechEyeService* m_mechEyeArmService = nullptr;
@@ -123,10 +132,14 @@ private:
     bool m_started = false;
     bool m_processing = false;
     VisionPipelineState m_state = VisionPipelineState::Idle;
-    // LB 后台线程：可 join；stop 关闸后禁止回投，避免 detach 悬空。
+    // LB 后台线程 + 队列：热路径只投递任务，不在主线程 join。
     std::shared_ptr<std::atomic_bool> m_acceptLbResults;
     std::mutex m_lbPoseThreadMutex;
+    std::condition_variable m_lbPoseQueueCv;
+    std::deque<LbPoseJob> m_lbPoseQueue;
     std::thread m_lbPoseThread;
+    bool m_lbPoseWorkerStopping = false;
+    bool m_lbPoseWorkerRunning = false;
 };
 
 }  // namespace vision

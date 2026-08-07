@@ -18,6 +18,7 @@
 #include "scan_tracking/flow_control/plc_task_host.h"
 #include "scan_tracking/flow_control/plc_protocol.h"
 #include "scan_tracking/flow_control/scan_segment_cache.h"
+#include "scan_tracking/flow_control/scan_segment_persist_worker.h"
 #include "scan_tracking/flow_control/station2_inspection.h"
 #include "scan_tracking/flow_control/task_handler_context.h"
 #include "scan_tracking/mech_eye/mech_eye_types.h"
@@ -289,6 +290,14 @@ private:
         const QString& triggerLabel);
     /// stop/析构前接合后台解算线程，避免 detach 后静态析构竞态。
     void joinBackgroundInspectionSolves();
+    void scheduleScanSegmentPersist(
+        common::ScanDeviceKind device,
+        int segmentIndex,
+        const QString& triggerLabel);
+    void onScanSegmentPersistFinished(
+        common::ScanDeviceKind device,
+        int segmentIndex,
+        bool ok);
     void applyBackgroundInspectionResult(
         quint64 generation,
         const InspectionResult& result,
@@ -390,6 +399,7 @@ private:
     QVector<quint16> m_lastCommandBlock;
     protocol::registers::Pose6f m_robotTcpPose;
     ScanSegmentCache m_scanSegmentCache;
+    ScanSegmentPersistWorker m_scanPersistWorker;
     std::atomic_bool m_stopped{false};
     /// 后台解算：单线程 + 最多 1 个 pending；stop/析构时必须 join。
     std::mutex m_bgSolveThreadsMutex;

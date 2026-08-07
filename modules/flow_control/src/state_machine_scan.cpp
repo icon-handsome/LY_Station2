@@ -148,31 +148,16 @@ void StateMachine::onBundleCaptureFinished(vision::MultiCameraCaptureBundle bund
                 ? common::ScanDeviceKind::Telescopic
                 : common::ScanDeviceKind::Arm;
 
+        const int segmentIndex = bundle.request.segmentIndex;
+
         // length_volume / 带 CXP 路径：用 LB Rt_global 把 Mech 点云变换到统一坐标系后再缓存/合并。
         applyLbPoseStitchingIfNeeded(&bundle);
 
         m_scanSegmentCache.storeSegment(
             device,
-            bundle.request.segmentIndex,
-            bundle.request.taskId,
+            segmentIndex,
+            bundleTaskId,
             std::move(bundle));
-
-        // 按运行实例（taskId）唯一目录落盘本段全部 3D+2D 数据（Mech PLY 为 binary）。
-        QString persistError;
-        if (!m_scanSegmentCache.persistSegment(
-                device, bundle.request.segmentIndex, &persistError)) {
-            qWarning(LOG_FLOW).noquote()
-                << triggerLabel << QStringLiteral("：采集成功但落盘失败")
-                << persistError
-                << QStringLiteral(" taskId=") << bundleTaskId
-                << QStringLiteral(" runRoot=")
-                << m_scanSegmentCache.runCaptureRoot();
-        } else {
-            qInfo(LOG_FLOW).noquote()
-                << triggerLabel << QStringLiteral("：已落盘至")
-                << m_scanSegmentCache.runCaptureRoot()
-                << QStringLiteral(" taskId=") << bundle.request.taskId;
-        }
 
         const auto* configMgr = common::ConfigManager::instance();
         const int armExpected = configMgr != nullptr ? configMgr->enabledArmPointCount() : 0;
@@ -198,7 +183,9 @@ void StateMachine::onBundleCaptureFinished(vision::MultiCameraCaptureBundle bund
                                   "IPC 将自动清缓存并切换到下一条启用路径。");
         }
 
+        // 先回 PLC ACK，落盘在后台线程执行，避免阻塞 Modbus/HMI 事件循环。
         completeScanSegmentCapture(1, imageCount, cloudFrameCount, protocol::AckState::Completed, true);
+        scheduleScanSegmentPersist(device, segmentIndex, triggerLabel);
         return;
     }
 
@@ -395,6 +382,52 @@ void StateMachine::resetScanSegmentCache()
 {
     m_scanSegmentCache.reset();
     qInfo(LOG_FLOW).noquote() << QStringLiteral("扫描段缓存已清空（含运行实例目录绑定）。");
+}
+
+void StateMachine::scheduleScanSegmentPersist(
+    common::ScanDeviceKind device,
+    int segmentIndex,
+    const QString& triggerLabel)
+{
+    const ScanSegmentCacheEntry* entry = m_scanSegmentCache.entry(device, segmentIndex);
+    if (entry == nullptr) {
+        qWarning(LOG_FLOW).noquote()
+            << triggerLabel << QStringLiteral("：后台落盘跳过，段不在缓存中 segment=")
+            << segmentIndex;
+        return;
+    }
+
+    ScanSegmentPersistJob job;
+    job.runRoot = entry->runCaptureRoot;
+    job.device = entry->device;
+    job.segmentIndex = entry->segmentIndex;
+    job.taskId = entry->taskId;
+    job.captureTimestamp = entry->captureTimestamp;
+    job.bundle = entry->bundle;
+    job.triggerLabel = triggerLabel;
+
+    qInfo(LOG_FLOW).noquote()
+        << triggerLabel << QStringLiteral("：已投递后台落盘 taskId=") << job.taskId
+        << QStringLiteral(" runRoot=") << job.runRoot
+        << QStringLiteral(" segment=") << segmentIndex;
+
+    m_scanPersistWorker.enqueue(std::move(job));
+}
+
+void StateMachine::onScanSegmentPersistFinished(
+    common::ScanDeviceKind device,
+    int segmentIndex,
+    bool ok)
+{
+    if (!ok) {
+        return;
+    }
+    if (m_scanSegmentCache.stripHeavyPayloads(device, segmentIndex)) {
+        return;
+    }
+    qWarning(LOG_FLOW).noquote()
+        << QStringLiteral("落盘完成但段已不在缓存，跳过重载荷剥离 segment=")
+        << segmentIndex;
 }
 
 void StateMachine::clearScanSegmentCacheForPathSwitch()

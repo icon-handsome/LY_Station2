@@ -120,6 +120,24 @@ void ScanSegmentCache::storeSegment(
     m_entries.insert(key, std::move(entry));
 }
 
+bool ScanSegmentCache::stripHeavyPayloads(common::ScanDeviceKind device, int localIndex)
+{
+    const ScanSegmentCacheKey key{device, localIndex};
+    const auto iterator = m_entries.find(key);
+    if (iterator == m_entries.end()) {
+        return false;
+    }
+
+    const int pointsBefore = iterator->bundle.mechEyeResult.pointCloud.pointCount;
+    stripScanSegmentHeavyPayloads(&iterator->bundle);
+    qInfo(LOG_SCAN_CACHE).noquote()
+        << QStringLiteral("段缓存已剥离落盘后重载荷 device=")
+        << deviceTagForPath(device)
+        << QStringLiteral(" segment=") << localIndex
+        << QStringLiteral(" 保留检测点云 points=") << pointsBefore;
+    return true;
+}
+
 bool ScanSegmentCache::persistSegment(
     common::ScanDeviceKind device,
     int localIndex,
@@ -415,6 +433,28 @@ bool persistScanSegmentBundle(
                .arg(segmentIndex)
                .arg(runRoot);
     return true;
+}
+
+void stripScanSegmentHeavyPayloads(vision::MultiCameraCaptureBundle* bundle)
+{
+    if (bundle == nullptr) {
+        return;
+    }
+
+    mech_eye::CaptureResult& mech = bundle->mechEyeResult;
+
+    // cloud.ply / cloud_stitched.ply 已落盘；检测仍读 pointCloud。
+    mech.pointCloudRaw = mech_eye::PointCloudFrame{};
+
+    if (mech.pointCloud.normalsXYZ) {
+        mech.pointCloud.normalsXYZ.reset();
+    }
+
+    mech.texture2D = mech_eye::GrayTextureFrame{};
+
+    bundle->hikCameraAResult.frame = vision::HikMonoFrame{};
+    bundle->hikCameraBResult.frame = vision::HikMonoFrame{};
+    bundle->hikCameraCImagePath.clear();
 }
 
 }  // namespace scan_tracking::flow_control

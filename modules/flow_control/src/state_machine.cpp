@@ -122,6 +122,11 @@ StateMachine::StateMachine(
             &StateMachine::onHikOcrTextReceived,
             Qt::QueuedConnection);
     }
+
+    m_scanPersistWorker.setPersistFinishedHandler(
+        [this](common::ScanDeviceKind device, int segmentIndex, bool ok) {
+            onScanSegmentPersistFinished(device, segmentIndex, ok);
+        });
 }
 
 StateMachine::~StateMachine()
@@ -136,6 +141,7 @@ void StateMachine::start()
     // HMI CmdStop → CmdStart/CmdReset 同实例重启：恢复 stop 关掉的门闩，否则后台解算永久跳过。
     m_stopped.store(false, std::memory_order_release);
     m_bgSolveAcceptResults = std::make_shared<std::atomic_bool>(true);
+    m_scanPersistWorker.restart();
     blockSignals(false);
 
     clearActiveTask();
@@ -171,6 +177,7 @@ void StateMachine::stop()
     // 先关回投门闩再 join：工作线程只读 shared atomic，不再碰 QPointer。
     m_bgSolveAcceptResults->store(false, std::memory_order_release);
     joinBackgroundInspectionSolves();
+    m_scanPersistWorker.stopAndJoin();
     if (!firstStop) {
         return;
     }
