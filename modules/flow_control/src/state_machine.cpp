@@ -111,6 +111,7 @@ StateMachine::StateMachine(
             &vision::VisionPipelineService::bundleCaptureFinished,
             this,
             &StateMachine::onBundleCaptureFinished,
+            // Direct：同线程免拷贝大包；LB 点云拼接已在 vision LB worker 完成。
             Qt::DirectConnection);
     }
 
@@ -123,8 +124,13 @@ StateMachine::StateMachine(
             Qt::QueuedConnection);
     }
 
+    // 捕获 accept gate 的 shared_ptr：stop 关闸后，已投递的落盘完成回调直接 return，避免 UAF。
+    const auto persistAccept = m_persistAcceptResults;
     m_scanPersistWorker.setPersistFinishedHandler(
-        [this](common::ScanDeviceKind device, int segmentIndex, bool ok) {
+        [persistAccept, this](common::ScanDeviceKind device, int segmentIndex, bool ok) {
+            if (!persistAccept->load(std::memory_order_acquire)) {
+                return;
+            }
             onScanSegmentPersistFinished(device, segmentIndex, ok);
         });
 }
@@ -138,9 +144,10 @@ void StateMachine::start()
 {
     qInfo(LOG_FLOW) << QStringLiteral("状态机启动。");
 
-    // HMI CmdStop → CmdStart/CmdReset 同实例重启：恢复 stop 关掉的门闩，否则后台解算永久跳过。
+    // HMI CmdStop → CmdStart/CmdReset 同实例重启：恢复 stop 关掉的门闩，否则后台解算/落盘回投永久跳过。
     m_stopped.store(false, std::memory_order_release);
     m_bgSolveAcceptResults = std::make_shared<std::atomic_bool>(true);
+    m_persistAcceptResults->store(true, std::memory_order_release);
     m_scanPersistWorker.restart();
     blockSignals(false);
 
@@ -174,8 +181,9 @@ void StateMachine::stop()
     if (firstStop) {
         bumpWorkpieceGeneration(QStringLiteral("state_machine.stop"));
     }
-    // 先关回投门闩再 join：工作线程只读 shared atomic，不再碰 QPointer。
+    // 先关回投门闩再 join：工作线程/已排队回调只读 shared atomic，不得再碰 this。
     m_bgSolveAcceptResults->store(false, std::memory_order_release);
+    m_persistAcceptResults->store(false, std::memory_order_release);
     joinBackgroundInspectionSolves();
     m_scanPersistWorker.stopAndJoin();
     if (!firstStop) {

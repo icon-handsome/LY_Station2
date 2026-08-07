@@ -12,7 +12,7 @@
 
 namespace scan_tracking::mech_eye {
 
-/// 进程级点云算法串行化锁（与第一工位约定一致，避免并发写同一缓冲）。
+/// 进程级点云变换串行化锁（仅保护 transform 热路径；PLY 写盘不得持有此锁）。
 std::mutex& pointCloudAlgorithmMutex();
 
 /// 行优先 4×4 矩阵乘法：out = left × right

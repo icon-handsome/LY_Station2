@@ -62,6 +62,14 @@ void ScanSegmentPersistWorker::enqueue(ScanSegmentPersistJob job)
                 << QStringLiteral(" taskId=") << job.taskId;
             return;
         }
+        // 软上限：扫描快于写盘时告警，便于发现内存堆积（不阻塞主线程）。
+        constexpr std::size_t kSoftMaxPending = 4;
+        if (m_queue.size() >= kSoftMaxPending) {
+            qWarning(LOG_SCAN_PERSIST).noquote()
+                << QStringLiteral("落盘队列积压 pending=") << static_cast<qint64>(m_queue.size())
+                << QStringLiteral("（软上限 ") << static_cast<qint64>(kSoftMaxPending)
+                << QStringLiteral("），磁盘可能跟不上扫描节奏");
+        }
         m_queue.push_back(std::move(job));
         ensureWorkerRunning();
     }

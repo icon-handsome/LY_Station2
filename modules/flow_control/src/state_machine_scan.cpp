@@ -4,81 +4,11 @@
 
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/mech_eye/mech_eye_service.h"
-#include "scan_tracking/mech_eye/point_cloud_processor.h"
 #include "scan_tracking/vision/vision_pipeline_service.h"
 
 namespace scan_tracking::flow_control {
 
 using namespace state_machine_internal;
-
-namespace {
-
-std::array<float, 16> identityMatrix4x4()
-{
-    return {
-        1.0f, 0.0f, 0.0f, 0.0f,
-        0.0f, 1.0f, 0.0f, 0.0f,
-        0.0f, 0.0f, 1.0f, 0.0f,
-        0.0f, 0.0f, 0.0f, 1.0f,
-    };
-}
-
-/// LB 成功时用 Rt_global 作为 T0，stereo=I（与第一工位 applySegmentPoseStitching 一致）。
-/// 保留 pointCloudRaw=原始云，pointCloud=变换后云（供检测与 cloud_stitched 落盘）。
-void applyLbPoseStitchingIfNeeded(vision::MultiCameraCaptureBundle* bundle)
-{
-    if (bundle == nullptr) {
-        return;
-    }
-
-    const auto& lb = bundle->lbPoseResult;
-    if (!lb.invoked) {
-        return;
-    }
-    if (!lb.success || !lb.poseMatrix.valid) {
-        qWarning(LOG_FLOW).noquote()
-            << QStringLiteral("LB 位姿失败，跳过点云变换：") << lb.message;
-        return;
-    }
-    if (!bundle->mechEyeResult.pointCloud.isValid()) {
-        qWarning(LOG_FLOW).noquote() << QStringLiteral("LB 成功但 Mech 点云无效，跳过变换。");
-        return;
-    }
-
-    // shared_ptr 别名保留原始缓冲，避免深拷贝；变换失败则清掉 raw 标记。
-    bundle->mechEyeResult.pointCloudRaw = bundle->mechEyeResult.pointCloud;
-
-    mech_eye::PointCloudFrame stitched;
-    QString stitchMessage;
-    if (!mech_eye::transformPointCloudFrame(
-            bundle->mechEyeResult.pointCloudRaw,
-            lb.poseMatrix.values,
-            identityMatrix4x4(),
-            &stitched,
-            &stitchMessage)) {
-        bundle->mechEyeResult.pointCloudRaw = mech_eye::PointCloudFrame{};
-        qWarning(LOG_FLOW).noquote()
-            << QStringLiteral("点云 LB 变换失败：") << stitchMessage;
-        return;
-    }
-
-    if (!stitched.isValid() || stitched.pointCount <= 0 ||
-        stitched.pointsXYZ == nullptr ||
-        static_cast<int>(stitched.pointsXYZ->size()) < stitched.pointCount * 3) {
-        bundle->mechEyeResult.pointCloudRaw = mech_eye::PointCloudFrame{};
-        qWarning(LOG_FLOW).noquote()
-            << QStringLiteral("点云 LB 变换结果无效，保留原始云，不替换 pointCloud。");
-        return;
-    }
-
-    bundle->mechEyeResult.pointCloud = std::move(stitched);
-    qInfo(LOG_FLOW).noquote()
-        << QStringLiteral("点云已按 LB Rt_global 变换：") << stitchMessage
-        << QStringLiteral(" framePoints=") << lb.framePointCount
-        << QStringLiteral(" rawKept=") << bundle->mechEyeResult.pointCloudRaw.isValid();
-}
-
-}  // namespace
 
 void StateMachine::notifyScanStarted(int segmentIndex, quint32 taskId)
 {
@@ -150,9 +80,7 @@ void StateMachine::onBundleCaptureFinished(vision::MultiCameraCaptureBundle bund
 
         const int segmentIndex = bundle.request.segmentIndex;
 
-        // length_volume / 带 CXP 路径：用 LB Rt_global 把 Mech 点云变换到统一坐标系后再缓存/合并。
-        applyLbPoseStitchingIfNeeded(&bundle);
-
+        // LB 点云拼接已在 VisionPipeline LB worker 完成；此处仅缓存与 ACK。
         m_scanSegmentCache.storeSegment(
             device,
             segmentIndex,
@@ -412,6 +340,13 @@ void StateMachine::scheduleScanSegmentPersist(
         << QStringLiteral(" segment=") << segmentIndex;
 
     m_scanPersistWorker.enqueue(std::move(job));
+
+    // 落盘 job 已持有 shared_ptr 副本；立即从缓存剥离纹理/raw/CXP，避免等磁盘期间双份驻留。
+    if (!m_scanSegmentCache.stripHeavyPayloads(device, segmentIndex)) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("投递落盘后剥离重载荷失败，段不在缓存 segment=")
+            << segmentIndex;
+    }
 }
 
 void StateMachine::onScanSegmentPersistFinished(
@@ -419,15 +354,13 @@ void StateMachine::onScanSegmentPersistFinished(
     int segmentIndex,
     bool ok)
 {
+    Q_UNUSED(device);
+    // 重载荷已在 enqueue 后剥离；此处仅保留回调钩子供日志/后续扩展。
     if (!ok) {
-        return;
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("后台落盘失败（缓存重载荷已剥离，检测点云仍保留） segment=")
+            << segmentIndex;
     }
-    if (m_scanSegmentCache.stripHeavyPayloads(device, segmentIndex)) {
-        return;
-    }
-    qWarning(LOG_FLOW).noquote()
-        << QStringLiteral("落盘完成但段已不在缓存，跳过重载荷剥离 segment=")
-        << segmentIndex;
 }
 
 void StateMachine::clearScanSegmentCacheForPathSwitch()

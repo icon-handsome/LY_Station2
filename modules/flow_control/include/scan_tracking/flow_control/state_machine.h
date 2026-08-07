@@ -401,6 +401,9 @@ private:
     ScanSegmentCache m_scanSegmentCache;
     ScanSegmentPersistWorker m_scanPersistWorker;
     std::atomic_bool m_stopped{false};
+    /// 落盘完成回投门闩：stop 先关闸，已入队的 QueuedConnection 回调不得再碰 this。
+    std::shared_ptr<std::atomic_bool> m_persistAcceptResults{
+        std::make_shared<std::atomic_bool>(true)};
     /// 后台解算：单线程 + 最多 1 个 pending；stop/析构时必须 join。
     std::mutex m_bgSolveThreadsMutex;
     std::thread m_bgSolveThread;

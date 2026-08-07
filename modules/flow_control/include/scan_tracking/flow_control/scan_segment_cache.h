@@ -91,7 +91,7 @@ bool persistScanSegmentBundle(
     const vision::MultiCameraCaptureBundle& bundle,
     QString* errorMessage = nullptr);
 
-/// 落盘成功后剥离检测不需要的大块缓冲（保留 pointCloud 供 Trig_Inspection）。
+/// 落盘 job 已持有缓冲副本后即可调用：剥离检测不需要的大块（保留 pointCloud）。
 void stripScanSegmentHeavyPayloads(vision::MultiCameraCaptureBundle* bundle);
 
 }  // namespace scan_tracking::flow_control

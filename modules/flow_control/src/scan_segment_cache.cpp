@@ -131,7 +131,7 @@ bool ScanSegmentCache::stripHeavyPayloads(common::ScanDeviceKind device, int loc
     const int pointsBefore = iterator->bundle.mechEyeResult.pointCloud.pointCount;
     stripScanSegmentHeavyPayloads(&iterator->bundle);
     qInfo(LOG_SCAN_CACHE).noquote()
-        << QStringLiteral("段缓存已剥离落盘后重载荷 device=")
+        << QStringLiteral("段缓存已剥离重载荷（落盘 job 持有副本） device=")
         << deviceTagForPath(device)
         << QStringLiteral(" segment=") << localIndex
         << QStringLiteral(" 保留检测点云 points=") << pointsBefore;
@@ -443,7 +443,7 @@ void stripScanSegmentHeavyPayloads(vision::MultiCameraCaptureBundle* bundle)
 
     mech_eye::CaptureResult& mech = bundle->mechEyeResult;
 
-    // cloud.ply / cloud_stitched.ply 已落盘；检测仍读 pointCloud。
+    // cloud.ply / cloud_stitched.ply 由落盘 job 持有的副本写出；检测仍读 pointCloud。
     mech.pointCloudRaw = mech_eye::PointCloudFrame{};
 
     if (mech.pointCloud.normalsXYZ) {

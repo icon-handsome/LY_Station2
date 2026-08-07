@@ -1,5 +1,8 @@
 #include "scan_tracking/vision/vision_pipeline_service.h"
 
+#include <array>
+#include <exception>
+#include <new>
 #include <thread>
 #include <utility>
 
@@ -12,6 +15,7 @@
 #include <QtCore/QTimer>
 
 #include "scan_tracking/common/config_manager.h"
+#include "scan_tracking/mech_eye/point_cloud_processor.h"
 #include "scan_tracking/vision/hik_camera_c_controller.h"
 #include "scan_tracking/vision/hik_cxp_camera_service.h"
 #include "scan_tracking/vision/lb_pose_detection_adapter.h"
@@ -24,6 +28,71 @@ namespace {
 Q_LOGGING_CATEGORY(LOG_VISION_PIPELINE, "vision.pipeline")
 
 constexpr int kMechToHikCaptureDelayMs = 1500;
+
+std::array<float, 16> identityMatrix4x4()
+{
+    return {
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f,
+    };
+}
+
+/// LB 成功时在 worker 线程完成点云变换，避免主线程 DirectConnection 路径做百万点 Eigen。
+/// 保留 pointCloudRaw=原始云，pointCloud=变换后云。
+void applyLbPoseStitchingIfNeeded(MultiCameraCaptureBundle* bundle)
+{
+    if (bundle == nullptr) {
+        return;
+    }
+
+    const auto& lb = bundle->lbPoseResult;
+    if (!lb.invoked) {
+        return;
+    }
+    if (!lb.success || !lb.poseMatrix.valid) {
+        qWarning(LOG_VISION_PIPELINE).noquote()
+            << QStringLiteral("LB 位姿失败，跳过点云变换：") << lb.message;
+        return;
+    }
+    if (!bundle->mechEyeResult.pointCloud.isValid()) {
+        qWarning(LOG_VISION_PIPELINE).noquote()
+            << QStringLiteral("LB 成功但 Mech 点云无效，跳过变换。");
+        return;
+    }
+
+    bundle->mechEyeResult.pointCloudRaw = bundle->mechEyeResult.pointCloud;
+
+    mech_eye::PointCloudFrame stitched;
+    QString stitchMessage;
+    if (!mech_eye::transformPointCloudFrame(
+            bundle->mechEyeResult.pointCloudRaw,
+            lb.poseMatrix.values,
+            identityMatrix4x4(),
+            &stitched,
+            &stitchMessage)) {
+        bundle->mechEyeResult.pointCloudRaw = mech_eye::PointCloudFrame{};
+        qWarning(LOG_VISION_PIPELINE).noquote()
+            << QStringLiteral("点云 LB 变换失败：") << stitchMessage;
+        return;
+    }
+
+    if (!stitched.isValid() || stitched.pointCount <= 0 ||
+        stitched.pointsXYZ == nullptr ||
+        static_cast<int>(stitched.pointsXYZ->size()) < stitched.pointCount * 3) {
+        bundle->mechEyeResult.pointCloudRaw = mech_eye::PointCloudFrame{};
+        qWarning(LOG_VISION_PIPELINE).noquote()
+            << QStringLiteral("点云 LB 变换结果无效，保留原始云，不替换 pointCloud。");
+        return;
+    }
+
+    bundle->mechEyeResult.pointCloud = std::move(stitched);
+    qInfo(LOG_VISION_PIPELINE).noquote()
+        << QStringLiteral("点云已按 LB Rt_global 变换：") << stitchMessage
+        << QStringLiteral(" framePoints=") << lb.framePointCount
+        << QStringLiteral(" rawKept=") << bundle->mechEyeResult.pointCloudRaw.isValid();
+}
 
 QString captureTypeLabel(CaptureType type)
 {
@@ -209,6 +278,25 @@ void VisionPipelineService::lbPoseWorkerLoop()
             job.bundle.hikCameraAResult.frame,
             job.bundle.hikCameraBResult.frame,
             job.lbConfig);
+
+        // 拼接放在 LB worker，主线程只做缓存/ACK/投递落盘。
+        // 必须吞掉异常：std::thread 未捕获 → terminate 闪退。
+        try {
+            applyLbPoseStitchingIfNeeded(&job.bundle);
+        } catch (const std::bad_alloc&) {
+            qCritical(LOG_VISION_PIPELINE).noquote()
+                << QStringLiteral("LB 点云拼接内存不足，保留原始云继续交付。");
+            job.bundle.mechEyeResult.pointCloudRaw = mech_eye::PointCloudFrame{};
+        } catch (const std::exception& ex) {
+            qCritical(LOG_VISION_PIPELINE).noquote()
+                << QStringLiteral("LB 点云拼接异常，保留原始云：")
+                << QString::fromUtf8(ex.what());
+            job.bundle.mechEyeResult.pointCloudRaw = mech_eye::PointCloudFrame{};
+        } catch (...) {
+            qCritical(LOG_VISION_PIPELINE).noquote()
+                << QStringLiteral("LB 点云拼接未知异常，保留原始云继续交付。");
+            job.bundle.mechEyeResult.pointCloudRaw = mech_eye::PointCloudFrame{};
+        }
 
         if (!acceptResults->load(std::memory_order_acquire)) {
             continue;

@@ -1,8 +1,6 @@
 #include "scan_tracking/mech_eye/point_cloud_io.h"
 
 #include "scan_tracking/common/capture_cache_paths.h"
-#include "scan_tracking/mech_eye/point_cloud_processor.h"
-
 #include <QByteArray>
 #include <QDir>
 #include <QFile>
@@ -15,7 +13,7 @@
 #include <cstring>
 #include <exception>
 #include <limits>
-#include <mutex>
+#include <memory>
 #include <new>
 #include <vector>
 
@@ -202,16 +200,18 @@ bool savePointCloudFrameToPly(
             return false;
         }
 
-        // 与变换侧共用锁，避免写盘过程中缓冲被并发替换。
-        std::lock_guard<std::mutex> lock(pointCloudAlgorithmMutex());
-
-        // 再取一次本地视图，防止锁外状态变化。
-        if (!frame.isValid() || frame.pointsXYZ == nullptr) {
-            qWarning(LOG_POINT_CLOUD_IO) << QStringLiteral("savePointCloudFrameToPly：加锁后帧无效");
+        // 持有 shared_ptr 本地副本，写盘期间缓冲不会因调用方 reset 而释放。
+        // 不与 pointCloudAlgorithmMutex 交叉持有：变换只读输入并另分配输出，
+        // 写盘只读缓冲；长 I/O 占锁会卡住 LB 拼接与主路径。
+        const std::shared_ptr<std::vector<float>> pointsKeep = frame.pointsXYZ;
+        const std::shared_ptr<std::vector<uint8_t>> textureKeep =
+            (texture != nullptr && texture->isValid()) ? texture->pixels : nullptr;
+        if (!pointsKeep) {
+            qWarning(LOG_POINT_CLOUD_IO) << QStringLiteral("savePointCloudFrameToPly：pointsXYZ 为空");
             return false;
         }
 
-        const auto& points = *frame.pointsXYZ;
+        const auto& points = *pointsKeep;
         const int pointCount = frame.pointCount;
         const int availablePointCount = static_cast<int>(points.size() / 3);
         const int count = std::min(pointCount, availablePointCount);
@@ -221,10 +221,10 @@ bool savePointCloudFrameToPly(
         }
 
         const uint8_t* texturePixels = nullptr;
-        if (texture != nullptr && texture->isValid() && texture->pixels != nullptr) {
-            const int texturePixelCount = static_cast<int>(texture->pixels->size());
+        if (textureKeep) {
+            const int texturePixelCount = static_cast<int>(textureKeep->size());
             if (texturePixelCount >= count) {
-                texturePixels = texture->pixels->data();
+                texturePixels = textureKeep->data();
             } else {
                 qWarning(LOG_POINT_CLOUD_IO).noquote()
                     << QStringLiteral("savePointCloudFrameToPly：纹理像素不足，RGB 将写 0")

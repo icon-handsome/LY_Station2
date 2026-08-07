@@ -3,6 +3,9 @@
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 
+#include <exception>
+#include <new>
+
 namespace scan_tracking::mech_eye {
 namespace {
 
@@ -61,40 +64,58 @@ bool transformPointCloudFrame(
         return false;
     }
 
-    std::lock_guard<std::mutex> lock(pointCloudAlgorithmMutex());
+    try {
+        std::lock_guard<std::mutex> lock(pointCloudAlgorithmMutex());
 
-    const Eigen::Matrix4f combined =
-        toEigenRowMajor(calibrationMatrixT0Prime) * toEigenRowMajor(stereoTrackingMatrixT);
+        const Eigen::Matrix4f combined =
+            toEigenRowMajor(calibrationMatrixT0Prime) * toEigenRowMajor(stereoTrackingMatrixT);
 
-    auto outPoints = std::make_shared<std::vector<float>>();
-    outPoints->resize(input.pointsXYZ->size());
+        auto outPoints = std::make_shared<std::vector<float>>();
+        outPoints->resize(input.pointsXYZ->size());
 
-    const auto& in = *input.pointsXYZ;
-    auto& out = *outPoints;
-    const int count = input.pointCount > 0
-        ? input.pointCount
-        : static_cast<int>(in.size() / 3);
+        const auto& in = *input.pointsXYZ;
+        auto& out = *outPoints;
+        const int count = input.pointCount > 0
+            ? input.pointCount
+            : static_cast<int>(in.size() / 3);
 
-    for (int i = 0; i < count; ++i) {
-        const std::size_t base = static_cast<std::size_t>(i) * 3;
-        if (base + 2 >= in.size()) {
-            break;
+        for (int i = 0; i < count; ++i) {
+            const std::size_t base = static_cast<std::size_t>(i) * 3;
+            if (base + 2 >= in.size()) {
+                break;
+            }
+            Eigen::Vector4f p(in[base], in[base + 1], in[base + 2], 1.0f);
+            // 与第一工位 PCL transformPointCloud 一致：列向量 p' = M * p
+            const Eigen::Vector4f q = combined * p;
+            out[base] = q.x();
+            out[base + 1] = q.y();
+            out[base + 2] = q.z();
         }
-        Eigen::Vector4f p(in[base], in[base + 1], in[base + 2], 1.0f);
-        // 与第一工位 PCL transformPointCloud 一致：列向量 p' = M * p
-        const Eigen::Vector4f q = combined * p;
-        out[base] = q.x();
-        out[base + 1] = q.y();
-        out[base + 2] = q.z();
-    }
 
-    *output = input;
-    output->pointsXYZ = outPoints;
-    output->pointCount = count;
-    if (message != nullptr) {
-        *message = QStringLiteral("点云变换完成，点数=%1").arg(count);
+        *output = input;
+        output->pointsXYZ = outPoints;
+        output->pointCount = count;
+        if (message != nullptr) {
+            *message = QStringLiteral("点云变换完成，点数=%1").arg(count);
+        }
+        return true;
+    } catch (const std::bad_alloc&) {
+        // LB worker 等裸 std::thread 上未捕获异常会 terminate；OOM 降级为失败。
+        if (message != nullptr) {
+            *message = QStringLiteral("点云变换内存不足。");
+        }
+        return false;
+    } catch (const std::exception& ex) {
+        if (message != nullptr) {
+            *message = QStringLiteral("点云变换异常：%1").arg(QString::fromUtf8(ex.what()));
+        }
+        return false;
+    } catch (...) {
+        if (message != nullptr) {
+            *message = QStringLiteral("点云变换发生未知异常。");
+        }
+        return false;
     }
-    return true;
 }
 
 }  // namespace scan_tracking::mech_eye
