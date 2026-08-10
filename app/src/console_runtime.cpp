@@ -407,7 +407,8 @@ void ConsoleRuntime::initModules()
             &scan_tracking::mech_eye::MechEyeService::fatalError,
             this,
             [](scan_tracking::mech_eye::CaptureErrorCode code, const QString& message) {
-                qCritical(appLog) << QStringLiteral("致命错误：") << static_cast<int>(code) << message;
+                qCritical(appLog) << QStringLiteral("致命错误（进程继续）：")
+                                  << static_cast<int>(code) << message;
             });
     };
     connectMechEyeLogs(mechEyeTelescopicService_.get());

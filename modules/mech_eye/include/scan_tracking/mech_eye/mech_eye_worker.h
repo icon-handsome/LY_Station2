@@ -117,6 +117,9 @@ private:
      */
     bool disconnectCamera(QString* errorMessage = nullptr);
 
+    /* SDK 原生崩溃后重建 Camera 实例，避免继续使用损坏对象 */
+    void resetSdkCamera();
+
     /* 构造失败结果
      * @param request 原始请求
      * @param errorCode 错误码

@@ -15,6 +15,7 @@
 #include <qdir.h>
 #include <qcoreapplication.h>
 #include "scan_tracking/common/config_manager.h"
+#include "scan_tracking/mech_eye/mech_eye_sdk_seh.h"
 #include "ErrorStatus.h"
 #include "area_scan_3d_camera/Camera.h"
 #include "area_scan_3d_camera/CameraProperties.h"
@@ -23,6 +24,8 @@
 #include "area_scan_3d_camera/Frame2DAnd3D.h"
 #include "area_scan_3d_camera/Frame3D.h"
 #include "UserSet.h"
+
+#include <memory>
 
 Q_LOGGING_CATEGORY(LOG_MECHEYE_WORKER, "mech_eye.worker")
 
@@ -42,6 +45,13 @@ bool isIpv4Address(const QString& text)
     static const QRegularExpression pattern(
         QStringLiteral(R"(^((25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(25[0-5]|2[0-4]\d|1?\d?\d)$)"));
     return pattern.match(text.trimmed()).hasMatch();
+}
+
+QString formatSdkSehError(unsigned sehCode)
+{
+    return QStringLiteral(
+               "Mech-Eye SDK 原生异常 0x%1（常见于多网卡同网段）。已隔离相机对象，进程继续运行，后续采集将重试连接。")
+        .arg(sehCode, 0, 16);
 }
 
 bool matchesCameraKey(const QString& key, const mmind::eye::CameraInfo& cameraInfo)
@@ -153,7 +163,18 @@ GrayTextureFrame ConvertGrayTextureFrame(const mmind::eye::Frame2D& frame2d)
 
 class MechEyeWorker::Impl {
 public:
-    mmind::eye::Camera camera;
+    Impl()
+        : camera(std::make_unique<mmind::eye::Camera>())
+    {
+    }
+
+    void resetCamera()
+    {
+        discoveredCameras.clear();
+        camera = std::make_unique<mmind::eye::Camera>();
+    }
+
+    std::unique_ptr<mmind::eye::Camera> camera;
     std::vector<mmind::eye::CameraInfo> discoveredCameras;
 };
 
@@ -191,6 +212,7 @@ void MechEyeWorker::startWorker(const QString& defaultCameraKey)
     }
 
     setRuntimeState(CameraRuntimeState::Error, errorMessage);
+    // 连接失败不退出进程：仅告警，后续采集/刷新时会重试。
     emit fatalError(CaptureErrorCode::ConnectFailed, taggedMessage(errorMessage));
 }
 
@@ -225,7 +247,14 @@ void MechEyeWorker::refreshStatus()
     }
 
     mmind::eye::CameraInfo liveInfo;
-    const mmind::eye::ErrorStatus status = m_impl->camera.getCameraInfo(liveInfo);
+    mmind::eye::ErrorStatus status;
+    const unsigned seh = sdk_seh::getCameraInfo(m_impl->camera.get(), &liveInfo, &status);
+    if (seh != 0) {
+        const QString errorMessage = formatSdkSehError(seh);
+        resetSdkCamera();
+        setRuntimeState(CameraRuntimeState::Error, errorMessage);
+        return;
+    }
     if (!status.isOK()) {
         QString errorMessage = QStringLiteral("刷新相机状态失败: %1")
             .arg(QString::fromStdString(status.errorDescription));
@@ -293,16 +322,19 @@ void MechEyeWorker::performCapture(const scan_tracking::mech_eye::CaptureRequest
     try {
 #endif
         mmind::eye::ErrorStatus status;
+        unsigned sehCode = 0;
 
         qInfo(LOG_MECHEYE_WORKER).noquote()
             << QStringLiteral("[ScanSync] 梅卡采集时刻 ms=") << QDateTime::currentMSecsSinceEpoch();
 
         if (normalized.mode == CaptureMode::Capture2DOnly) {
             mmind::eye::Frame2D frame2D;
-            status = m_impl->camera.capture2D(
-                frame2D,
-                static_cast<unsigned int>(normalized.timeoutMs));
-            if (status.isOK()) {
+            sehCode = sdk_seh::capture2D(
+                m_impl->camera.get(),
+                &frame2D,
+                static_cast<unsigned int>(normalized.timeoutMs),
+                &status);
+            if (sehCode == 0 && status.isOK()) {
                 result.texture2D = ConvertGrayTextureFrame(frame2D);
             }
         } else if (normalized.mode == CaptureMode::Capture3DOnly) {
@@ -310,7 +342,7 @@ void MechEyeWorker::performCapture(const scan_tracking::mech_eye::CaptureRequest
 
             // ---- 采集前设置深度范围 ----
             {
-                auto& userSet = m_impl->camera.currentUserSet();
+                auto& userSet = m_impl->camera->currentUserSet();
 
                 // 从配置读取并设置深度范围
                 const auto& visionCfg = common::ConfigManager::instance()->visionConfig();
@@ -323,10 +355,12 @@ void MechEyeWorker::performCapture(const scan_tracking::mech_eye::CaptureRequest
             }
 
             // 先尝试 capture3D（不含相机侧法向量计算）
-            status = m_impl->camera.capture3D(
-                frame3D,
-                static_cast<unsigned int>(normalized.timeoutMs));
-            if (status.isOK()) {
+            sehCode = sdk_seh::capture3D(
+                m_impl->camera.get(),
+                &frame3D,
+                static_cast<unsigned int>(normalized.timeoutMs),
+                &status);
+            if (sehCode == 0 && status.isOK()) {
                 const auto untexturedCloud = frame3D.getUntexturedPointCloud();
                 std::size_t validCount = 0;
                 result.pointCloud = ConvertUntexturedPointCloudToFrame(
@@ -341,16 +375,31 @@ void MechEyeWorker::performCapture(const scan_tracking::mech_eye::CaptureRequest
             }
         } else {
             mmind::eye::Frame2DAnd3D frame2DAnd3D;
-            status = m_impl->camera.capture2DAnd3D(
-                frame2DAnd3D,
-                static_cast<unsigned int>(normalized.timeoutMs));
-            if (status.isOK()) {
+            sehCode = sdk_seh::capture2DAnd3D(
+                m_impl->camera.get(),
+                &frame2DAnd3D,
+                static_cast<unsigned int>(normalized.timeoutMs),
+                &status);
+            if (sehCode == 0 && status.isOK()) {
                 result.pointCloud = buildPointCloud2DAnd3D(frame2DAnd3D);
                 result.texture2D = ConvertGrayTextureFrame(frame2DAnd3D.frame2D());
             }
         }
 
         result.elapsedMs = timer.elapsed();
+
+        if (sehCode != 0) {
+            const QString sehMessage = formatSdkSehError(sehCode);
+            resetSdkCamera();
+            m_busy = false;
+            setRuntimeState(CameraRuntimeState::Error, sehMessage);
+            emit captureFinished(makeFailureResult(
+                normalized,
+                CaptureErrorCode::CaptureFailed,
+                sehMessage,
+                result.elapsedMs));
+            return;
+        }
 
         if (!status.isOK()) {
             result.errorCode = mapSdkError(status.errorCode);
@@ -498,28 +547,20 @@ bool MechEyeWorker::connectCamera(const QString& cameraKey, int timeoutMs, QStri
         static_cast<unsigned int>(timeoutMs > 0 ? timeoutMs : 5000);
 
     // 多网卡同网段时 discover+CameraInfo 连接会失败；按 IP 直连可绕过 SDK 网口选择问题。
+    // 若 SDK 仍触发原生崩溃，由 sdk_seh 兜住并重建 Camera，保证进程不退出。
     if (isIpv4Address(normalizedKey)) {
         setRuntimeState(
             CameraRuntimeState::Connecting,
             QStringLiteral("正在通过 IP 连接相机 %1").arg(normalizedKey));
 
         mmind::eye::ErrorStatus status;
-        try {
-            status = m_impl->camera.connect(normalizedKey.toStdString(), timeout);
-        } catch (const std::exception& exception) {
+        const std::string ip = normalizedKey.toStdString();
+        const unsigned seh = sdk_seh::connectByIp(m_impl->camera.get(), ip, timeout, &status);
+        if (seh != 0) {
             if (errorMessage != nullptr) {
-                *errorMessage = QStringLiteral("连接相机异常: %1")
-                    .arg(QString::fromLocal8Bit(exception.what()));
+                *errorMessage = formatSdkSehError(seh);
             }
-            m_connected = false;
-            m_cameraInfo = {};
-            return false;
-        } catch (...) {
-            if (errorMessage != nullptr) {
-                *errorMessage = QStringLiteral("连接相机异常: 未知错误");
-            }
-            m_connected = false;
-            m_cameraInfo = {};
+            resetSdkCamera();
             return false;
         }
 
@@ -534,8 +575,9 @@ bool MechEyeWorker::connectCamera(const QString& cameraKey, int timeoutMs, QStri
         }
 
         mmind::eye::CameraInfo info;
-        if (const mmind::eye::ErrorStatus infoStatus = m_impl->camera.getCameraInfo(info);
-            infoStatus.isOK()) {
+        mmind::eye::ErrorStatus infoStatus;
+        const unsigned infoSeh = sdk_seh::getCameraInfo(m_impl->camera.get(), &info, &infoStatus);
+        if (infoSeh == 0 && infoStatus.isOK()) {
             m_cameraInfo = makeSnapshot(info, true);
         } else {
             m_cameraInfo = {};
@@ -544,32 +586,22 @@ bool MechEyeWorker::connectCamera(const QString& cameraKey, int timeoutMs, QStri
         }
 
         m_connected = true;
-        m_impl->camera.setHeartbeatInterval(5000);
+        sdk_seh::setHeartbeatInterval(m_impl->camera.get(), 5000);
         printCameraParameters();
         return true;
     }
 
     setRuntimeState(CameraRuntimeState::Discovering, QStringLiteral("正在搜索相机"));
 
-    try {
-        m_impl->discoveredCameras = mmind::eye::Camera::discoverCameras(
-            static_cast<unsigned int>(timeoutMs > 0 ? timeoutMs : 5000));
-    } catch (const std::exception& exception) {
+    m_impl->discoveredCameras.clear();
+    const unsigned discoverSeh = sdk_seh::discoverCameras(
+        static_cast<unsigned int>(timeoutMs > 0 ? timeoutMs : 5000),
+        &m_impl->discoveredCameras);
+    if (discoverSeh != 0) {
         if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral("搜索相机异常: %1")
-                .arg(QString::fromLocal8Bit(exception.what()));
+            *errorMessage = formatSdkSehError(discoverSeh);
         }
-        m_impl->discoveredCameras.clear();
-        m_connected = false;
-        m_cameraInfo = {};
-        return false;
-    } catch (...) {
-        if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral("搜索相机异常: 未知错误");
-        }
-        m_impl->discoveredCameras.clear();
-        m_connected = false;
-        m_cameraInfo = {};
+        resetSdkCamera();
         return false;
     }
 
@@ -600,24 +632,16 @@ bool MechEyeWorker::connectCamera(const QString& cameraKey, int timeoutMs, QStri
             .arg(QString::fromStdString(selectedIt->serialNumber)));
 
     mmind::eye::ErrorStatus status;
-    try {
-        status = m_impl->camera.connect(
-            *selectedIt,
-            static_cast<unsigned int>(timeoutMs > 0 ? timeoutMs : 5000));
-    } catch (const std::exception& exception) {
+    const unsigned seh = sdk_seh::connectByInfo(
+        m_impl->camera.get(),
+        *selectedIt,
+        static_cast<unsigned int>(timeoutMs > 0 ? timeoutMs : 5000),
+        &status);
+    if (seh != 0) {
         if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral("连接相机异常: %1")
-                .arg(QString::fromLocal8Bit(exception.what()));
+            *errorMessage = formatSdkSehError(seh);
         }
-        m_connected = false;
-        m_cameraInfo = {};
-        return false;
-    } catch (...) {
-        if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral("连接相机异常: 未知错误");
-        }
-        m_connected = false;
-        m_cameraInfo = {};
+        resetSdkCamera();
         return false;
     }
 
@@ -634,7 +658,7 @@ bool MechEyeWorker::connectCamera(const QString& cameraKey, int timeoutMs, QStri
     m_connected = true;
     m_cameraInfo = makeSnapshot(*selectedIt, true);
     // 设置 SDK 心跳间隔为 5 秒（默认 10 秒），用于检测相机网络断连
-    m_impl->camera.setHeartbeatInterval(5000);
+    sdk_seh::setHeartbeatInterval(m_impl->camera.get(), 5000);
     // 连接成功后打印相机基础参数
     printCameraParameters();
 
@@ -647,23 +671,27 @@ bool MechEyeWorker::disconnectCamera(QString* errorMessage)
         return true;
     }
 
-    try {
-        m_impl->camera.disconnect();
-        m_connected = false;
-        m_busy = false;
-        m_cameraInfo.connected = false;
-        return true;
-    } catch (const std::exception& exception) {
+    const unsigned seh = sdk_seh::disconnect(m_impl->camera.get());
+    m_connected = false;
+    m_busy = false;
+    m_cameraInfo.connected = false;
+    if (seh != 0) {
         if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral("断开相机失败: %1")
-                .arg(QString::fromLocal8Bit(exception.what()));
+            *errorMessage = formatSdkSehError(seh);
         }
+        resetSdkCamera();
         return false;
-    } catch (...) {
-        if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral("断开相机失败: 未知错误");
-        }
-        return false;
+    }
+    return true;
+}
+
+void MechEyeWorker::resetSdkCamera()
+{
+    m_connected = false;
+    m_busy = false;
+    m_cameraInfo = {};
+    if (m_impl != nullptr) {
+        m_impl->resetCamera();
     }
 }
 
@@ -706,7 +734,7 @@ void MechEyeWorker::printCameraParameters()
         return;
     }
 
-    auto& userSet = m_impl->camera.currentUserSet();
+    auto& userSet = m_impl->camera->currentUserSet();
 
     // 获取当前用户设置名称
     std::string userSetName;
@@ -714,11 +742,11 @@ void MechEyeWorker::printCameraParameters()
 
     // 获取相机分辨率
     mmind::eye::CameraResolutions resolutions;
-    m_impl->camera.getCameraResolutions(resolutions);
+    m_impl->camera->getCameraResolutions(resolutions);
 
     // 获取相机内参
     mmind::eye::CameraIntrinsics intrinsics;
-    m_impl->camera.getCameraIntrinsics(intrinsics);
+    m_impl->camera->getCameraIntrinsics(intrinsics);
 
     // 2D 曝光模式和曝光时间
     std::string scan2DExposureMode;
