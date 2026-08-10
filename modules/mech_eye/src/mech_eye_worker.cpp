@@ -4,6 +4,7 @@
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QLoggingCategory>
 #include <QtCore/QRegularExpression>
+#include <QtCore/QThread>
 
 #include <algorithm>
 #include <cmath>
@@ -196,23 +197,42 @@ MechEyeWorker::~MechEyeWorker()
     m_impl = nullptr;
 }
 
-/* 启动 worker：记录默认相机，并尝试建立初始连接。 */
+/* 启动 worker：记录默认相机，并尝试建立初始连接（失败则间隔重试）。 */
 void MechEyeWorker::startWorker(const QString& defaultCameraKey)
 {
-    const std::lock_guard<std::mutex> sdkLock(mechEyeSdkMutex());
     m_defaultCameraKey = defaultCameraKey.trimmed();
 
+    constexpr int kMaxAttempts = 3;
+    constexpr int kRetryIntervalMs = 3000;
     QString errorMessage;
-    if (connectCamera(m_defaultCameraKey, 5000, &errorMessage)) {
-        setRuntimeState(
-            CameraRuntimeState::Ready,
-            QStringLiteral("相机已连接: %1 @ %2")
-                .arg(m_cameraInfo.serialNumber, m_cameraInfo.ipAddress));
-        return;
+
+    for (int attempt = 1; attempt <= kMaxAttempts; ++attempt) {
+        {
+            // 重试等待期间释放 SDK 锁，避免阻塞另一路梅卡 worker。
+            const std::lock_guard<std::mutex> sdkLock(mechEyeSdkMutex());
+            if (connectCamera(m_defaultCameraKey, 5000, &errorMessage)) {
+                setRuntimeState(
+                    CameraRuntimeState::Ready,
+                    QStringLiteral("相机已连接: %1 @ %2")
+                        .arg(m_cameraInfo.serialNumber, m_cameraInfo.ipAddress));
+                return;
+            }
+        }
+
+        if (attempt < kMaxAttempts) {
+            qWarning(LOG_MECHEYE_WORKER).noquote()
+                << taggedMessage(
+                       QStringLiteral("启动连接失败（第 %1/%2 次）: %3；%4 ms 后重试")
+                           .arg(attempt)
+                           .arg(kMaxAttempts)
+                           .arg(errorMessage)
+                           .arg(kRetryIntervalMs));
+            QThread::msleep(static_cast<unsigned long>(kRetryIntervalMs));
+        }
     }
 
     setRuntimeState(CameraRuntimeState::Error, errorMessage);
-    // 连接失败不退出进程：仅告警，后续采集/刷新时会重试。
+    // 启动重试耗尽仍失败：不退出进程，后续采集/刷新时会再重试。
     emit fatalError(CaptureErrorCode::ConnectFailed, taggedMessage(errorMessage));
 }
 
