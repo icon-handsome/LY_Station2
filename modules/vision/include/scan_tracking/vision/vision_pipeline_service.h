@@ -39,6 +39,10 @@ public:
     bool isStarted() const { return m_started; }
     VisionPipelineState state() const { return m_state; }
 
+    /// CXP 双目是否均已连接（hikCxpEnabled=false 或未注入服务时视为不需要 / 未连接由调用方解释）。
+    bool isHikCxpAConnected() const;
+    bool isHikCxpBConnected() const;
+
     /// 组合采集通道开关（路径级矩阵解析后传入；与全局 hikCxpEnabled 取与）。
     struct BundleCaptureOptions {
         bool useMechEye = true;    ///< 本轮仍强制需要 Mech 服务；预留按路径关闭

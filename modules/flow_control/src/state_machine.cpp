@@ -154,9 +154,12 @@ void StateMachine::start()
     clearActiveTask();
     // 无断点续跑：冷启动不得残留上一进程/上一轮段缓存与路径进度。
     bumpWorkpieceGeneration(QStringLiteral("state_machine.start"));
+    qInfo(LOG_FLOW).noquote() << QStringLiteral("状态机启动：WorkpieceGen 完成");
     clearTransientWorkpieceRuntimeState();
+    qInfo(LOG_FLOW).noquote() << QStringLiteral("状态机启动：临时运行态已清理");
     resetScanSegmentCache();
     resetActivePathToFirstEnabled();
+    qInfo(LOG_FLOW).noquote() << QStringLiteral("状态机启动：活跃路径已复位");
     clearPathProgressTracking(QStringLiteral("state_machine.start"));
     m_isPollingPlc = false;
     m_ipcState = protocol::IpcState::Initializing;
@@ -169,8 +172,14 @@ void StateMachine::start()
     m_consecutiveModbusFailures = 0;
     setState(AppState::Init);
     publishIpcStatus();
+    qInfo(LOG_FLOW).noquote() << QStringLiteral("状态机启动完成。");
 
-    if (m_modbus && m_modbus->isConnected()) {
+    // 心跳定时器兼作「相机齐套才开 Modbus」门控；未齐套时不 listen，PLC 连不上。
+    if (m_heartbeatTimer != nullptr && !m_heartbeatTimer->isActive()) {
+        m_heartbeatTimer->start();
+    }
+
+    if (m_modbus != nullptr && m_modbus->isConnected()) {
         onModbusConnected();
     }
 }

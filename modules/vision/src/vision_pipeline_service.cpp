@@ -347,6 +347,16 @@ void VisionPipelineService::stop()
     }
 }
 
+bool VisionPipelineService::isHikCxpAConnected() const
+{
+    return m_hikCameraAService != nullptr && m_hikCameraAService->isConnected();
+}
+
+bool VisionPipelineService::isHikCxpBConnected() const
+{
+    return m_hikCameraBService != nullptr && m_hikCameraBService->isConnected();
+}
+
 quint64 VisionPipelineService::requestCaptureBundle(
     int segmentIndex,
     quint32 taskId,

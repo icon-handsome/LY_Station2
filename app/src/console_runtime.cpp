@@ -593,7 +593,8 @@ void ConsoleRuntime::initModules()
     if (!visionConfig.hikCxpEnabled) {
         qInfo(appLog) << QStringLiteral("CXP 双目已跳过（hikCxpEnabled=false），组合采集使用梅卡 + 海康智能 C。");
     } else {
-        // CXP 左/右目各一个 HikCxpCameraService 实例，roleName 区分 ch250_a / ch250_b
+        // 先构造实例并接线；真正 start()/EnumDevices 延后到 StateMachine 启动之后，
+        // 避免 CXP SDK 后台枚举与状态机启动并发导致进程级闪退。
         hikCxpCameraAService_ = std::make_unique<scan_tracking::vision::HikCxpCameraService>(
             QStringLiteral("ch250_a"));
         hikCxpCameraBService_ = std::make_unique<scan_tracking::vision::HikCxpCameraService>(
@@ -611,18 +612,7 @@ void ConsoleRuntime::initModules()
             [](const QString& roleName, const QString& stateText, const QString& description) {
                 qInfo(appLog) << QStringLiteral("[CXP]") << roleName << stateText << description;
             });
-
-        hikCxpCameraAService_->start(
-            visionConfig.hikCxpCameraA,
-            visionConfig.hikCxpCaptureTimeoutMs,
-            visionConfig.hikCxpExposureTimeUs,
-            visionConfig.hikCxpGain);
-        hikCxpCameraBService_->start(
-            visionConfig.hikCxpCameraB,
-            visionConfig.hikCxpCaptureTimeoutMs,
-            visionConfig.hikCxpExposureTimeUs,
-            visionConfig.hikCxpGain);
-        qInfo(appLog) << QStringLiteral("CXP 双目相机服务已启动。");
+        qInfo(appLog) << QStringLiteral("CXP 双目服务已创建（连接将延后启动）。");
     }
 
     // 海康相机 C（智能相机）：纯 TCP 控制，不通过 MVS SDK 打开设备，避免与 SCMVS 冲突
@@ -730,12 +720,25 @@ void ConsoleRuntime::initModules()
     }
 
     stateMachine_->start();
+    qInfo(appLog) << QStringLiteral("状态机已启动。");
 
-    // 等状态机接好信号后再建 Modbus 链路，避免启动期漏掉 connected 事件。
-    if (!modbusService_->connectDevice()) {
-        qWarning(appLog) << "Modbus 连接初始化失败。";
+    // StateMachine 启动完成后再拉起 CXP SDK 枚举/连接，降低启动期进程闪退概率。
+    if (visionConfig.hikCxpEnabled && hikCxpCameraAService_ && hikCxpCameraBService_) {
+        hikCxpCameraAService_->start(
+            visionConfig.hikCxpCameraA,
+            visionConfig.hikCxpCaptureTimeoutMs,
+            visionConfig.hikCxpExposureTimeUs,
+            visionConfig.hikCxpGain);
+        hikCxpCameraBService_->start(
+            visionConfig.hikCxpCameraB,
+            visionConfig.hikCxpCaptureTimeoutMs,
+            visionConfig.hikCxpExposureTimeUs,
+            visionConfig.hikCxpGain);
+        qInfo(appLog) << QStringLiteral("CXP 双目相机服务已启动。");
     }
-    qInfo(appLog) << "所有模块已初始化。";
+
+    // StateMachine 心跳门控会在扫描相机齐套后才启动 Modbus 监听；此处不再抢先 listen。
+    qInfo(appLog) << QStringLiteral("所有模块已初始化（Modbus 将在 Mech+海康智能+CXP 齐套后监听）。");
 
     QTimer::singleShot(0, this, &ConsoleRuntime::runDeferredStartupTasks);
 }
