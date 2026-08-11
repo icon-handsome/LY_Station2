@@ -32,6 +32,13 @@ std::string instanceLogFilePath(const std::string& log_dir, const QDateTime& sta
         + ".txt";
 }
 
+std::string instanceAlgorithmLogFilePath(const std::string& log_dir, const QDateTime& started_at)
+{
+    return log_dir + "/algorithm_scan_tracking_"
+        + started_at.toString(QStringLiteral("yyyy-MM-dd_HHmmss_zzz")).toStdString()
+        + ".txt";
+}
+
 bool ensureLogDirectory(const std::string& log_dir)
 {
     if (log_dir.empty()) {
@@ -116,6 +123,18 @@ void emitMinimalFallback(QtMsgType type, const QMessageLogContext& context, cons
     writeConsoleLine(type, line.c_str(), line.size());
 }
 
+FILE* openLogFileWithBom(const std::string& path)
+{
+    FILE* file = std::fopen(path.c_str(), "wb");
+    if (file == nullptr) {
+        std::cerr << "严重错误：Logger 无法打开目标文件：" << path << "\n";
+        return nullptr;
+    }
+    std::fwrite(kUtf8Bom, 1, 3, file);
+    std::fflush(file);
+    return file;
+}
+
 }  // namespace
 
 Logger* Logger::instance_ = nullptr;
@@ -136,6 +155,10 @@ Logger::~Logger()
     if (log_file_ != nullptr) {
         std::fclose(log_file_);
         log_file_ = nullptr;
+    }
+    if (algorithm_log_file_ != nullptr) {
+        std::fclose(algorithm_log_file_);
+        algorithm_log_file_ = nullptr;
     }
 }
 
@@ -203,25 +226,58 @@ const char* Logger::getLogSeverity(QtMsgType type)
     }
 }
 
+bool Logger::isAlgorithmLogCategory(const char* category)
+{
+    if (category == nullptr || category[0] == '\0') {
+        return false;
+    }
+
+    // 算法编排入口（AutoInspection / Trig_Inspection 解算生命周期）
+    if (std::strcmp(category, "algorithm") == 0) {
+        return true;
+    }
+
+    // 第二工位检测编排（各路径统一）
+    if (std::strcmp(category, "flow_control.station2_inspection") == 0) {
+        return true;
+    }
+
+    // weld / length_volume / thickness / inner_surface / undercut_length 等测量服务
+    static constexpr char kMeasureServiceSuffix[] = "_measure.service";
+    const std::size_t catLen = std::strlen(category);
+    const std::size_t sufLen = sizeof(kMeasureServiceSuffix) - 1;
+    return catLen >= sufLen
+        && std::strcmp(category + (catLen - sufLen), kMeasureServiceSuffix) == 0;
+}
+
+void Logger::writeLineToFile(FILE* file, const std::string& line)
+{
+    if (file == nullptr) {
+        return;
+    }
+    std::fwrite(line.c_str(), 1, line.size(), file);
+    std::fwrite("\r\n", 1, 2, file);
+    std::fflush(file);
+}
+
 void Logger::openLogFile()
 {
     const QDateTime started_at = QDateTime::currentDateTime();
     log_file_path_ = instanceLogFilePath(log_dir_, started_at);
+    algorithm_log_file_path_ = instanceAlgorithmLogFilePath(log_dir_, started_at);
 
     if (log_file_ != nullptr) {
         std::fclose(log_file_);
         log_file_ = nullptr;
     }
-
-    // 每次启动新文件；唯一时间戳避免覆盖历史实例。
-    log_file_ = std::fopen(log_file_path_.c_str(), "wb");
-    if (log_file_ == nullptr) {
-        std::cerr << "严重错误：Logger 无法打开目标文件：" << log_file_path_ << "\n";
-        return;
+    if (algorithm_log_file_ != nullptr) {
+        std::fclose(algorithm_log_file_);
+        algorithm_log_file_ = nullptr;
     }
 
-    std::fwrite(kUtf8Bom, 1, 3, log_file_);
-    std::fflush(log_file_);
+    // 每次启动新文件；唯一时间戳避免覆盖历史实例；算法日志与全量日志共用时间戳。
+    log_file_ = openLogFileWithBom(log_file_path_);
+    algorithm_log_file_ = openLogFileWithBom(algorithm_log_file_path_);
 }
 
 void Logger::messageHandler(QtMsgType type, const QMessageLogContext& context, const QString& msg)
@@ -258,20 +314,20 @@ void Logger::log(QtMsgType type, const QMessageLogContext& context, const QStrin
 
     const QDateTime now = QDateTime::currentDateTime();
     const std::string time_stamp = now.toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz")).toStdString();
+    const char* category = safeCategoryName(context);
     const std::string suffix = (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg)
         ? sourceLocationSuffix(context)
         : std::string{};
     const std::string line = buildLogLine(
         time_stamp.c_str(),
         getLogSeverity(type),
-        safeCategoryName(context),
+        category,
         msg_utf8.constData(),
         suffix.empty() ? nullptr : suffix.c_str());
 
-    if (log_file_ != nullptr) {
-        std::fwrite(line.c_str(), 1, line.size(), log_file_);
-        std::fwrite("\r\n", 1, 2, log_file_);
-        std::fflush(log_file_);
+    writeLineToFile(log_file_, line);
+    if (isAlgorithmLogCategory(category)) {
+        writeLineToFile(algorithm_log_file_, line);
     }
 
     writeConsoleLine(type, line.c_str(), line.size());

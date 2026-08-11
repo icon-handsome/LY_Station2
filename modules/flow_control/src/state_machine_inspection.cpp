@@ -70,7 +70,7 @@ InspectionResult StateMachine::evaluateCachedInspection(quint32 taskId) const
         InspectionResult result;
         if (!tryEvaluateStation2Inspection(
                 m_scanSegmentCache, effectiveTaskId, quota, &result)) {
-            qWarning(LOG_FLOW).noquote() << result.message;
+            qWarning(LOG_ALGORITHM).noquote() << result.message;
         }
         return result;
     }
@@ -150,7 +150,7 @@ void StateMachine::publishInspectionOutcomeToHmiOnly(
 
     emit inspectionResultReady(result);
 
-    qInfo(LOG_FLOW).noquote()
+    qInfo(LOG_ALGORITHM).noquote()
         << triggerLabel << QStringLiteral("：后台真结果（仅 HMI/内存） Res=")
         << result.resultCode
         << QStringLiteral(" pathId=") << result.pathId
@@ -190,7 +190,7 @@ void StateMachine::joinBackgroundInspectionSolves()
         return;
     }
 
-    qInfo(LOG_FLOW).noquote()
+    qInfo(LOG_ALGORITHM).noquote()
         << QStringLiteral("等待后台解算线程结束…");
     running.join();
     {
@@ -198,7 +198,7 @@ void StateMachine::joinBackgroundInspectionSolves()
         m_bgSolveWorkerBusy = false;
         m_bgSolvePending.reset();
     }
-    qInfo(LOG_FLOW).noquote()
+    qInfo(LOG_ALGORITHM).noquote()
         << QStringLiteral("后台解算线程已接合。");
 }
 
@@ -209,7 +209,7 @@ void StateMachine::startBackgroundInspectionSolve(
     quint64 generation,
     const QString& triggerLabel)
 {
-    qInfo(LOG_FLOW).noquote()
+    qInfo(LOG_ALGORITHM).noquote()
         << triggerLabel << QStringLiteral("：PLC 假成功放行，启动后台解算 pathId=")
         << quota.pathId
         << QStringLiteral(" name=") << quota.pathName
@@ -235,7 +235,7 @@ void StateMachine::startBackgroundInspectionSolve(
         std::lock_guard<std::mutex> lock(m_bgSolveThreadsMutex);
         if (m_stopped.load(std::memory_order_acquire) ||
             !acceptResults->load(std::memory_order_acquire)) {
-            qWarning(LOG_FLOW).noquote()
+            qWarning(LOG_ALGORITHM).noquote()
                 << triggerLabel << QStringLiteral("：StateMachine 已 stop，跳过后台解算。");
             return;
         }
@@ -243,14 +243,14 @@ void StateMachine::startBackgroundInspectionSolve(
         // 已有执行中任务：只保留最新 pending，丢掉更早未执行快照（内存上限=执行中+1）。
         if (m_bgSolveWorkerBusy) {
             if (m_bgSolvePending.has_value()) {
-                qWarning(LOG_FLOW).noquote()
+                qWarning(LOG_ALGORITHM).noquote()
                     << QStringLiteral("后台解算繁忙，丢弃未执行任务 pathId=")
                     << m_bgSolvePending->quota.pathId
                     << QStringLiteral(" algorithm=") << m_bgSolvePending->quota.algorithm
                     << QStringLiteral("，改排 pathId=") << quota.pathId
                     << QStringLiteral(" algorithm=") << quota.algorithm;
             } else {
-                qInfo(LOG_FLOW).noquote()
+                qInfo(LOG_ALGORITHM).noquote()
                     << QStringLiteral("后台解算进行中，新任务进入唯一等待槽 pathId=")
                     << quota.pathId
                     << QStringLiteral(" algorithm=") << quota.algorithm;
@@ -408,7 +408,7 @@ void StateMachine::publishInspectionOutcome(
 
     emit inspectionResultReady(result);
 
-    qInfo(LOG_FLOW).noquote()
+    qInfo(LOG_ALGORITHM).noquote()
         << triggerLabel << QStringLiteral("：已完成 Res=") << result.resultCode
         << QStringLiteral(" pathId=") << result.pathId
         << QStringLiteral(" pathName=") << result.pathName
@@ -428,7 +428,7 @@ void StateMachine::maybeAutoRunInspectionBeforeLeavingPath()
         return;
     }
     if (!isActivePathQuotaComplete()) {
-        qInfo(LOG_FLOW).noquote()
+        qInfo(LOG_ALGORITHM).noquote()
             << QStringLiteral("切路前跳过自动检测：当前路径未齐套（缓存不足）。");
         return;
     }
@@ -440,7 +440,7 @@ void StateMachine::maybeAutoRunInspectionBeforeLeavingPath()
         algorithm == QLatin1String("self_check") ||
         algorithm == QLatin1String("weld_pending") ||
         !isBackgroundMeasurableAlgorithm(algorithm)) {
-        qInfo(LOG_FLOW).noquote()
+        qInfo(LOG_ALGORITHM).noquote()
             << QStringLiteral("切路前跳过自动检测：algorithm=")
             << (algorithm.isEmpty() ? QStringLiteral("<empty>") : algorithm)
             << QStringLiteral("（由专用触发处理或不适用）。");

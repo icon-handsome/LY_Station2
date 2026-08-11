@@ -9,6 +9,7 @@
 namespace scan_tracking::flow_control {
 
 Q_LOGGING_CATEGORY(LOG_FLOW, "flow_control")
+Q_LOGGING_CATEGORY(LOG_ALGORITHM, "algorithm")
 
 namespace state_machine_internal {
 

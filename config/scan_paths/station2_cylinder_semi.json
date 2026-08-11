@@ -1,6 +1,6 @@
 {
-  "version": "1.7",
-  "lastModified": "2026-07-23",
+  "version": "1.8",
+  "lastModified": "2026-08-11",
   "activePathId": 1,
   "scanPaths": [
     {
@@ -8,13 +8,13 @@
       "enabled": true,
       "name": "straight_weld",
       "algorithm": "weld_section",
-      "description": "直焊缝检测：AO47(臂)×11 + AO48(伸缩杆)×7；启用臂/伸缩 3D+智能，不启用 CXP",
+      "description": "直焊缝检测：AO47(臂)×12 + AO48(伸缩杆)×7；启用臂/伸缩 3D+智能，不启用 CXP",
       "capture": {
         "arm": { "mechEye3d": true, "hikSmartC": true, "hikCxp": false },
         "telescopic": { "mechEye3d": true, "hikSmartC": true }
       },
       "devices": [
-        { "device": "arm", "totalPoints": 11 },
+        { "device": "arm", "totalPoints": 12 },
         { "device": "telescopic", "totalPoints": 7 }
       ]
     },
@@ -37,14 +37,14 @@
       "enabled": true,
       "name": "length_volume",
       "algorithm": "length_volume",
-      "description": "外表面长度和容积：AO47(臂)×7；启用臂 3D+CXP，不启用智能相机与伸缩杆。volumeRadiusMm 需与现场核对",
+      "description": "外表面长度和容积：AO47(臂)×8；启用臂 3D+CXP，不启用智能相机与伸缩杆。volumeRadiusMm 需与现场核对",
       "volumeRadiusMm": 600.0,
       "capture": {
         "arm": { "mechEye3d": true, "hikSmartC": false, "hikCxp": true },
         "telescopic": { "mechEye3d": false, "hikSmartC": false }
       },
       "devices": [
-        { "device": "arm", "totalPoints": 7 }
+        { "device": "arm", "totalPoints": 8 }
       ]
     },
     {
@@ -52,7 +52,7 @@
       "enabled": true,
       "name": "thickness_inner_surface",
       "algorithm": "thickness_inner_surface",
-      "description": "厚度+内表面：AO47×12；启用臂 3D+CXP，不启用智能相机与伸缩杆",
+      "description": "厚度+内表面：AO47×12；点1/2/11/12厚度（内外配对），点3–10内表面；启用臂 3D+CXP，不启用智能相机与伸缩杆",
       "capture": {
         "arm": { "mechEye3d": true, "hikSmartC": false, "hikCxp": true },
         "telescopic": { "mechEye3d": false, "hikSmartC": false }
@@ -67,12 +67,12 @@
         { "pointIndex": 4, "purpose": "inner_surface", "needRotation": false },
         { "pointIndex": 5, "purpose": "inner_surface", "needRotation": false },
         { "pointIndex": 6, "purpose": "inner_surface", "needRotation": false },
-        { "pointIndex": 7, "purpose": "thickness_inner", "needRotation": false },
-        { "pointIndex": 8, "purpose": "thickness_outer", "needRotation": false },
+        { "pointIndex": 7, "purpose": "inner_surface", "needRotation": false },
+        { "pointIndex": 8, "purpose": "inner_surface", "needRotation": false },
         { "pointIndex": 9, "purpose": "inner_surface", "needRotation": false },
         { "pointIndex": 10, "purpose": "inner_surface", "needRotation": false },
-        { "pointIndex": 11, "purpose": "inner_surface", "needRotation": false },
-        { "pointIndex": 12, "purpose": "inner_surface", "needRotation": false }
+        { "pointIndex": 11, "purpose": "thickness_inner", "needRotation": false },
+        { "pointIndex": 12, "purpose": "thickness_outer", "needRotation": false }
       ]
     },
     {

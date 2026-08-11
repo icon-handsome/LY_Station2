@@ -13,6 +13,8 @@
 namespace scan_tracking::flow_control {
 
 Q_DECLARE_LOGGING_CATEGORY(LOG_FLOW)
+/// 测量算法编排/解算生命周期（写入 logs/algorithm_scan_tracking_*.txt）
+Q_DECLARE_LOGGING_CATEGORY(LOG_ALGORITHM)
 
 namespace state_machine_internal {
 

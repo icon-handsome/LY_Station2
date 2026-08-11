@@ -431,10 +431,19 @@ void StateMachine::processTrigger(const protocol::TriggerDefinition& trigger, co
 
     if (const auto* cfgMgr = common::ConfigManager::instance()) {
         m_activeTask.inspectionPathId = cfgMgr->activePathId();
-        const int configuredTotal = cfgMgr->enabledScanPointCount();
-        m_activeTask.scanSegmentTotal = configuredTotal > 0
-            ? configuredTotal
-            : cfgMgr->trackingConfig().scanSegmentTotal;
+        // 段号分母按触发所属设备本地配额，避免臂+伸缩杆之和（如 18+18=36）造成“路径总点数”误导。
+        int configuredTotal = 0;
+        if (trigger.stage == protocol::Stage::TelescopicScan) {
+            configuredTotal = cfgMgr->enabledTelescopicPointCount();
+        } else if (trigger.stage == protocol::Stage::ScanSegment) {
+            configuredTotal = cfgMgr->enabledArmPointCount();
+        } else {
+            configuredTotal = cfgMgr->enabledScanPointCount();
+        }
+        if (configuredTotal <= 0) {
+            configuredTotal = cfgMgr->trackingConfig().scanSegmentTotal;
+        }
+        m_activeTask.scanSegmentTotal = configuredTotal > 0 ? configuredTotal : 1;
     } else {
         m_activeTask.scanSegmentTotal = 1;
     }
