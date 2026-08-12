@@ -431,7 +431,8 @@ void StateMachine::processTrigger(const protocol::TriggerDefinition& trigger, co
 
     if (const auto* cfgMgr = common::ConfigManager::instance()) {
         m_activeTask.inspectionPathId = cfgMgr->activePathId();
-        // 段号分母按触发所属设备本地配额，避免臂+伸缩杆之和（如 18+18=36）造成“路径总点数”误导。
+        // 段号分母用当前触发设备的本地配额（AO47/AO48 各自 1..N）。
+        // 路径总点数 = 臂 + 伸缩杆（如 path5 环缝 18+18=36），另在日志中打印，避免与本地段号混淆。
         int configuredTotal = 0;
         if (trigger.stage == protocol::Stage::TelescopicScan) {
             configuredTotal = cfgMgr->enabledTelescopicPointCount();
@@ -451,13 +452,30 @@ void StateMachine::processTrigger(const protocol::TriggerDefinition& trigger, co
     m_activeTask.captureRequestId = 0;
     m_activeTask.workpieceGeneration = workpieceGeneration();
 
-    qInfo(LOG_FLOW).noquote()
-        << QStringLiteral("已接受触发") << protocol::triggerName(trigger)
-        << QStringLiteral(" pathId=") << m_activeTask.inspectionPathId
-        << QStringLiteral(" 超时s=") << m_activeTask.timeoutSeconds
-        << QStringLiteral(" 段号=") << m_activeTask.scanSegmentIndex
-        << QStringLiteral("/") << m_activeTask.scanSegmentTotal
-        << QStringLiteral(" workpieceGen=") << m_activeTask.workpieceGeneration;
+    {
+        const auto* cfgMgr = common::ConfigManager::instance();
+        const int armQuota = cfgMgr != nullptr ? cfgMgr->enabledArmPointCount() : 0;
+        const int telescopicQuota =
+            cfgMgr != nullptr ? cfgMgr->enabledTelescopicPointCount() : 0;
+        const int pathTotal = armQuota + telescopicQuota;
+        const QString deviceTag =
+            trigger.stage == protocol::Stage::TelescopicScan
+                ? QStringLiteral("telescopic")
+                : (trigger.stage == protocol::Stage::ScanSegment
+                       ? QStringLiteral("arm")
+                       : QStringLiteral("-"));
+        qInfo(LOG_FLOW).noquote()
+            << QStringLiteral("已接受触发") << protocol::triggerName(trigger)
+            << QStringLiteral(" pathId=") << m_activeTask.inspectionPathId
+            << QStringLiteral(" 超时s=") << m_activeTask.timeoutSeconds
+            << QStringLiteral(" 段号=") << m_activeTask.scanSegmentIndex
+            << QStringLiteral("/") << m_activeTask.scanSegmentTotal
+            << QStringLiteral("(") << deviceTag << QStringLiteral(")")
+            << QStringLiteral(" 路径配额 arm=") << armQuota
+            << QStringLiteral(" telescopic=") << telescopicQuota
+            << QStringLiteral(" total=") << pathTotal
+            << QStringLiteral(" workpieceGen=") << m_activeTask.workpieceGeneration;
+    }
 
     setAlarm(0, 0, QString());
     setState(AppState::Scanning);

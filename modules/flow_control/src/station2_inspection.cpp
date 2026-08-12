@@ -23,6 +23,13 @@ namespace scan_tracking::flow_control {
 
 namespace {
 
+using LengthVolumeMeasureService =
+    ::scan_tracking::length_volume_measure::LengthVolumeMeasureService;
+using LengthVolumeMeasureError =
+    ::scan_tracking::length_volume_measure::LengthVolumeMeasureError;
+using LengthVolumeMeasurement =
+    ::scan_tracking::length_volume_measure::LengthVolumeMeasurement;
+
 constexpr quint16 kNgReasonIncompleteSegments = 1u << 0;
 constexpr quint16 kNgReasonBundleInvalid = 1u << 1;
 constexpr quint16 kNgReasonPointCloudInvalid = 1u << 2;
@@ -933,10 +940,9 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
     return result;
 }
 
-scan_tracking::length_volume_measure::LengthVolumeMeasureService&
-sharedLengthVolumeMeasureService()
+LengthVolumeMeasureService& sharedLengthVolumeMeasureService()
 {
-    static scan_tracking::length_volume_measure::LengthVolumeMeasureService service;
+    static LengthVolumeMeasureService service;
     return service;
 }
 
@@ -947,7 +953,7 @@ bool ensureLengthVolumeMeasureReady(QString* errorMessage)
         return true;
     }
 
-    scan_tracking::length_volume_measure::LengthVolumeMeasureError error;
+    LengthVolumeMeasureError error;
     if (!service.initializeFromIni(QString(), &error)) {
         if (errorMessage != nullptr) {
             *errorMessage = error.message;
@@ -1145,8 +1151,8 @@ InspectionResult evaluateLengthVolumeInspection(
         << QStringLiteral(" 合并点数=") << static_cast<qulonglong>(mergedCount)
         << QStringLiteral(" volumeRadiusMm=") << volumeRadiusMm;
 
-    scan_tracking::length_volume_measure::LengthVolumeMeasurement measurement;
-    scan_tracking::length_volume_measure::LengthVolumeMeasureError error;
+    LengthVolumeMeasurement measurement;
+    LengthVolumeMeasureError error;
     if (!sharedLengthVolumeMeasureService().measure(
             mergedXyz.data(), mergedCount, volumeRadiusMm, &measurement, &error) ||
         !measurement.valid) {

@@ -40,8 +40,15 @@
       "description": "外表面长度和容积：AO47(臂)×8；启用臂 3D+CXP，不启用智能相机与伸缩杆。volumeRadiusMm 需与现场核对",
       "volumeRadiusMm": 600.0,
       "capture": {
-        "arm": { "mechEye3d": true, "hikSmartC": false, "hikCxp": true },
-        "telescopic": { "mechEye3d": false, "hikSmartC": false }
+        "arm": {
+          "mechEye3d": true,
+          "hikSmartC": false,
+          "hikCxp": true
+        },
+        "telescopic": {
+          "mechEye3d": false,
+          "hikSmartC": false
+        }
       },
       "devices": [
         { "device": "arm", "totalPoints": 8 }
