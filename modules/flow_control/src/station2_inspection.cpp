@@ -7,6 +7,7 @@
 
 #include "scan_tracking/common/config_manager.h"
 
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QLoggingCategory>
 #include <QtCore/QVector>
 
@@ -1411,7 +1412,11 @@ InspectionResult evaluateStation2Inspection(
     // 物化仅含有限 XYZ 的临时缓存；原全量 PointCloudFrame/纹理/CXP 不再进入后台解算持有。
     const ScanSegmentCache cache = materializeInspectionCache(snapshot);
     std::lock_guard<std::mutex> lock(station2EvaluateMutex());
-    return evaluateStation2InspectionUnlocked(cache, taskId, quota);
+    QElapsedTimer timer;
+    timer.start();
+    InspectionResult result = evaluateStation2InspectionUnlocked(cache, taskId, quota);
+    result.elapsedSeconds = timer.nsecsElapsed() / 1e9;
+    return result;
 }
 
 InspectionResult evaluateStation2Inspection(
@@ -1421,7 +1426,11 @@ InspectionResult evaluateStation2Inspection(
 {
     // 共享算法 Service 非可重入整路径状态；后台多路径并发时串行化整次评估。
     std::lock_guard<std::mutex> lock(station2EvaluateMutex());
-    return evaluateStation2InspectionUnlocked(cache, taskId, quota);
+    QElapsedTimer timer;
+    timer.start();
+    InspectionResult result = evaluateStation2InspectionUnlocked(cache, taskId, quota);
+    result.elapsedSeconds = timer.nsecsElapsed() / 1e9;
+    return result;
 }
 
 bool tryEvaluateStation2Inspection(
@@ -1436,10 +1445,14 @@ bool tryEvaluateStation2Inspection(
     std::unique_lock<std::mutex> lock(station2EvaluateMutex(), std::try_to_lock);
     if (!lock.owns_lock()) {
         *out = makeEvaluateBusyResult(quota);
+        out->elapsedSeconds = 0.0;
         return false;
     }
     const ScanSegmentCache cache = materializeInspectionCache(snapshot);
+    QElapsedTimer timer;
+    timer.start();
     *out = evaluateStation2InspectionUnlocked(cache, taskId, quota);
+    out->elapsedSeconds = timer.nsecsElapsed() / 1e9;
     return true;
 }
 
@@ -1455,9 +1468,13 @@ bool tryEvaluateStation2Inspection(
     std::unique_lock<std::mutex> lock(station2EvaluateMutex(), std::try_to_lock);
     if (!lock.owns_lock()) {
         *out = makeEvaluateBusyResult(quota);
+        out->elapsedSeconds = 0.0;
         return false;
     }
+    QElapsedTimer timer;
+    timer.start();
     *out = evaluateStation2InspectionUnlocked(cache, taskId, quota);
+    out->elapsedSeconds = timer.nsecsElapsed() / 1e9;
     return true;
 }
 

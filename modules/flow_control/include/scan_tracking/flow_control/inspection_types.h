@@ -47,9 +47,21 @@ struct InspectionResult {
     QString algorithm;
     InspectionMeasurement measurement;
     QString message;
+    /// 算法解算耗时（秒）；写入 result.txt 时保留两位小数。
+    double elapsedSeconds = 0.0;
 };
 
 void appendInspectionMeasurementFields(QJsonObject& payload, const InspectionMeasurement& measurement);
+
+/// 将单条路径检测结果格式化为可追加写入 result.txt 的文本块。
+QString formatInspectionResultTextBlock(const InspectionResult& result);
+
+/// 追加写入 <runCaptureRoot>/result.txt；目录不存在时尝试创建。
+/// @return 是否写入成功
+bool appendInspectionResultToRunFile(
+    const QString& runCaptureRoot,
+    const InspectionResult& result,
+    QString* errorMessage = nullptr);
 
 }  // namespace flow_control
 }  // namespace scan_tracking

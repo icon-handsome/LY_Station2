@@ -164,11 +164,36 @@ void StateMachine::publishInspectionOutcomeToHmiOnly(
         << QStringLiteral(" message=") << result.message;
 }
 
+void StateMachine::saveInspectionResultTxt(
+    const InspectionResult& result,
+    const QString& runCaptureRootHint)
+{
+    const QString runRoot = !runCaptureRootHint.trimmed().isEmpty()
+        ? runCaptureRootHint.trimmed()
+        : m_scanSegmentCache.runCaptureRoot();
+    QString error;
+    if (!appendInspectionResultToRunFile(runRoot, result, &error)) {
+        qWarning(LOG_ALGORITHM).noquote()
+            << QStringLiteral("result.txt 写入失败：") << error
+            << QStringLiteral(" pathId=") << result.pathId
+            << QStringLiteral(" algorithm=") << result.algorithm;
+        return;
+    }
+    qInfo(LOG_ALGORITHM).noquote()
+        << QStringLiteral("已追加路径算法结果到 result.txt pathId=") << result.pathId
+        << QStringLiteral(" algorithm=") << result.algorithm
+        << QStringLiteral(" runRoot=") << runRoot;
+}
+
 void StateMachine::applyBackgroundInspectionResult(
     quint64 generation,
     const InspectionResult& result,
-    const QString& triggerLabel)
+    const QString& triggerLabel,
+    const QString& runCaptureRoot)
 {
+    // 按解算启动时的 run 目录落盘；即使本件已 ResultReset，仍保留该次路径结果。
+    saveInspectionResultTxt(result, runCaptureRoot);
+
     if (!acceptWorkpieceGeneration(generation, triggerLabel + QStringLiteral(".bgDone"))) {
         return;
     }
@@ -210,7 +235,7 @@ void StateMachine::startBackgroundInspectionSolve(
     const QString& triggerLabel)
 {
     qInfo(LOG_ALGORITHM).noquote()
-        << triggerLabel << QStringLiteral("：PLC 假成功放行，启动后台解算 pathId=")
+        << triggerLabel << QStringLiteral("：启动后台解算 pathId=")
         << quota.pathId
         << QStringLiteral(" name=") << quota.pathName
         << QStringLiteral(" algorithm=") << quota.algorithm
@@ -229,6 +254,7 @@ void StateMachine::startBackgroundInspectionSolve(
     job.quota = quota;
     job.generation = generation;
     job.triggerLabel = triggerLabel;
+    job.runCaptureRoot = m_scanSegmentCache.runCaptureRoot();
 
     std::thread finishedThread;
     {
@@ -268,6 +294,7 @@ void StateMachine::startBackgroundInspectionSolve(
                 for (;;) {
                     const quint64 generation = job.generation;
                     const QString triggerLabel = job.triggerLabel;
+                    const QString runCaptureRoot = job.runCaptureRoot;
                     const InspectionResult result = evaluateStation2Inspection(
                         job.cloudSnapshot, job.taskId, job.quota);
                     // 解算结束立刻丢掉点云快照，只保留结果回投所需字段。
@@ -276,12 +303,17 @@ void StateMachine::startBackgroundInspectionSolve(
                     if (acceptResults->load(std::memory_order_acquire)) {
                         QMetaObject::invokeMethod(
                             receiver,
-                            [acceptResults, receiver, generation, result, triggerLabel]() {
+                            [acceptResults,
+                             receiver,
+                             generation,
+                             result,
+                             triggerLabel,
+                             runCaptureRoot]() {
                                 if (!acceptResults->load(std::memory_order_acquire)) {
                                     return;
                                 }
                                 receiver->applyBackgroundInspectionResult(
-                                    generation, result, triggerLabel);
+                                    generation, result, triggerLabel, runCaptureRoot);
                             },
                             Qt::QueuedConnection);
                     }
@@ -319,13 +351,27 @@ void StateMachine::releaseInspectionAndSolveInBackground()
         return;
     }
 
+    // 齐套时已提前启动后台解算：Trig_Inspection 仅假成功放行并切路，不再重复解算。
+    if (alreadyInspectedCurrentPathRun()) {
+        qInfo(LOG_ALGORITHM).noquote()
+            << QStringLiteral("Trig_Inspection：本路径已提前解算，直接假成功放行 pathId=")
+            << quota.pathId
+            << QStringLiteral(" name=") << quota.pathName
+            << QStringLiteral(" algorithm=") << algorithm;
+        writeFakeInspectionPlcSuccess();
+        maybeEmitPathFinished(quota.pathId, 1);
+        completeActiveTask(1, protocol::AckState::Completed, true);
+        prepareNextScanPathAfterSuccess();
+        return;
+    }
+
     if (!isActivePathQuotaComplete() || m_scanSegmentCache.cachedSegmentCount() == 0) {
         const InspectionResult result = evaluateInspectionForActiveTask();
         finishInspection(result);
         return;
     }
 
-    // 先抽轻量 XYZ 快照再假成功/切路；切路清缓存后全量 PointCloudFrame 可释放。
+    // 兜底：齐套后未提前解算（例如旧路径/异常），仍按原逻辑假成功 + 后台解算 + 切路。
     InspectionCloudSnapshot cloudSnapshot = buildInspectionCloudSnapshot(m_scanSegmentCache);
     const quint32 taskId =
         m_activeTask.taskId != 0 ? m_activeTask.taskId : cloudSnapshot.runTaskId;
@@ -419,11 +465,53 @@ void StateMachine::publishInspectionOutcome(
         << QStringLiteral(" thicknessMm=") << result.measurement.thicknessMm
         << QStringLiteral(" segments=") << result.sourcePointCount
         << QStringLiteral(" message=") << result.message;
+
+    saveInspectionResultTxt(result);
+}
+
+bool StateMachine::maybeStartInspectionSolveWhenQuotaComplete(const QString& triggerLabel)
+{
+    if (alreadyInspectedCurrentPathRun()) {
+        return false;
+    }
+    if (!isActivePathQuotaComplete() || m_scanSegmentCache.cachedSegmentCount() == 0) {
+        return false;
+    }
+
+    const InspectionQuota quota = buildActiveInspectionQuota();
+    if (!isBackgroundMeasurableAlgorithm(quota.algorithm)) {
+        return false;
+    }
+
+    // 先抽轻量 XYZ 快照再 mark；不切路、不清缓存，等 Trig_Inspection 放行后再 prepareNext。
+    InspectionCloudSnapshot cloudSnapshot = buildInspectionCloudSnapshot(m_scanSegmentCache);
+    const quint32 taskId =
+        m_activeTask.taskId != 0 ? m_activeTask.taskId : cloudSnapshot.runTaskId;
+    const quint64 generation = workpieceGeneration();
+
+    markCurrentPathInspectionDone();
+
+    qInfo(LOG_ALGORITHM).noquote()
+        << triggerLabel << QStringLiteral("：路径齐套，立即启动后台解算 pathId=")
+        << quota.pathId
+        << QStringLiteral(" name=") << quota.pathName
+        << QStringLiteral(" algorithm=") << quota.algorithm
+        << QStringLiteral(" taskId=") << taskId
+        << QStringLiteral(" snapSeg=") << cloudSnapshot.segmentCount()
+        << QStringLiteral(" workpieceGen=") << generation;
+
+    startBackgroundInspectionSolve(
+        std::move(cloudSnapshot),
+        taskId,
+        quota,
+        generation,
+        triggerLabel);
+    return true;
 }
 
 void StateMachine::maybeAutoRunInspectionBeforeLeavingPath()
 {
-    // 临时策略：PLC 暂不发 Trig_Inspection 时，切路/清缓存前自动跑齐套路径的算法。
+    // 兜底：齐套后未提前解算且 PLC 未发 Trig_Inspection 时，切路/清缓存前补跑。
     if (alreadyInspectedCurrentPathRun()) {
         return;
     }
@@ -447,15 +535,9 @@ void StateMachine::maybeAutoRunInspectionBeforeLeavingPath()
         return;
     }
 
-    if (m_scanSegmentCache.cachedSegmentCount() == 0) {
+    if (!maybeStartInspectionSolveWhenQuotaComplete(QStringLiteral("AutoInspection"))) {
         return;
     }
-
-    InspectionCloudSnapshot cloudSnapshot = buildInspectionCloudSnapshot(m_scanSegmentCache);
-    const quint32 taskId = cloudSnapshot.runTaskId;
-    const quint64 generation = workpieceGeneration();
-
-    markCurrentPathInspectionDone();
 
     // PLC 假成功：写检测结果字 + Inspection 通道 Ack/Res，放行观察/联锁。
     writeFakeInspectionPlcSuccess();
@@ -468,13 +550,6 @@ void StateMachine::maybeAutoRunInspectionBeforeLeavingPath()
             sendAck(*inspectionTrig, protocol::AckState::Completed);
         }
     }
-
-    startBackgroundInspectionSolve(
-        std::move(cloudSnapshot),
-        taskId,
-        quota,
-        generation,
-        QStringLiteral("AutoInspection"));
 }
 
 void StateMachine::prepareNextScanPathAfterSuccess()

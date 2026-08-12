@@ -76,7 +76,7 @@ public:
     virtual InspectionResult evaluateInspectionForActiveTask() const = 0;
     /// 同步收尾（编号识别等）：写 PLC + HMI。
     virtual void finishInspection(const InspectionResult& result) = 0;
-    /// 测量算法：先向 PLC 假成功放行，再后台解算；真结果只进内存并推 Qt/HMI。
+    /// 测量算法：若齐套时已提前后台解算则仅假成功放行；否则假成功后启动后台解算。真结果只进内存并推 Qt/HMI。
     virtual void releaseInspectionAndSolveInBackground() = 0;
 
     /// 向机械臂侧海康智能 C 发起编号识别，等待 OCR TCP 回包后写 PLC / 完成任务。

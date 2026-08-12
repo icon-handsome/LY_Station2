@@ -268,7 +268,10 @@ private:
     void finishSelfCheckCapture(const vision::MultiCameraCaptureBundle& bundle);
     /// 当前路径检测成功后：清空段缓存/扫描完成寄存器，并自动切到下一条启用路径（不依赖 PLC ResultReset）。
     void prepareNextScanPathAfterSuccess();
-    /// 临时策略（PLC 暂不发 Trig_Inspection）：离开当前路径前，若已齐套则后台跑算法（PLC 假成功）。
+    /// 路径齐套且为可后台测量算法时：立刻抽快照并启动后台解算（不切路、不 ACK Inspection）。
+    /// @return 是否实际启动了解算
+    bool maybeStartInspectionSolveWhenQuotaComplete(const QString& triggerLabel);
+    /// 离开当前路径前兜底：若尚未提前解算且已齐套，则后台跑算法并写 PLC 假成功。
     void maybeAutoRunInspectionBeforeLeavingPath();
     void markCurrentPathInspectionDone();
     bool alreadyInspectedCurrentPathRun() const;
@@ -276,6 +279,10 @@ private:
     void publishInspectionOutcome(const InspectionResult& result, const QString& triggerLabel);
     /// 真结果仅内存 + Qt/HMI，不写 Modbus。
     void publishInspectionOutcomeToHmiOnly(const InspectionResult& result, const QString& triggerLabel);
+    /// 将路径算法结果追加写入 run 目录下 result.txt。
+    void saveInspectionResultTxt(
+        const InspectionResult& result,
+        const QString& runCaptureRootHint = QString());
     /// 向 PLC 写入检测通道假成功（Res/相关字），便于放行流程。
     void writeFakeInspectionPlcSuccess();
     InspectionQuota buildActiveInspectionQuota() const;
@@ -301,7 +308,8 @@ private:
     void applyBackgroundInspectionResult(
         quint64 generation,
         const InspectionResult& result,
-        const QString& triggerLabel);
+        const QString& triggerLabel,
+        const QString& runCaptureRoot);
 
     struct BackgroundInspectionJob {
         InspectionCloudSnapshot cloudSnapshot;
@@ -309,6 +317,7 @@ private:
         InspectionQuota quota;
         quint64 generation = 0;
         QString triggerLabel;
+        QString runCaptureRoot;
     };
     /// 当前活跃路径的臂+伸缩杆缓存是否已齐套。
     bool isActivePathQuotaComplete() const;

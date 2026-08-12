@@ -104,16 +104,24 @@ void StateMachine::onBundleCaptureFinished(vision::MultiCameraCaptureBundle bund
             << m_scanSegmentCache.cachedCountForDevice(common::ScanDeviceKind::Telescopic)
             << QStringLiteral("/") << telescopicExpected;
 
-        if (m_scanSegmentCache.meetsDeviceQuotas(armExpected, telescopicExpected)) {
+        const bool quotaComplete =
+            m_scanSegmentCache.meetsDeviceQuotas(armExpected, telescopicExpected);
+        if (quotaComplete) {
             qInfo(LOG_FLOW).noquote()
                 << QStringLiteral("pathId=") << pathId
-                << QStringLiteral(" 扫描齐套。可 Trig_Inspection；若 PLC 直接再发段号 1，"
-                                  "IPC 将自动清缓存并切换到下一条启用路径。");
+                << QStringLiteral(" 扫描齐套：将立即尝试后台解算；"
+                                  "Trig_Inspection 到来时仅假成功放行。"
+                                  "若 PLC 直接再发段号 1，IPC 将自动清缓存并切换到下一条启用路径。");
         }
 
         // 先回 PLC ACK，落盘在后台线程执行，避免阻塞 Modbus/HMI 事件循环。
         completeScanSegmentCapture(1, imageCount, cloudFrameCount, protocol::AckState::Completed, true);
         scheduleScanSegmentPersist(device, segmentIndex, triggerLabel);
+
+        // 利用机械臂/伸缩杆回位真空期：齐套后立刻抽快照并后台解算。
+        if (quotaComplete) {
+            maybeStartInspectionSolveWhenQuotaComplete(QStringLiteral("QuotaComplete"));
+        }
         return;
     }
 
