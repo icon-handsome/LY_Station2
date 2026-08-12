@@ -6,7 +6,6 @@
 #include "scan_tracking/flow_control/station_trigger_policy.h"
 #include "scan_tracking/mech_eye/mech_eye_service.h"
 #include "scan_tracking/vision/hik_camera_c_controller.h"
-#include "scan_tracking/vision/vision_pipeline_service.h"
 
 namespace scan_tracking::flow_control {
 
@@ -24,7 +23,8 @@ bool g_hasLoggedScanCamerasReadyForPlc = false;
 /// 因相机未齐套主动关闭 Modbus 监听时置位，避免走「Modbus 断开故障」。
 bool g_expectModbusDisconnectForCameraGate = false;
 
-/// Mech + 海康智能 C + CXP（若启用）全部在线后才允许向 PLC 刷新心跳。
+/// Mech + 海康智能 C 在线后即可向 PLC 刷新心跳 / 开 Modbus。
+/// CXP 不参与在线门控（仍可后台连接，状态日志照常打印）。
 bool scanCamerasReadyForPlcOnline(const StateMachine& sm, QString* missingDetail)
 {
     QStringList missing;
@@ -59,17 +59,6 @@ bool scanCamerasReadyForPlcOnline(const StateMachine& sm, QString* missingDetail
         requireHikSmart(vision.telescopicGroup.hikCameraC.ipAddress, QStringLiteral("海康智能C-伸缩杆"));
     } else if (!hikController->isCameraConnectedToTcp()) {
         missing << QStringLiteral("海康智能C");
-    }
-
-    const bool cxpEnabled = configMgr != nullptr && configMgr->visionConfig().hikCxpEnabled;
-    if (cxpEnabled) {
-        vision::VisionPipelineService* vision = sm.visionPipelineService();
-        if (vision == nullptr || !vision->isHikCxpAConnected()) {
-            missing << QStringLiteral("CXP-A");
-        }
-        if (vision == nullptr || !vision->isHikCxpBConnected()) {
-            missing << QStringLiteral("CXP-B");
-        }
     }
 
     if (missingDetail != nullptr) {
@@ -614,7 +603,7 @@ void StateMachine::publishHeartbeat()
         g_hasLoggedScanCamerasReadyForPlc = true;
         if (camerasReady) {
             qInfo(LOG_FLOW).noquote()
-                << QStringLiteral("扫描相机已齐套（Mech+海康智能+CXP），启动/恢复 Modbus 与 IPC 心跳");
+                << QStringLiteral("扫描相机已齐套（Mech+海康智能，忽略CXP），启动/恢复 Modbus 与 IPC 心跳");
         } else {
             qWarning(LOG_FLOW).noquote()
                 << QStringLiteral("扫描相机未齐套，关闭 Modbus 监听（PLC 无法探测 IPC 在线）：")

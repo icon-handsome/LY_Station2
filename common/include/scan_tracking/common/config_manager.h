@@ -70,6 +70,8 @@ struct VisionConfig {
     VisionCameraEndpointConfig hikCameraB;
     VisionCameraEndpointConfig hikCameraC;
     bool hikCxpEnabled = false;              ///< 是否启用 CXP 相机链路
+    /// true：段扫/自检仍正常进入；仅不采 CXP、不因 CXP 失败阻断（CXP 另作他用时开）
+    bool hikCxpBypassOk = false;
     int hikCxpCaptureTimeoutMs = 5000;
     float hikCxpExposureTimeUs = 50000.0f;
     float hikCxpGain = 0.0f;

@@ -43,7 +43,8 @@ public:
     bool isHikCxpAConnected() const;
     bool isHikCxpBConnected() const;
 
-    /// 组合采集通道开关（路径级矩阵解析后传入；与全局 hikCxpEnabled 取与）。
+    /// 组合采集通道开关（路径级矩阵解析后传入）。
+    /// 真实 CXP 采图：与全局 hikCxpEnabled 取与；hikCxpBypassOk=true 时不采 CXP、不因 CXP 失败阻断。
     struct BundleCaptureOptions {
         bool useMechEye = true;    ///< 本轮仍强制需要 Mech 服务；预留按路径关闭
         bool useHikCxp = true;     ///< 是否采 CXP 双目（伸缩杆侧会被忽略）

@@ -417,9 +417,12 @@ quint64 VisionPipelineService::requestCaptureBundle(
         return 0;
     }
 
-    // 机械臂：可并行 CXP（LB）+ 海康 C；伸缩杆：仅海康 C。路径开关与全局 hikCxpEnabled 取与。
+    // 机械臂：可并行 CXP（LB）+ 海康 C；伸缩杆：仅海康 C。
+    // hikCxpBypassOk：路径仍正常进（梅卡/海康C照采），仅不采 CXP、不把 CXP 计入成败、不报采图失败。
+    const bool pathWantsCxp = options.useHikCxp && !telescopicConcurrentHikC;
+    const bool skipCxpCapture = pathWantsCxp && m_config.hikCxpBypassOk;
     const bool useCxp =
-        options.useHikCxp && !telescopicConcurrentHikC && m_config.hikCxpEnabled &&
+        pathWantsCxp && !skipCxpCapture && m_config.hikCxpEnabled &&
         m_hikCameraAService != nullptr && m_hikCameraBService != nullptr;
     const bool useHikCameraC =
         options.useHikSmartC && m_hikCameraCController != nullptr;
@@ -437,6 +440,7 @@ quint64 VisionPipelineService::requestCaptureBundle(
     if (useHikCameraC) {
         request.hikCameraCIp = deviceGroup.hikCameraC.ipAddress;
     }
+    // 仅真实采图时写入 CXP key；旁路时不写入，避免 cxpParticipated() 把空结果判成失败。
     if (useCxp) {
         request.hikCameraAKey = m_config.hikCxpCameraA.cameraKey;
         request.hikCameraBKey = m_config.hikCxpCameraB.cameraKey;
@@ -457,6 +461,12 @@ quint64 VisionPipelineService::requestCaptureBundle(
         pending.hikADone = true;
         pending.hikBDone = true;
     }
+    if (skipCxpCapture) {
+        pending.bundle.lbPoseResult.invoked = false;
+        pending.bundle.lbPoseResult.success = false;
+        pending.bundle.lbPoseResult.message =
+            QStringLiteral("hikCxpBypassOk=true：本段不采 CXP，跳过 LB。");
+    }
     if (!useHikCameraC) {
         pending.hikCDone = true;
     }
@@ -476,6 +486,8 @@ quint64 VisionPipelineService::requestCaptureBundle(
     parts << QStringLiteral("梅卡");
     if (useCxp) {
         parts << QStringLiteral("CXP");
+    } else if (skipCxpCapture) {
+        parts << QStringLiteral("CXP(跳过采图)");
     }
     if (useHikCameraC) {
         parts << QStringLiteral("海康C");
@@ -487,14 +499,15 @@ quint64 VisionPipelineService::requestCaptureBundle(
             .arg(kMechToHikCaptureDelayMs));
     qInfo(LOG_VISION_PIPELINE).noquote()
         << QStringLiteral("[VisionPipeline] 组合采集 requestId=%1 segment=%2 device=%3 "
-                          "channels=%4 pathOpts(cxp=%5 smart=%6)")
+                          "channels=%4 pathOpts(cxp=%5 smart=%6) cxpSkipCapture=%7")
                .arg(request.requestId)
                .arg(segmentIndex)
                .arg(telescopicConcurrentHikC ? QStringLiteral("telescopic")
                                              : QStringLiteral("arm"))
                .arg(parts.join(QLatin1Char('+')))
                .arg(options.useHikCxp)
-               .arg(options.useHikSmartC);
+               .arg(options.useHikSmartC)
+               .arg(skipCxpCapture);
     return request.requestId;
 }
 

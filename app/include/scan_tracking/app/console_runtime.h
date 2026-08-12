@@ -4,7 +4,9 @@
 
 #include <QtCore/QCoreApplication>
 
+#include <atomic>
 #include <memory>
+#include <thread>
 #include <vector>
 
 namespace scan_tracking {
@@ -68,6 +70,9 @@ private:
     bool orbbecCaptureOnStart_ = false;
     bool orbbecSaveCaptureToDisk_ = false;
     int orbbecCaptureTimeoutMs_ = 0;
+    /// CXP 启动预热后台线程；退出前 join，避免 stop 时仍在采图。
+    std::thread cxpWarmupThread_;
+    std::shared_ptr<std::atomic_bool> cxpWarmupCancel_;
 };
 
 }  // namespace scan_tracking::app

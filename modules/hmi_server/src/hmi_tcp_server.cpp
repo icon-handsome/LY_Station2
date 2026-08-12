@@ -567,6 +567,7 @@ void HmiTcpServer::handleCmdGetConfig(const QJsonObject& message)
     visionObj[QLatin1String("hikSdkRoot")] = cfgMgr->visionConfig().hikSdkRoot; // Hik SDK 根目录
 
     visionObj[QLatin1String("hikCxpEnabled")] = cfgMgr->visionConfig().hikCxpEnabled;
+    visionObj[QLatin1String("hikCxpBypassOk")] = cfgMgr->visionConfig().hikCxpBypassOk;
     visionObj[QLatin1String("hikCxpCaptureTimeoutMs")] = cfgMgr->visionConfig().hikCxpCaptureTimeoutMs;
 
     QJsonObject hikAObj;

@@ -703,6 +703,7 @@ void ConfigManager::writeDefaults(QSettings& settings)
     settings.setValue("hikCameraCArmIp", "192.168.8.209");
     settings.setValue("hikCameraCArmFtpDirectory", "D:/HikCameraFTP/arm");
     settings.setValue("hikCxpEnabled", true);
+    settings.setValue("hikCxpBypassOk", false);
     settings.setValue("hikCxpCaptureTimeoutMs", 5000);
     settings.setValue("hikCxpExposureTimeUs", 50000);
     settings.setValue("hikCxpGain", 0.0);
@@ -898,6 +899,7 @@ void ConfigManager::load(const QString& filePath)
     m_visionConfig.hikCameraCTcpListenPort = static_cast<quint16>(settings.value("hikCameraCTcpListenPort", 8999).toUInt());
     m_visionConfig.hikCameraCFtpDirectory = settings.value("hikCameraCFtpDirectory", "D:/HikCameraFTP").toString();
     m_visionConfig.hikCxpEnabled = settings.value("hikCxpEnabled", false).toBool();
+    m_visionConfig.hikCxpBypassOk = settings.value("hikCxpBypassOk", false).toBool();
     m_visionConfig.hikCxpCaptureTimeoutMs = settings.value("hikCxpCaptureTimeoutMs", 5000).toInt();
     m_visionConfig.hikCxpExposureTimeUs =
         static_cast<float>(settings.value("hikCxpExposureTimeUs", 50000).toDouble());

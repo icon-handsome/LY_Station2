@@ -1070,9 +1070,14 @@ void StateMachine::finishSelfCheckCapture(const vision::MultiCameraCaptureBundle
     }
 
     constexpr quint16 kFailCapture = 1u << 4;
-    const bool cxpOk = bundle.cxpParticipated() &&
-                       bundle.hikCameraAResult.success() &&
-                       bundle.hikCameraBResult.success();
+    const auto* configMgr = common::ConfigManager::instance();
+    const bool hikCxpBypassOk =
+        configMgr != nullptr && configMgr->visionConfig().hikCxpBypassOk;
+    // hikCxpBypassOk：不采 CXP，也不因缺 CXP 判失败；仍要求梅卡成功。
+    const bool cxpOk =
+        hikCxpBypassOk ||
+        (bundle.cxpParticipated() && bundle.hikCameraAResult.success() &&
+         bundle.hikCameraBResult.success());
     const bool ok = bundle.mechEyeResult.success() && cxpOk;
 
     if (!ok) {
@@ -1081,7 +1086,8 @@ void StateMachine::finishSelfCheckCapture(const vision::MultiCameraCaptureBundle
         notifySelfCheckFinished(2, kFailCapture);
         qWarning(LOG_FLOW).noquote()
             << QStringLiteral("自检采集失败：") << bundle.summary()
-            << QStringLiteral(" cxpParticipated=") << bundle.cxpParticipated();
+            << QStringLiteral(" cxpParticipated=") << bundle.cxpParticipated()
+            << QStringLiteral(" hikCxpBypassOk=") << hikCxpBypassOk;
         return;
     }
 

@@ -59,6 +59,10 @@ void SelfCheckHandler::execute(TaskHandlerContext& ctx)
     const auto* configMgr = common::ConfigManager::instance();
     const bool hikCxpEnabled =
         configMgr != nullptr && configMgr->visionConfig().hikCxpEnabled;
+    const bool hikCxpBypassOk =
+        configMgr != nullptr && configMgr->visionConfig().hikCxpBypassOk;
+    // 跳过 CXP 采图时不要求采集卡就绪；段扫/自检仍正常进入。
+    const bool cxpGateOk = hikCxpBypassOk || hikCxpEnabled;
 
     QString homeDetail;
     const bool homeOk = isTurntableAndTelescopicHome(ctx.commandBlock, &homeDetail);
@@ -73,14 +77,14 @@ void SelfCheckHandler::execute(TaskHandlerContext& ctx)
         qWarning(LOG_FLOW).noquote()
             << QStringLiteral("自检：转盘/伸缩杆未回零或机械臂仍在运动：") << homeDetail;
     }
-    if (!visionReady || !hikCxpEnabled) {
+    if (!visionReady || !cxpGateOk) {
         failWord0 |= kFailCxpOrVision;
         if (!visionReady) {
             qWarning(LOG_FLOW).noquote() << QStringLiteral("自检：视觉流水线不可用。");
         }
-        if (!hikCxpEnabled) {
+        if (!cxpGateOk) {
             qWarning(LOG_FLOW).noquote()
-                << QStringLiteral("自检：hikCxpEnabled=false，无法进行 CXP 自检采集。");
+                << QStringLiteral("自检：hikCxpEnabled=false 且 hikCxpBypassOk=false，无法进行自检采集。");
         }
     }
     if (!modbusReady) {
