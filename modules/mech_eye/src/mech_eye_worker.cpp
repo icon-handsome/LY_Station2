@@ -164,15 +164,55 @@ GrayTextureFrame ConvertGrayTextureFrame(const mmind::eye::Frame2D& frame2d)
 
 class MechEyeWorker::Impl {
 public:
-    Impl()
-        : camera(std::make_unique<mmind::eye::Camera>())
+    Impl() = default;
+
+    /// 调用方须已持有 mechEyeSdkMutex。多网卡工控机上 Camera() 可能随机 AV，失败则退避重试。
+    bool ensureCamera(const QString& roleTag, QString* errorMessage)
     {
+        if (camera != nullptr) {
+            return true;
+        }
+
+        constexpr int kMaxCreateAttempts = 5;
+        for (int attempt = 1; attempt <= kMaxCreateAttempts; ++attempt) {
+            mmind::eye::Camera* raw = nullptr;
+            const unsigned seh = sdk_seh::createCamera(&raw);
+            if (seh == 0 && raw != nullptr) {
+                camera.reset(raw);
+                if (attempt > 1) {
+                    qInfo(LOG_MECHEYE_WORKER).noquote()
+                        << roleTag
+                        << QStringLiteral(" MechEye Camera 构造成功（第 %1 次尝试）")
+                               .arg(attempt);
+                }
+                return true;
+            }
+            qWarning(LOG_MECHEYE_WORKER).noquote()
+                << roleTag
+                << QStringLiteral(" MechEye Camera 构造失败 seh=0x%1（%2/%3）")
+                       .arg(seh, 0, 16)
+                       .arg(attempt)
+                       .arg(kMaxCreateAttempts);
+            if (raw != nullptr) {
+                delete raw;
+            }
+            // 持锁休眠：避免另一路梅卡同时 new Camera，加剧 SDK 不稳定。
+            QThread::msleep(static_cast<unsigned long>(150 * attempt));
+        }
+
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("MechEye Camera 对象构造失败（已重试）");
+        }
+        return false;
     }
 
-    void resetCamera()
+    void resetCamera(const QString& roleTag)
     {
+        // 调用方须已持有 mechEyeSdkMutex。
         discoveredCameras.clear();
-        camera = std::make_unique<mmind::eye::Camera>();
+        camera.reset();
+        QString unused;
+        ensureCamera(roleTag, &unused);
     }
 
     std::unique_ptr<mmind::eye::Camera> camera;
@@ -562,6 +602,16 @@ bool MechEyeWorker::ensureConnected(const QString& cameraKey, int timeoutMs, QSt
 
 bool MechEyeWorker::connectCamera(const QString& cameraKey, int timeoutMs, QString* errorMessage)
 {
+    if (m_impl == nullptr) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("MechEye worker 未初始化");
+        }
+        return false;
+    }
+    if (!m_impl->ensureCamera(taggedMessage(QString()), errorMessage)) {
+        return false;
+    }
+
     const QString normalizedKey = cameraKey.trimmed();
     const unsigned int timeout =
         static_cast<unsigned int>(timeoutMs > 0 ? timeoutMs : 5000);
@@ -711,7 +761,7 @@ void MechEyeWorker::resetSdkCamera()
     m_busy = false;
     m_cameraInfo = {};
     if (m_impl != nullptr) {
-        m_impl->resetCamera();
+        m_impl->resetCamera(taggedMessage(QString()));
     }
 }
 

@@ -34,6 +34,8 @@ struct InspectionSegmentCloud {
 /// 后台解算 / 评估共用的点云快照（与 ScanSegmentCache 解耦，避免双持有全量 bundle）。
 struct InspectionCloudSnapshot {
     quint32 runTaskId = 0;
+    /// 原扫描 run 落盘根；物化临时缓存时必须复用，禁止再 mkdir 新的 run_*。
+    QString runCaptureRoot;
     QVector<InspectionSegmentCloud> segments;
 
     void clear();

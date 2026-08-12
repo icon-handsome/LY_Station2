@@ -14,6 +14,11 @@ namespace {
 
 // 真正的 C++ SDK 调用放在独立函数；含 __try 的包装函数内不得出现需析构的局部对象（MSVC C2712）。
 
+mmind::eye::Camera* createCameraBody()
+{
+    return new mmind::eye::Camera();
+}
+
 int connectByIpBody(
     mmind::eye::Camera* camera,
     const std::string* ip,
@@ -92,6 +97,25 @@ int capture2DAnd3DBody(
 }
 
 }  // namespace
+
+unsigned createCamera(mmind::eye::Camera** outCamera)
+{
+    if (outCamera == nullptr) {
+        return 0xFFFFFFFFu;
+    }
+    *outCamera = nullptr;
+#ifdef _MSC_VER
+    __try {
+        *outCamera = createCameraBody();
+        return 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return static_cast<unsigned>(GetExceptionCode());
+    }
+#else
+    *outCamera = createCameraBody();
+    return 0;
+#endif
+}
 
 unsigned connectByIp(
     mmind::eye::Camera* camera,

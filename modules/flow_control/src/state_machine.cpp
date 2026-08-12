@@ -174,7 +174,7 @@ void StateMachine::start()
     publishIpcStatus();
     qInfo(LOG_FLOW).noquote() << QStringLiteral("状态机启动完成。");
 
-    // 心跳定时器兼作「相机齐套才开 Modbus」门控；未齐套时不 listen，PLC 连不上。
+    // 心跳定时器兼作「相机齐套才首次开 Modbus」门控；已建链后相机抖动不再关监听。
     if (m_heartbeatTimer != nullptr && !m_heartbeatTimer->isActive()) {
         m_heartbeatTimer->start();
     }

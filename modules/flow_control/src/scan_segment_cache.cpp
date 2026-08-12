@@ -94,26 +94,51 @@ bool ScanSegmentCache::ensureRunRoot(quint32 taskId, QString* runRootOut, QStrin
     return true;
 }
 
+void ScanSegmentCache::bindExistingRunRoot(quint32 taskId, const QString& runRoot)
+{
+    if (taskId != 0) {
+        m_runTaskId = taskId;
+    }
+    const QString root = runRoot.trimmed();
+    if (!root.isEmpty()) {
+        m_runCaptureRoot = root;
+    }
+}
+
 void ScanSegmentCache::storeSegment(
     common::ScanDeviceKind device,
     int localIndex,
     quint32 taskId,
     vision::MultiCameraCaptureBundle&& bundle)
 {
-    if (!ensureRunRoot(taskId)) {
-        qWarning(LOG_SCAN_CACHE).noquote()
-            << QStringLiteral("storeSegment：run 目录未就绪，段数据仅保留内存")
-            << QStringLiteral(" device=")
-            << deviceTagForPath(device)
-            << QStringLiteral(" localIndex=") << localIndex
-            << QStringLiteral(" taskId=") << taskId;
+    storeSegment(device, localIndex, taskId, std::move(bundle), true);
+}
+
+void ScanSegmentCache::storeSegment(
+    common::ScanDeviceKind device,
+    int localIndex,
+    quint32 taskId,
+    vision::MultiCameraCaptureBundle&& bundle,
+    bool prepareRunRoot)
+{
+    if (prepareRunRoot) {
+        if (!ensureRunRoot(taskId)) {
+            qWarning(LOG_SCAN_CACHE).noquote()
+                << QStringLiteral("storeSegment：run 目录未就绪，段数据仅保留内存")
+                << QStringLiteral(" device=")
+                << deviceTagForPath(device)
+                << QStringLiteral(" localIndex=") << localIndex
+                << QStringLiteral(" taskId=") << taskId;
+        }
+    } else if (taskId != 0 && m_runTaskId == 0) {
+        m_runTaskId = taskId;
     }
 
     ScanSegmentCacheKey key{device, localIndex};
     ScanSegmentCacheEntry entry;
     entry.device = device;
     entry.segmentIndex = localIndex;
-    entry.taskId = taskId;
+    entry.taskId = taskId != 0 ? taskId : m_runTaskId;
     entry.runCaptureRoot = m_runCaptureRoot;
     entry.captureTimestamp = m_runTimestamp;
     entry.bundle = std::move(bundle);

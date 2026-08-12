@@ -16,6 +16,7 @@
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
 #include <QtCore/QElapsedTimer>
+#include <QtCore/QEventLoop>
 #include <QtCore/QFile>
 #include <QtCore/QLoggingCategory>
 #include <QtCore/QMetaObject>
@@ -465,11 +466,16 @@ void ConsoleRuntime::initModules()
                                          : scan_tracking::common::VisionConfig{};
     const QString telescopicMechKey = visionConfigForMech.telescopicGroup.mechEye.cameraKey;
     const QString armMechKey = visionConfigForMech.armGroup.mechEye.cameraKey;
+    qInfo(appLog).noquote()
+        << QStringLiteral("准备启动梅卡：伸缩杆=") << telescopicMechKey
+        << QStringLiteral(" 机械臂=") << armMechKey
+        << QStringLiteral(" hikCxpBypassOk=") << visionConfigForMech.hikCxpBypassOk;
 
     mechEyeTelescopicService_ = std::make_unique<scan_tracking::mech_eye::MechEyeService>(
         QStringLiteral("梅卡-伸缩杆"));
     mechEyeArmService_ = std::make_unique<scan_tracking::mech_eye::MechEyeService>(
         QStringLiteral("梅卡-机械臂"));
+    qInfo(appLog) << QStringLiteral("梅卡服务对象已创建，开始 start…");
 
     const auto connectMechEyeLogs = [this](scan_tracking::mech_eye::MechEyeService* service) {
         if (service == nullptr) {
@@ -495,8 +501,34 @@ void ConsoleRuntime::initModules()
     connectMechEyeLogs(mechEyeTelescopicService_.get());
     connectMechEyeLogs(mechEyeArmService_.get());
 
+    qInfo(appLog).noquote() << QStringLiteral("调用 梅卡-伸缩杆 start…");
     mechEyeTelescopicService_->start(telescopicMechKey);
+    qInfo(appLog).noquote() << QStringLiteral("梅卡-伸缩杆 start() 已返回，等待首路连机稳定后再启机械臂…");
+
+    // 工控机多网卡下 MechEye SDK 双路并发 new/connect 易随机 AV；串行等待首路 Ready/Error。
+    {
+        constexpr int kWaitMs = 20000;
+        constexpr int kStepMs = 100;
+        int waited = 0;
+        while (waited < kWaitMs) {
+            const auto st = mechEyeTelescopicService_->state();
+            if (st == scan_tracking::mech_eye::CameraRuntimeState::Ready ||
+                st == scan_tracking::mech_eye::CameraRuntimeState::Error) {
+                break;
+            }
+            QThread::msleep(static_cast<unsigned long>(kStepMs));
+            QCoreApplication::processEvents(QEventLoop::AllEvents, kStepMs);
+            waited += kStepMs;
+        }
+        qInfo(appLog).noquote()
+            << QStringLiteral("梅卡-伸缩杆当前状态=")
+            << static_cast<int>(mechEyeTelescopicService_->state())
+            << QStringLiteral(" waitedMs=") << waited;
+    }
+
+    qInfo(appLog).noquote() << QStringLiteral("调用 梅卡-机械臂 start…");
     mechEyeArmService_->start(armMechKey);
+    qInfo(appLog).noquote() << QStringLiteral("梅卡-机械臂 start() 已返回");
     qInfo(appLog).noquote()
         << QStringLiteral("梅卡相机服务已启动：伸缩杆=") << telescopicMechKey
         << QStringLiteral(" 机械臂=") << armMechKey;

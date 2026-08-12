@@ -53,11 +53,23 @@ public:
     /// taskId=0 时若已有 run 根则复用，保证整次运行只有一个文件夹。
     bool ensureRunRoot(quint32 taskId, QString* runRootOut = nullptr, QString* timestampOut = nullptr);
 
+    /// 绑定已有 run 根（不 mkdir）。供后台解算物化临时缓存复用主实例落盘根。
+    /// runRoot 为空时仅写入 taskId（若非 0），不新建目录。
+    void bindExistingRunRoot(quint32 taskId, const QString& runRoot);
+
     void storeSegment(
         common::ScanDeviceKind device,
         int localIndex,
         quint32 taskId,
         vision::MultiCameraCaptureBundle&& bundle);
+
+    /// prepareRunRoot=false：不解盘、不新建 run_*（临时评估缓存）。
+    void storeSegment(
+        common::ScanDeviceKind device,
+        int localIndex,
+        quint32 taskId,
+        vision::MultiCameraCaptureBundle&& bundle,
+        bool prepareRunRoot);
 
     bool persistSegment(
         common::ScanDeviceKind device,

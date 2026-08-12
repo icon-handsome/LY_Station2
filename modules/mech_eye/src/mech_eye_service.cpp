@@ -71,6 +71,9 @@ void MechEyeService::start(const QString& defaultCameraKey)
         return;
     }
 
+    qInfo(LOG_MECHEYE_SVC).noquote()
+        << (m_roleName.isEmpty() ? QStringLiteral("[MechEye]") : QStringLiteral("[%1]").arg(m_roleName))
+        << QStringLiteral(" start: registerMetaTypes");
     registerMetaTypes();
 
     const auto* configManager = common::ConfigManager::instance();
@@ -90,6 +93,9 @@ void MechEyeService::start(const QString& defaultCameraKey)
         m_defaultCaptureTimeoutMs = 5000;
     }
 
+    qInfo(LOG_MECHEYE_SVC).noquote()
+        << (m_roleName.isEmpty() ? QStringLiteral("[MechEye]") : QStringLiteral("[%1]").arg(m_roleName))
+        << QStringLiteral(" start: 创建 worker key=") << m_defaultCameraKey;
     m_workerThread = new QThread();
     m_worker = new MechEyeWorker(m_roleName);
 
@@ -116,6 +122,9 @@ void MechEyeService::start(const QString& defaultCameraKey)
         m_roleName.isEmpty()
             ? QStringLiteral("MechEyeWorkerThread")
             : QStringLiteral("MechEyeWorker-%1").arg(m_roleName));
+    qInfo(LOG_MECHEYE_SVC).noquote()
+        << (m_roleName.isEmpty() ? QStringLiteral("[MechEye]") : QStringLiteral("[%1]").arg(m_roleName))
+        << QStringLiteral(" start: 启动 worker 线程");
     m_workerThread->start();
 
     m_started = true;
@@ -124,6 +133,9 @@ void MechEyeService::start(const QString& defaultCameraKey)
     m_currentState = CameraRuntimeState::Idle;
 
     emit sig_startWorker(m_defaultCameraKey);
+    qInfo(LOG_MECHEYE_SVC).noquote()
+        << (m_roleName.isEmpty() ? QStringLiteral("[MechEye]") : QStringLiteral("[%1]").arg(m_roleName))
+        << QStringLiteral(" start: 已投递 startWorker（异步连机）");
 }
 
 /* 停止 Mech-Eye 服务。

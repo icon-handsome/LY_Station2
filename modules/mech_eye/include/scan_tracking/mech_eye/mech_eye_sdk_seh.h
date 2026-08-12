@@ -18,6 +18,8 @@ namespace mech_eye {
 namespace sdk_seh {
 
 /// @return 0=未发生 SEH；非 0=Windows 异常码（相机对象可能已损坏，调用方应重建）
+unsigned createCamera(mmind::eye::Camera** outCamera);
+
 unsigned connectByIp(
     mmind::eye::Camera* camera,
     const std::string& ip,

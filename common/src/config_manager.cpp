@@ -721,6 +721,7 @@ void ConfigManager::writeDefaults(QSettings& settings)
     settings.setValue("heartbeatIntervalMs", 1000);
     settings.setValue("simulatedProcessingMs", 300);
     settings.setValue("scanFailurePolicy", QStringLiteral("segment"));
+    settings.setValue("algorithmEnabled", true);
     settings.endGroup();
 
     settings.beginGroup("Tracking");
@@ -899,7 +900,6 @@ void ConfigManager::load(const QString& filePath)
     m_visionConfig.hikCameraCTcpListenPort = static_cast<quint16>(settings.value("hikCameraCTcpListenPort", 8999).toUInt());
     m_visionConfig.hikCameraCFtpDirectory = settings.value("hikCameraCFtpDirectory", "D:/HikCameraFTP").toString();
     m_visionConfig.hikCxpEnabled = settings.value("hikCxpEnabled", false).toBool();
-    m_visionConfig.hikCxpBypassOk = settings.value("hikCxpBypassOk", false).toBool();
     m_visionConfig.hikCxpCaptureTimeoutMs = settings.value("hikCxpCaptureTimeoutMs", 5000).toInt();
     m_visionConfig.hikCxpExposureTimeUs =
         static_cast<float>(settings.value("hikCxpExposureTimeUs", 50000).toDouble());
@@ -918,6 +918,7 @@ void ConfigManager::load(const QString& filePath)
         settings.value("hikCxpCameraBKey", "DA9122998").toString();
     m_visionConfig.hikCxpCameraB.serialNumber =
         settings.value("hikCxpCameraBSerial", "DA9122998").toString();
+    m_visionConfig.hikCxpBypassOk = settings.value("hikCxpBypassOk", false).toBool();
 
     const QString telescopicMechKey =
         settings.value("mechEyeTelescopicKey", m_visionConfig.mechEyeCameraKey).toString();
@@ -963,6 +964,7 @@ void ConfigManager::load(const QString& filePath)
     m_flowControlConfig.simulatedProcessingMs = settings.value("simulatedProcessingMs", 300).toInt();
     m_flowControlConfig.scanFailurePolicy =
         settings.value("scanFailurePolicy", QStringLiteral("segment")).toString().trimmed().toLower();
+    m_flowControlConfig.algorithmEnabled = settings.value("algorithmEnabled", true).toBool();
     settings.endGroup();
 
     // 兼容工位1配置键：若存在 [Resume] scanFailurePolicy 则覆盖（便于双工位共用 ini）
@@ -979,7 +981,8 @@ void ConfigManager::load(const QString& filePath)
     }
     qInfo(LOG_CONFIG).noquote()
         << QStringLiteral("扫描失败清理策略 scanFailurePolicy=")
-        << m_flowControlConfig.scanFailurePolicy;
+        << m_flowControlConfig.scanFailurePolicy
+        << QStringLiteral(" algorithmEnabled=") << m_flowControlConfig.algorithmEnabled;
 
     // --- [Tracking] ---
     settings.beginGroup("Tracking");

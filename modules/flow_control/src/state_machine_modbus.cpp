@@ -75,20 +75,12 @@ void StateMachine::onModbusConnected()
         return;
     }
 
-    // 相机未齐套时不允许对 PLC 暴露在线：立刻关监听，由心跳门控稍后重试。
     QString missingCameras;
     if (!scanCamerasReadyForPlcOnline(*this, &missingCameras)) {
+        // 海康心跳抖动等导致短暂未齐套时：保持 Modbus，不主动 disconnect。
         qWarning(LOG_FLOW).noquote()
-            << QStringLiteral("Modbus 已监听但扫描相机未齐套，关闭监听：")
+            << QStringLiteral("Modbus 已连接但扫描相机暂未齐套，保持监听：")
             << missingCameras;
-        g_expectModbusDisconnectForCameraGate = true;
-        if (m_modbus != nullptr) {
-            m_modbus->disconnectDevice();
-        }
-        if (m_heartbeatTimer != nullptr && !m_heartbeatTimer->isActive()) {
-            m_heartbeatTimer->start();
-        }
-        return;
     }
 
     qInfo(LOG_FLOW) << QStringLiteral("Modbus 已连接，流程控制就绪。");
@@ -100,7 +92,7 @@ void StateMachine::onModbusConnected()
         clearActiveTask();
     }
 
-    // 重连后丢弃旧命令块，首帧只建快照；避免把 PLC 仍拉高的 Trig 当成新触发。
+    // 重连后丢弃旧命令块；首帧若 Trig 仍为 1 且空闲则补接受（见 onCommandBlockUpdated）。
     m_lastCommandBlock.clear();
     m_blockTrigUntilIdleOffset = -1;
     g_latchedTrigRisingMask = 0;
@@ -317,17 +309,21 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
     // 空闲时：仅在 40047 相对上次轮询变化时切路，避免覆盖 IPC 自动切路结果。
     applyPlcScanPathId(values, previousCommandBlock, true);
 
-    // 首帧（previous 为空）只建快照，不消费已为 1 的 Trig（IPC 重启/重连常见残留）。
+    // 首帧（previous 为空）：重连/启动后若 Trig 仍保持 1 且空闲，补接受（勿一律当残留丢掉）。
+    // 用全 0 伪上一拍制造上升沿，复用 selectPendingTrigger / 锁存逻辑。
     if (previousCommandBlock.isEmpty()) {
-        for (const auto& trigger : protocol::triggerDefinitions()) {
-            if (trigger.trigOffset >= 0 &&
-                trigger.trigOffset < values.size() &&
-                values.value(trigger.trigOffset) == 1) {
-                qInfo(LOG_FLOW).noquote()
-                    << QStringLiteral("忽略启动/重连首帧残留触发 ")
-                    << protocol::triggerName(trigger)
-                    << QStringLiteral("（需 PLC 先拉低再置 1）");
+        QVector<quint16> syntheticPrevious(values.size(), 0);
+        if (const protocol::TriggerDefinition* heldTrigger =
+                selectPendingTrigger(values, syntheticPrevious)) {
+            qInfo(LOG_FLOW).noquote()
+                << QStringLiteral("重连/首帧补接受保持为 1 的触发 ")
+                << protocol::triggerName(*heldTrigger)
+                << QStringLiteral("（空闲且 Trig=1）");
+            if (heldTrigger->trigOffset >= 0 && heldTrigger->trigOffset < 64) {
+                g_latchedTrigRisingMask &=
+                    ~(1ull << static_cast<unsigned>(heldTrigger->trigOffset));
             }
+            processTrigger(*heldTrigger, values);
         }
         return;
     }
@@ -559,11 +555,8 @@ void StateMachine::publishIpcStatus()
         return;
     }
 
-    // 扫描相机未齐套时不写 IPC 状态块（含 40101 心跳），PLC 约 3s 内判 IPC 离线，
-    // 从而不会派机械臂去扫位点。
-    if (!scanCamerasReadyForPlcOnline(*this, nullptr)) {
-        return;
-    }
+    // 已建链则持续写心跳：海康心跳短暂超时不再冻心跳，避免 PLC 误判 IPC 离线。
+    // 新扫触发仍由 processTrigger 在相机未齐套时拒绝。
 
     QVector<quint16> status = {
         m_heartbeatCounter,
@@ -606,21 +599,16 @@ void StateMachine::publishHeartbeat()
                 << QStringLiteral("扫描相机已齐套（Mech+海康智能，忽略CXP），启动/恢复 Modbus 与 IPC 心跳");
         } else {
             qWarning(LOG_FLOW).noquote()
-                << QStringLiteral("扫描相机未齐套，关闭 Modbus 监听（PLC 无法探测 IPC 在线）：")
+                << QStringLiteral("扫描相机暂未齐套，保持 Modbus 监听与心跳；新扫触发仍会拒绝：")
                 << missingDetail;
         }
     }
 
-    // 未齐套：不监听 Modbus，PLC 建不了链，比单纯冻心跳更彻底。
-    if (!camerasReady) {
-        if (m_modbus->isConnected()) {
-            g_expectModbusDisconnectForCameraGate = true;
-            m_modbus->disconnectDevice();
-        }
-        return;
-    }
-
+    // 仅「尚未建链」时用齐套作为首次 listen 门控；已建链后相机抖动不再 disconnect。
     if (!m_modbus->isConnected()) {
+        if (!camerasReady) {
+            return;
+        }
         if (!m_modbus->connectDevice()) {
             qWarning(LOG_FLOW).noquote()
                 << QStringLiteral("扫描相机已齐套，但 Modbus 监听启动失败");

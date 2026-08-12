@@ -234,6 +234,17 @@ void StateMachine::startBackgroundInspectionSolve(
     quint64 generation,
     const QString& triggerLabel)
 {
+    const auto* cfgMgr = common::ConfigManager::instance();
+    if (cfgMgr != nullptr && !cfgMgr->flowControlConfig().algorithmEnabled) {
+        qInfo(LOG_ALGORITHM).noquote()
+            << triggerLabel
+            << QStringLiteral("：algorithmEnabled=false，跳过后台解算 pathId=")
+            << quota.pathId
+            << QStringLiteral(" algorithm=") << quota.algorithm;
+        snapshot.clear();
+        return;
+    }
+
     qInfo(LOG_ALGORITHM).noquote()
         << triggerLabel << QStringLiteral("：启动后台解算 pathId=")
         << quota.pathId
@@ -343,6 +354,32 @@ void StateMachine::releaseInspectionAndSolveInBackground()
 {
     const InspectionQuota quota = buildActiveInspectionQuota();
     const QString algorithm = quota.algorithm.trimmed();
+
+    const auto* cfgMgr = common::ConfigManager::instance();
+    if (cfgMgr != nullptr && !cfgMgr->flowControlConfig().algorithmEnabled) {
+        qInfo(LOG_ALGORITHM).noquote()
+            << QStringLiteral("Trig_Inspection：algorithmEnabled=false，跳过解算并假成功放行 pathId=")
+            << quota.pathId
+            << QStringLiteral(" algorithm=") << algorithm;
+        if (!alreadyInspectedCurrentPathRun()) {
+            markCurrentPathInspectionDone();
+            InspectionResult result;
+            result.resultCode = 1;
+            result.pathId = quota.pathId;
+            result.pathName = quota.pathName;
+            result.algorithm = quota.algorithm;
+            result.sourcePointCount = m_scanSegmentCache.cachedSegmentCount();
+            result.message = QStringLiteral(
+                "algorithmEnabled=false：已跳过算法解算，返回 OK（仅跑采集主流程）");
+            saveInspectionResultTxt(result);
+            publishInspectionOutcomeToHmiOnly(result, QStringLiteral("Trig_Inspection"));
+        }
+        writeFakeInspectionPlcSuccess();
+        maybeEmitPathFinished(quota.pathId, 1);
+        completeActiveTask(1, protocol::AckState::Completed, true);
+        prepareNextScanPathAfterSuccess();
+        return;
+    }
 
     if (!isBackgroundMeasurableAlgorithm(algorithm)) {
         // 未接入/不适用：仍同步回真实 Res，避免 PLC 误以为测完。
@@ -481,6 +518,29 @@ bool StateMachine::maybeStartInspectionSolveWhenQuotaComplete(const QString& tri
     const InspectionQuota quota = buildActiveInspectionQuota();
     if (!isBackgroundMeasurableAlgorithm(quota.algorithm)) {
         return false;
+    }
+
+    const auto* cfgMgr = common::ConfigManager::instance();
+    if (cfgMgr != nullptr && !cfgMgr->flowControlConfig().algorithmEnabled) {
+        const quint32 taskId = m_activeTask.taskId != 0 ? m_activeTask.taskId
+                                                       : m_scanSegmentCache.runTaskId();
+        markCurrentPathInspectionDone();
+        InspectionResult result;
+        result.resultCode = 1;
+        result.pathId = quota.pathId;
+        result.pathName = quota.pathName;
+        result.algorithm = quota.algorithm;
+        result.sourcePointCount = m_scanSegmentCache.cachedSegmentCount();
+        result.message = QStringLiteral(
+            "algorithmEnabled=false：跳过后台解算，返回 OK（仅跑采集主流程）");
+        saveInspectionResultTxt(result);
+        publishInspectionOutcomeToHmiOnly(result, triggerLabel);
+        qInfo(LOG_ALGORITHM).noquote()
+            << triggerLabel << QStringLiteral("：") << result.message
+            << QStringLiteral(" pathId=") << quota.pathId
+            << QStringLiteral(" algorithm=") << quota.algorithm
+            << QStringLiteral(" taskId=") << taskId;
+        return true;
     }
 
     // 先抽轻量 XYZ 快照再 mark；不切路、不清缓存，等 Trig_Inspection 放行后再 prepareNext。

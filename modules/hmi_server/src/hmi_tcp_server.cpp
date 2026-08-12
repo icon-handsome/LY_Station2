@@ -601,6 +601,7 @@ void HmiTcpServer::handleCmdGetConfig(const QJsonObject& message)
     flowControlObj[QLatin1String("pollIntervalMs")] = cfgMgr->flowControlConfig().pollIntervalMs; // 轮询间隔
     flowControlObj[QLatin1String("heartbeatIntervalMs")] = cfgMgr->flowControlConfig().heartbeatIntervalMs; // 心跳间隔
     flowControlObj[QLatin1String("simulatedProcessingMs")] = cfgMgr->flowControlConfig().simulatedProcessingMs; // 模拟处理间隔
+    flowControlObj[QLatin1String("algorithmEnabled")] = cfgMgr->flowControlConfig().algorithmEnabled;
     configPayload[QLatin1String("flowControl")] = flowControlObj;
     
     // 7. 扫描路径配置（含路径目录 + 当前活跃路径）

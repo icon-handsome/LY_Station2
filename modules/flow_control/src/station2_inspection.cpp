@@ -48,6 +48,25 @@ void fillPathMeta(InspectionResult* result, const InspectionQuota& quota)
     result->algorithm = quota.algorithm;
 }
 
+bool isAlgorithmSolveEnabled()
+{
+    const auto* cfgMgr = common::ConfigManager::instance();
+    return cfgMgr == nullptr || cfgMgr->flowControlConfig().algorithmEnabled;
+}
+
+InspectionResult makeAlgorithmDisabledOkResult(const InspectionQuota& quota)
+{
+    InspectionResult result;
+    fillPathMeta(&result, quota);
+    result.resultCode = 1;
+    result.ngReasonWord0 = 0;
+    result.ngReasonWord1 = 0;
+    result.measureItemCount = 0;
+    result.message = QStringLiteral(
+        "algorithmEnabled=false：已跳过算法解算，返回 OK（仅跑采集主流程）");
+    return result;
+}
+
 bool isWithinDeviceQuota(
     common::ScanDeviceKind device,
     int localIndex,
@@ -1213,6 +1232,16 @@ InspectionResult evaluateStation2InspectionUnlocked(
         effective.algorithm = QStringLiteral("weld_section");
     }
 
+    if (!isAlgorithmSolveEnabled()) {
+        InspectionResult result = makeAlgorithmDisabledOkResult(effective);
+        result.sourcePointCount =
+            effective.total() > 0 ? effective.total() : cache.cachedSegmentCount();
+        qInfo(LOG_STATION2_INSPECTION).noquote() << result.message
+            << QStringLiteral(" pathId=") << result.pathId
+            << QStringLiteral(" algorithm=") << result.algorithm;
+        return result;
+    }
+
     if (effective.algorithm == QLatin1String("weld_section")) {
         return evaluateWeldSectionInspection(cache, taskId, effective);
     }
@@ -1271,6 +1300,7 @@ std::mutex& station2EvaluateMutex()
 void InspectionCloudSnapshot::clear()
 {
     runTaskId = 0;
+    runCaptureRoot.clear();
     segments.clear();
 }
 
@@ -1315,6 +1345,7 @@ InspectionCloudSnapshot buildInspectionCloudSnapshot(const ScanSegmentCache& cac
 {
     InspectionCloudSnapshot snapshot;
     snapshot.runTaskId = cache.runTaskId();
+    snapshot.runCaptureRoot = cache.runCaptureRoot();
     snapshot.segments.reserve(cache.cachedSegmentCount());
 
     for (const ScanSegmentCacheKey& key : cache.cachedKeys()) {
@@ -1358,6 +1389,7 @@ InspectionCloudSnapshot buildInspectionCloudSnapshot(const ScanSegmentCache& cac
     qInfo(LOG_STATION2_INSPECTION).noquote()
         << QStringLiteral("已构建检测轻量快照 segments=") << snapshot.segmentCount()
         << QStringLiteral(" taskId=") << snapshot.runTaskId
+        << QStringLiteral(" runRoot=") << snapshot.runCaptureRoot
         << QStringLiteral(" arm=") << snapshot.countForDevice(common::ScanDeviceKind::Arm)
         << QStringLiteral(" telescopic=")
         << snapshot.countForDevice(common::ScanDeviceKind::Telescopic);
@@ -1368,7 +1400,8 @@ InspectionCloudSnapshot buildInspectionCloudSnapshot(const ScanSegmentCache& cac
 ScanSegmentCache materializeInspectionCache(const InspectionCloudSnapshot& snapshot)
 {
     ScanSegmentCache cache;
-    cache.ensureRunRoot(snapshot.runTaskId);
+    // 复用主缓存 run 根；prepareRunRoot=false，禁止再 mkdir 出新的 run_0_*。
+    cache.bindExistingRunRoot(snapshot.runTaskId, snapshot.runCaptureRoot);
 
     for (const InspectionSegmentCloud& segment : snapshot.segments) {
         vision::MultiCameraCaptureBundle bundle;
@@ -1405,7 +1438,8 @@ ScanSegmentCache materializeInspectionCache(const InspectionCloudSnapshot& snaps
             segment.device,
             segment.localIndex,
             snapshot.runTaskId,
-            std::move(bundle));
+            std::move(bundle),
+            /*prepareRunRoot=*/false);
     }
     return cache;
 }
@@ -1415,6 +1449,30 @@ InspectionResult evaluateStation2Inspection(
     quint32 taskId,
     const InspectionQuota& quota)
 {
+    // 关闭算法时禁止物化大快照，避免联调主流程时仍占数百 MB / 调 DLL。
+    if (!isAlgorithmSolveEnabled()) {
+        InspectionQuota effective = quota;
+        if (effective.pathId <= 0 || effective.algorithm.isEmpty()) {
+            if (const auto* cfgMgr = common::ConfigManager::instance()) {
+                if (effective.pathId <= 0) {
+                    effective.pathId = cfgMgr->activePathId();
+                }
+                if (effective.pathName.isEmpty()) {
+                    effective.pathName = cfgMgr->activePathName();
+                }
+                if (effective.algorithm.isEmpty()) {
+                    effective.algorithm = cfgMgr->activePathAlgorithm();
+                }
+            }
+        }
+        InspectionResult result = makeAlgorithmDisabledOkResult(effective);
+        result.sourcePointCount = snapshot.segmentCount();
+        qInfo(LOG_STATION2_INSPECTION).noquote() << result.message
+            << QStringLiteral(" pathId=") << result.pathId
+            << QStringLiteral(" algorithm=") << result.algorithm;
+        return result;
+    }
+
     // 物化仅含有限 XYZ 的临时缓存；原全量 PointCloudFrame/纹理/CXP 不再进入后台解算持有。
     const ScanSegmentCache cache = materializeInspectionCache(snapshot);
     std::lock_guard<std::mutex> lock(station2EvaluateMutex());
@@ -1447,6 +1505,11 @@ bool tryEvaluateStation2Inspection(
 {
     if (out == nullptr) {
         return false;
+    }
+    if (!isAlgorithmSolveEnabled()) {
+        *out = evaluateStation2Inspection(snapshot, taskId, quota);
+        out->elapsedSeconds = 0.0;
+        return true;
     }
     std::unique_lock<std::mutex> lock(station2EvaluateMutex(), std::try_to_lock);
     if (!lock.owns_lock()) {

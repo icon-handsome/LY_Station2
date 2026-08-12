@@ -70,8 +70,6 @@ struct VisionConfig {
     VisionCameraEndpointConfig hikCameraB;
     VisionCameraEndpointConfig hikCameraC;
     bool hikCxpEnabled = false;              ///< 是否启用 CXP 相机链路
-    /// true：段扫/自检仍正常进入；仅不采 CXP、不因 CXP 失败阻断（CXP 另作他用时开）
-    bool hikCxpBypassOk = false;
     int hikCxpCaptureTimeoutMs = 5000;
     float hikCxpExposureTimeUs = 50000.0f;
     float hikCxpGain = 0.0f;
@@ -83,6 +81,9 @@ struct VisionConfig {
     QString hikCameraCFtpDirectory;            ///< Camera C FTP 落盘目录（遗留，缺省映射伸缩杆组）
     VisionDeviceGroupConfig telescopicGroup;   ///< 伸缩杆组：Mech + 海康 C
     VisionDeviceGroupConfig armGroup;          ///< 机械臂组：Mech + 海康 C
+    /// true：段扫/自检仍正常进入；仅不采 CXP、不因 CXP 失败阻断（CXP 另作他用时开）
+    /// 放在结构体末尾，避免插入中部导致 VisionConfig ABI/偏移错位引发启动崩溃。
+    bool hikCxpBypassOk = false;
 };
 
 /// 流程控制轮询与心跳参数，对应 config.ini [FlowControl] 节。
@@ -93,6 +94,8 @@ struct FlowControlConfig {
     /// 扫描失败清理策略（对齐工位1 [Resume] scanFailurePolicy；本工位暂无完整续跑）
     /// segment=仅剔失败本段；path=清当前路径段缓存（保留 run_*）；workpiece=整表清零并解绑 run_*
     QString scanFailurePolicy = QStringLiteral("segment");
+    /// false：跳过所有路径算法解算（厚度/容积/焊缝等），检测通道直接返回 OK，仅跑采集主流程。
+    bool algorithmEnabled = true;
 };
 
 /// 扫描跟踪相关参数，对应 config.ini [Tracking] 节。
