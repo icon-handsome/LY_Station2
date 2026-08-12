@@ -143,9 +143,9 @@ bool appendFiniteXyz(
         *finitePointCount = 0;
         return false;
     }
-    if (declared > maxByBuffer) {
+    if (declared > maxByBuffer) {   
         qWarning(LOG_STATION2_INSPECTION)
-            << "pointCount exceeds pointsXYZ size, clamped"
+            << "pointCount exceeds pointsXYZ size, clamped" 
             << "declared=" << declared
             << "bufferPoints=" << maxByBuffer;
     }
