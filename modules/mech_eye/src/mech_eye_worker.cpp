@@ -5,6 +5,18 @@
 #include <QtCore/QLoggingCategory>
 #include <QtCore/QRegularExpression>
 #include <QtCore/QThread>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <iphlpapi.h>
+#else
+#include <QtNetwork/QHostAddress>
+#include <QtNetwork/QNetworkAddressEntry>
+#include <QtNetwork/QNetworkInterface>
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -48,10 +60,142 @@ bool isIpv4Address(const QString& text)
     return pattern.match(text.trimmed()).hasMatch();
 }
 
+struct LocalIpv4Candidate {
+    QString interfaceName;
+    QString address;
+    int prefixLength = 0;
+};
+
+bool preflightDirectIpv4Route(const QString& cameraIp, QString* errorMessage)
+{
+    qInfo(LOG_MECHEYE_WORKER).noquote()
+        << QStringLiteral("MechEye 网络预检开始：camera=%1").arg(cameraIp);
+#ifdef _WIN32
+    SOCKADDR_INET destination{};
+    destination.si_family = AF_INET;
+    if (InetPtonW(
+            AF_INET,
+            reinterpret_cast<PCWSTR>(cameraIp.utf16()),
+            &destination.Ipv4.sin_addr) != 1) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("MechEye 网络预检失败：目标不是有效 IPv4 地址: %1")
+                                .arg(cameraIp);
+        }
+        return false;
+    }
+    MIB_IPFORWARD_ROW2 route{};
+    SOCKADDR_INET source{};
+    const DWORD routeResult = GetBestRoute2(
+        nullptr, 0, nullptr, &destination, 0, &route, &source);
+    const bool hasIpv4Source =
+        routeResult == NO_ERROR && source.si_family == AF_INET &&
+        source.Ipv4.sin_addr.S_un.S_addr != 0;
+    const bool isDirectRoute =
+        hasIpv4Source && route.NextHop.si_family == AF_INET &&
+        route.NextHop.Ipv4.sin_addr.S_un.S_addr == 0;
+    if (!isDirectRoute) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral(
+                "MechEye 网络预检失败：相机 %1 没有可用的直连 IPv4 路由（Windows错误码=%2）；"
+                "请检查相机网线，并为对应网卡配置同网段静态 IP。为避免厂商 SDK 终止主进程，本次未调用 SDK。")
+                                .arg(cameraIp)
+                                .arg(routeResult);
+        }
+        return false;
+    }
+
+    wchar_t addressText[INET_ADDRSTRLEN]{};
+    InetNtopW(AF_INET, &source.Ipv4.sin_addr, addressText, INET_ADDRSTRLEN);
+    qInfo(LOG_MECHEYE_WORKER).noquote()
+        << QStringLiteral("MechEye 网络预检通过：camera=%1 local=%2 interfaceIndex=%3")
+               .arg(cameraIp, QString::fromWCharArray(addressText))
+               .arg(route.InterfaceIndex);
+    return true;
+#else
+    const QHostAddress target(cameraIp);
+    bool targetOk = false;
+    const quint32 targetV4 = target.toIPv4Address(&targetOk);
+    if (!targetOk) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("MechEye 网络预检失败：目标不是有效 IPv4 地址: %1")
+                                .arg(cameraIp);
+        }
+        return false;
+    }
+
+    QVector<LocalIpv4Candidate> candidates;
+    for (const QNetworkInterface& iface : QNetworkInterface::allInterfaces()) {
+        const auto flags = iface.flags();
+        if (!flags.testFlag(QNetworkInterface::IsUp) ||
+            !flags.testFlag(QNetworkInterface::IsRunning) ||
+            flags.testFlag(QNetworkInterface::IsLoopBack)) {
+            continue;
+        }
+
+        for (const QNetworkAddressEntry& entry : iface.addressEntries()) {
+            if (entry.ip().protocol() != QAbstractSocket::IPv4Protocol ||
+                entry.prefixLength() <= 0 || entry.prefixLength() > 32) {
+                continue;
+            }
+
+            bool localOk = false;
+            const quint32 localV4 = entry.ip().toIPv4Address(&localOk);
+            if (!localOk || localV4 == targetV4) {
+                continue;
+            }
+
+            const int prefixLength = entry.prefixLength();
+            const quint32 mask = prefixLength == 32
+                ? 0xFFFFFFFFu
+                : (0xFFFFFFFFu << (32 - prefixLength));
+            if ((localV4 & mask) == (targetV4 & mask)) {
+                candidates.push_back({
+                    iface.humanReadableName(), entry.ip().toString(), prefixLength});
+            }
+        }
+    }
+#endif
+#ifndef _WIN32
+    if (candidates.size() == 1) {
+        qInfo(LOG_MECHEYE_WORKER).noquote()
+            << QStringLiteral("MechEye 网络预检通过：camera=%1 local=%2/%3 interface=%4")
+                   .arg(cameraIp, candidates.front().address)
+                   .arg(candidates.front().prefixLength)
+                   .arg(candidates.front().interfaceName);
+        return true;
+    }
+
+    QStringList candidateDescriptions;
+    for (const auto& candidate : candidates) {
+        candidateDescriptions.push_back(
+            QStringLiteral("%1=%2/%3")
+                .arg(candidate.interfaceName, candidate.address)
+                .arg(candidate.prefixLength));
+    }
+
+    if (errorMessage != nullptr) {
+        if (candidates.isEmpty()) {
+            *errorMessage = QStringLiteral(
+                "MechEye 网络预检失败：没有已启用且与相机 %1 同网段的本机 IPv4；"
+                "请检查相机网线，并为对应网卡配置同网段静态 IP。为避免厂商 SDK 终止主进程，本次未调用 SDK。")
+                                .arg(cameraIp);
+        } else {
+            *errorMessage = QStringLiteral(
+                "MechEye 网络预检失败：相机 %1 同网段存在 %2 个可用本机地址（%3）；"
+                "请禁用无关网卡或移除重复网段地址。为避免厂商 SDK 选错网口并终止主进程，本次未调用 SDK。")
+                                .arg(cameraIp)
+                                .arg(candidates.size())
+                                .arg(candidateDescriptions.join(QStringLiteral(", ")));
+        }
+    }
+    return false;
+#endif
+}
+
 QString formatSdkSehError(unsigned sehCode)
 {
     return QStringLiteral(
-               "Mech-Eye SDK 原生异常 0x%1（常见于多网卡同网段）。已隔离相机对象，进程继续运行，后续采集将重试连接。")
+               "Mech-Eye SDK 原生异常 0x%1（常见于多网卡）。相机对象已隔离；若为访问冲突请重启进程后再连机。")
         .arg(sehCode, 0, 16);
 }
 
@@ -166,14 +310,22 @@ class MechEyeWorker::Impl {
 public:
     Impl() = default;
 
-    /// 调用方须已持有 mechEyeSdkMutex。多网卡工控机上 Camera() 可能随机 AV，失败则退避重试。
+    /// 调用方须已持有 mechEyeSdkMutex。
+    /// AV 后标记进程级隔离并立即失败，禁止同进程继续 new Camera。
     bool ensureCamera(const QString& roleTag, QString* errorMessage)
     {
         if (camera != nullptr) {
             return true;
         }
+        if (sdk_seh::isSdkProcessIsolated()) {
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral(
+                    "MechEye SDK 已因原生崩溃隔离，请重启进程后再连接");
+            }
+            return false;
+        }
 
-        constexpr int kMaxCreateAttempts = 5;
+        constexpr int kMaxCreateAttempts = 3;
         for (int attempt = 1; attempt <= kMaxCreateAttempts; ++attempt) {
             mmind::eye::Camera* raw = nullptr;
             const unsigned seh = sdk_seh::createCamera(&raw);
@@ -187,15 +339,24 @@ public:
                 }
                 return true;
             }
+
+            // SEH 失败时 createCamera 已将指针置空；切勿 delete 半残对象。
             qWarning(LOG_MECHEYE_WORKER).noquote()
                 << roleTag
                 << QStringLiteral(" MechEye Camera 构造失败 seh=0x%1（%2/%3）")
                        .arg(seh, 0, 16)
                        .arg(attempt)
                        .arg(kMaxCreateAttempts);
-            if (raw != nullptr) {
-                delete raw;
+
+            if (sdk_seh::isAccessViolationSeh(seh) || sdk_seh::isSdkProcessIsolated()) {
+                sdk_seh::markSdkProcessIsolated();
+                if (errorMessage != nullptr) {
+                    *errorMessage = QStringLiteral(
+                        "MechEye Camera 构造发生访问冲突（SDK 已隔离，请重启进程）");
+                }
+                return false;
             }
+
             // 持锁休眠：避免另一路梅卡同时 new Camera，加剧 SDK 不稳定。
             QThread::msleep(static_cast<unsigned long>(150 * attempt));
         }
@@ -204,15 +365,6 @@ public:
             *errorMessage = QStringLiteral("MechEye Camera 对象构造失败（已重试）");
         }
         return false;
-    }
-
-    void resetCamera(const QString& roleTag)
-    {
-        // 调用方须已持有 mechEyeSdkMutex。
-        discoveredCameras.clear();
-        camera.reset();
-        QString unused;
-        ensureCamera(roleTag, &unused);
     }
 
     std::unique_ptr<mmind::eye::Camera> camera;
@@ -245,6 +397,7 @@ void MechEyeWorker::startWorker(const QString& defaultCameraKey)
     constexpr int kMaxAttempts = 3;
     constexpr int kRetryIntervalMs = 3000;
     QString errorMessage;
+    CaptureErrorCode fatalCode = CaptureErrorCode::ConnectFailed;
 
     for (int attempt = 1; attempt <= kMaxAttempts; ++attempt) {
         {
@@ -257,6 +410,16 @@ void MechEyeWorker::startWorker(const QString& defaultCameraKey)
                         .arg(m_cameraInfo.serialNumber, m_cameraInfo.ipAddress));
                 return;
             }
+        }
+
+        if (sdk_seh::isSdkProcessIsolated() ||
+            errorMessage.contains(QStringLiteral("访问冲突")) ||
+            errorMessage.contains(QStringLiteral("SDK 已隔离"))) {
+            fatalCode = CaptureErrorCode::SdkNativeFault;
+            break;
+        }
+        if (errorMessage.contains(QStringLiteral("网络预检失败"))) {
+            break;
         }
 
         if (attempt < kMaxAttempts) {
@@ -272,8 +435,9 @@ void MechEyeWorker::startWorker(const QString& defaultCameraKey)
     }
 
     setRuntimeState(CameraRuntimeState::Error, errorMessage);
-    // 启动重试耗尽仍失败：不退出进程，后续采集/刷新时会再重试。
-    emit fatalError(CaptureErrorCode::ConnectFailed, taggedMessage(errorMessage));
+    // 普通连机失败：不退出进程，后续采集/刷新时会再重试。
+    // 原生 AV：SdkNativeFault，调用方应跳过同进程内其它梅卡连机并提示重启。
+    emit fatalError(fatalCode, taggedMessage(errorMessage));
 }
 
 /* 停止 worker：发出断开流程并把状态收束到 Stopped。 */
@@ -402,16 +566,46 @@ void MechEyeWorker::performCapture(const scan_tracking::mech_eye::CaptureRequest
 
             // ---- 采集前设置深度范围 ----
             {
-                auto& userSet = m_impl->camera->currentUserSet();
-
-                // 从配置读取并设置深度范围
+                struct DepthRangeCtx {
+                    mmind::eye::Camera* camera = nullptr;
+                    int minMm = 0;
+                    int maxMm = 0;
+                    bool ok = false;
+                } depthCtx;
+                depthCtx.camera = m_impl->camera.get();
                 const auto& visionCfg = common::ConfigManager::instance()->visionConfig();
-                mmind::eye::Range<int> configuredRange(visionCfg.mechDepthRangeMin, visionCfg.mechDepthRangeMax);
-                auto setStatus = userSet.setRangeValue("DepthRange", configuredRange);
-                qInfo(LOG_MECHEYE_WORKER) << QStringLiteral("[深度范围] 设置为 [")
-                                          << configuredRange.min << QStringLiteral(",")
-                                          << configuredRange.max << QStringLiteral("] mm，成功=")
-                                          << setStatus.isOK();
+                depthCtx.minMm = visionCfg.mechDepthRangeMin;
+                depthCtx.maxMm = visionCfg.mechDepthRangeMax;
+
+                const unsigned depthSeh = sdk_seh::invokeVoid(
+                    [](void* raw) {
+                        auto* ctx = static_cast<DepthRangeCtx*>(raw);
+                        auto& userSet = ctx->camera->currentUserSet();
+                        mmind::eye::Range<int> configuredRange(ctx->minMm, ctx->maxMm);
+                        ctx->ok = userSet.setRangeValue("DepthRange", configuredRange).isOK();
+                    },
+                    &depthCtx);
+                if (depthSeh != 0) {
+                    qWarning(LOG_MECHEYE_WORKER).noquote()
+                        << taggedMessage(formatSdkSehError(depthSeh) +
+                                         QStringLiteral("（设置 DepthRange 已跳过）"));
+                    if (sdk_seh::isAccessViolationSeh(depthSeh)) {
+                        resetSdkCamera();
+                        m_busy = false;
+                        setRuntimeState(CameraRuntimeState::Error, formatSdkSehError(depthSeh));
+                        emit captureFinished(makeFailureResult(
+                            normalized,
+                            CaptureErrorCode::SdkNativeFault,
+                            formatSdkSehError(depthSeh),
+                            timer.elapsed()));
+                        return;
+                    }
+                } else {
+                    qInfo(LOG_MECHEYE_WORKER) << QStringLiteral("[深度范围] 设置为 [")
+                                              << depthCtx.minMm << QStringLiteral(",")
+                                              << depthCtx.maxMm << QStringLiteral("] mm，成功=")
+                                              << depthCtx.ok;
+                }
             }
 
             // 先尝试 capture3D（不含相机侧法向量计算）
@@ -608,13 +802,20 @@ bool MechEyeWorker::connectCamera(const QString& cameraKey, int timeoutMs, QStri
         }
         return false;
     }
-    if (!m_impl->ensureCamera(taggedMessage(QString()), errorMessage)) {
-        return false;
-    }
-
     const QString normalizedKey = cameraKey.trimmed();
     const unsigned int timeout =
         static_cast<unsigned int>(timeoutMs > 0 ? timeoutMs : 5000);
+
+    // 某些 Mech-Eye SDK 版本在找不到合适网口或同网段网口不唯一时会直接终止进程，
+    // 无法由 C++ 异常或 SEH 可靠拦截。必须在构造任何 SDK 对象之前完成系统网络预检。
+    if (isIpv4Address(normalizedKey) &&
+        !preflightDirectIpv4Route(normalizedKey, errorMessage)) {
+        return false;
+    }
+
+    if (!m_impl->ensureCamera(taggedMessage(QString()), errorMessage)) {
+        return false;
+    }
 
     // 多网卡同网段时 discover+CameraInfo 连接会失败；按 IP 直连可绕过 SDK 网口选择问题。
     // 若 SDK 仍触发原生崩溃，由 sdk_seh 兜住并重建 Camera，保证进程不退出。
@@ -761,7 +962,13 @@ void MechEyeWorker::resetSdkCamera()
     m_busy = false;
     m_cameraInfo = {};
     if (m_impl != nullptr) {
-        m_impl->resetCamera(taggedMessage(QString()));
+        // AV 后不再立即 recreate，避免脏 SDK 上连环崩溃。
+        m_impl->discoveredCameras.clear();
+        m_impl->camera.reset();
+        if (!sdk_seh::isSdkProcessIsolated()) {
+            QString unused;
+            m_impl->ensureCamera(taggedMessage(QString()), &unused);
+        }
     }
 }
 
@@ -800,7 +1007,37 @@ PointCloudFrame MechEyeWorker::buildPointCloud2DAnd3D(const mmind::eye::Frame2DA
 
 void MechEyeWorker::printCameraParameters()
 {
-    if (!m_connected || !m_impl) {
+    if (!m_connected || !m_impl || m_impl->camera == nullptr) {
+        return;
+    }
+    if (sdk_seh::isSdkProcessIsolated()) {
+        return;
+    }
+
+    struct PrintCtx {
+        MechEyeWorker* self = nullptr;
+    } ctx{this};
+
+    const unsigned seh = sdk_seh::invokeVoid(
+        [](void* raw) {
+            auto* printCtx = static_cast<PrintCtx*>(raw);
+            printCtx->self->printCameraParametersUnguarded();
+        },
+        &ctx);
+    if (seh != 0) {
+        qWarning(LOG_MECHEYE_WORKER).noquote()
+            << taggedMessage(formatSdkSehError(seh) + QStringLiteral("（打印相机参数已跳过）"));
+        if (sdk_seh::isAccessViolationSeh(seh)) {
+            m_connected = false;
+            m_cameraInfo.connected = false;
+            resetSdkCamera();
+        }
+    }
+}
+
+void MechEyeWorker::printCameraParametersUnguarded()
+{
+    if (!m_connected || !m_impl || m_impl->camera == nullptr) {
         return;
     }
 

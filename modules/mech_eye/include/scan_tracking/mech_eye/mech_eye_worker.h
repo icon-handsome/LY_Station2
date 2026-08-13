@@ -139,8 +139,11 @@ private:
     /* 将 2D+3D 点云帧转换为内部点云结构 */
     PointCloudFrame buildPointCloud2DAnd3D(const mmind::eye::Frame2DAnd3D& frame) const;
 
-    /* 连接成功后打印相机基础参数（曝光、增益、分辨率等） */
+    /* 连接成功后打印相机基础参数（曝光、增益、分辨率等）；内部走 SEH */
     void printCameraParameters();
+
+    /* 无 SEH 的参数读取实现，仅由 printCameraParameters 经 invokeVoid 调用 */
+    void printCameraParametersUnguarded();
 
     QString m_roleName;
     QString m_defaultCameraKey;

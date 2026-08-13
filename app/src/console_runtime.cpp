@@ -526,12 +526,30 @@ void ConsoleRuntime::initModules()
             << QStringLiteral(" waitedMs=") << waited;
     }
 
-    qInfo(appLog).noquote() << QStringLiteral("调用 梅卡-机械臂 start…");
-    mechEyeArmService_->start(armMechKey);
-    qInfo(appLog).noquote() << QStringLiteral("梅卡-机械臂 start() 已返回");
+    // 冲刷 worker → 主线程的 fatalError，确保 lastFatalCode 已写入
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+
+    const bool skipArmMechEye =
+        scan_tracking::mech_eye::isMechEyeSdkProcessIsolated() ||
+        mechEyeTelescopicService_->lastFatalCode() ==
+            scan_tracking::mech_eye::CaptureErrorCode::SdkNativeFault;
+
+    if (skipArmMechEye) {
+        qCritical(appLog).noquote()
+            << QStringLiteral("跳过梅卡-机械臂 start：伸缩杆侧已触发 MechEye SDK 原生故障隔离，")
+            << QStringLiteral("同进程继续 new/connect 易二次崩溃；请重启 scan-tracking 后再试。")
+            << QStringLiteral(" lastFatal=")
+            << static_cast<int>(mechEyeTelescopicService_->lastFatalCode())
+            << mechEyeTelescopicService_->lastFatalMessage();
+    } else {
+        qInfo(appLog).noquote() << QStringLiteral("调用 梅卡-机械臂 start…");
+        mechEyeArmService_->start(armMechKey);
+        qInfo(appLog).noquote() << QStringLiteral("梅卡-机械臂 start() 已返回");
+    }
     qInfo(appLog).noquote()
         << QStringLiteral("梅卡相机服务已启动：伸缩杆=") << telescopicMechKey
-        << QStringLiteral(" 机械臂=") << armMechKey;
+        << QStringLiteral(" 机械臂=") << armMechKey
+        << QStringLiteral(" armStarted=") << !skipArmMechEye;
 
     if (configManager != nullptr) {
         const auto& orbbecConfig = configManager->orbbecGeminiConfig();

@@ -42,6 +42,17 @@ target_link_libraries(scan_tracking
 
 target_compile_features(scan_tracking PRIVATE cxx_std_17)
 
+if(MSVC)
+    # Mech-Eye 2.5.4 may corrupt the process heap during DLL initialization on
+    # multi-adapter hosts. Delay loading lets the network preflight reject an
+    # invalid adapter setup before any vendor code enters the main process.
+    target_link_libraries(scan_tracking PRIVATE delayimp)
+    target_link_options(scan_tracking PRIVATE
+        "$<$<CONFIG:Debug>:/DELAYLOAD:MechEyeApid.dll>"
+        "$<$<NOT:$<CONFIG:Debug>>:/DELAYLOAD:MechEyeApi.dll>"
+    )
+endif()
+
 set_target_properties(scan_tracking PROPERTIES
     OUTPUT_NAME "scan-tracking"
     FOLDER "applications"

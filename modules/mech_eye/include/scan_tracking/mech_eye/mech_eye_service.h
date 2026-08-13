@@ -56,6 +56,12 @@ public:
      */
     bool isCameraConnected() const { return m_cameraConnected; }
 
+    /* 最近一次 fatalError 错误码（无则 Success） */
+    CaptureErrorCode lastFatalCode() const { return m_lastFatalCode; }
+
+    /* 最近一次 fatalError 描述 */
+    QString lastFatalMessage() const { return m_lastFatalMessage; }
+
     /* 主动刷新相机在线状态
      * 该调用会转发到 worker 线程，由 worker 重新探测或查询相机状态。
      */
@@ -128,6 +134,8 @@ private:
     bool m_started = false;
     bool m_cameraConnected = false;  // 相机连接状态（后续使用）
     CameraRuntimeState m_currentState = CameraRuntimeState::Idle;
+    CaptureErrorCode m_lastFatalCode = CaptureErrorCode::Success;
+    QString m_lastFatalMessage;
 };
 
 }  // namespace mech_eye

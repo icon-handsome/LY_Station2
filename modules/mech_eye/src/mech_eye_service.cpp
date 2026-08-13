@@ -240,6 +240,8 @@ void MechEyeService::onWorkerFatalError(
     QString message)
 {
     m_busy = false;
+    m_lastFatalCode = code;
+    m_lastFatalMessage = message;
     emit fatalError(code, message);
 }
 

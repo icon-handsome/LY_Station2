@@ -1,7 +1,8 @@
 #pragma once
 
-// Mech-Eye SDK 在多网卡同网段时可能触发原生崩溃（Access Violation）。
-// C++ try/catch 拦不住；Windows 下用 SEH 兜住，保证进程可继续跑。
+// Mech-Eye SDK 在多网卡工控机上可能触发原生崩溃（Access Violation）。
+// C++ try/catch 拦不住；Windows 下用 SEH 兜住调用点。
+// 注意：捕获 AV 后 SDK 全局态可能已损坏——应标记进程级隔离并避免继续 new/connect。
 
 #include <string>
 #include <vector>
@@ -17,7 +18,19 @@ namespace scan_tracking {
 namespace mech_eye {
 namespace sdk_seh {
 
-/// @return 0=未发生 SEH；非 0=Windows 异常码（相机对象可能已损坏，调用方应重建）
+/// Windows STATUS_ACCESS_VIOLATION
+constexpr unsigned kSehAccessViolation = 0xC0000005u;
+/// MSVC C++ 异常（RaiseException），常见于 AV 后 SDK 脏状态下的后续构造
+constexpr unsigned kSehCppException = 0xE06D7363u;
+
+bool isAccessViolationSeh(unsigned sehCode);
+bool isSdkProcessIsolated();
+void markSdkProcessIsolated();
+
+/// 在 SEH 下执行无返回值回调；@return 0 成功，非 0 为异常码
+unsigned invokeVoid(void (*fn)(void*), void* ctx);
+
+/// @return 0=未发生 SEH；非 0=Windows 异常码（出参相机指针保证为 nullptr，勿 delete 半残对象）
 unsigned createCamera(mmind::eye::Camera** outCamera);
 
 unsigned connectByIp(

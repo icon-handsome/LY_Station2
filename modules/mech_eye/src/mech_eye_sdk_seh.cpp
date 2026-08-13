@@ -1,5 +1,7 @@
 #include "scan_tracking/mech_eye/mech_eye_sdk_seh.h"
 
+#include <atomic>
+
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -11,6 +13,12 @@ namespace scan_tracking {
 namespace mech_eye {
 namespace sdk_seh {
 namespace {
+
+std::atomic<bool>& sdkProcessIsolatedFlag()
+{
+    static std::atomic<bool> isolated{false};
+    return isolated;
+}
 
 // 真正的 C++ SDK 调用放在独立函数；含 __try 的包装函数内不得出现需析构的局部对象（MSVC C2712）。
 
@@ -98,18 +106,64 @@ int capture2DAnd3DBody(
 
 }  // namespace
 
+unsigned captureSehCode(unsigned code)
+{
+    if (isAccessViolationSeh(code)) {
+        markSdkProcessIsolated();
+    }
+    return code;
+}
+
+bool isAccessViolationSeh(unsigned sehCode)
+{
+    return sehCode == kSehAccessViolation;
+}
+
+bool isSdkProcessIsolated()
+{
+    return sdkProcessIsolatedFlag().load(std::memory_order_acquire);
+}
+
+void markSdkProcessIsolated()
+{
+    sdkProcessIsolatedFlag().store(true, std::memory_order_release);
+}
+
+unsigned invokeVoid(void (*fn)(void*), void* ctx)
+{
+    if (fn == nullptr) {
+        return 0xFFFFFFFFu;
+    }
+#ifdef _MSC_VER
+    __try {
+        fn(ctx);
+        return 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return captureSehCode(static_cast<unsigned>(GetExceptionCode()));
+    }
+#else
+    fn(ctx);
+    return 0;
+#endif
+}
+
 unsigned createCamera(mmind::eye::Camera** outCamera)
 {
     if (outCamera == nullptr) {
         return 0xFFFFFFFFu;
     }
     *outCamera = nullptr;
+    if (isSdkProcessIsolated()) {
+        return kSehAccessViolation;
+    }
 #ifdef _MSC_VER
     __try {
         *outCamera = createCameraBody();
         return 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return static_cast<unsigned>(GetExceptionCode());
+        // 构造期 AV 后指针可能指向半残对象：放弃所有权并置空，禁止调用方 delete。
+        *outCamera = nullptr;
+        return captureSehCode(static_cast<unsigned>(GetExceptionCode()));
     }
 #else
     *outCamera = createCameraBody();
@@ -128,7 +182,7 @@ unsigned connectByIp(
         connectByIpBody(camera, &ip, timeoutMs, outStatus);
         return 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return static_cast<unsigned>(GetExceptionCode());
+        return captureSehCode(static_cast<unsigned>(GetExceptionCode()));
     }
 #else
     connectByIpBody(camera, &ip, timeoutMs, outStatus);
@@ -147,7 +201,7 @@ unsigned connectByInfo(
         connectByInfoBody(camera, &info, timeoutMs, outStatus);
         return 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return static_cast<unsigned>(GetExceptionCode());
+        return captureSehCode(static_cast<unsigned>(GetExceptionCode()));
     }
 #else
     connectByInfoBody(camera, &info, timeoutMs, outStatus);
@@ -164,7 +218,7 @@ unsigned discoverCameras(
         discoverBody(timeoutMs, outList);
         return 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return static_cast<unsigned>(GetExceptionCode());
+        return captureSehCode(static_cast<unsigned>(GetExceptionCode()));
     }
 #else
     discoverBody(timeoutMs, outList);
@@ -179,7 +233,7 @@ unsigned disconnect(mmind::eye::Camera* camera)
         disconnectBody(camera);
         return 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return static_cast<unsigned>(GetExceptionCode());
+        return captureSehCode(static_cast<unsigned>(GetExceptionCode()));
     }
 #else
     disconnectBody(camera);
@@ -197,7 +251,7 @@ unsigned getCameraInfo(
         getCameraInfoBody(camera, outInfo, outStatus);
         return 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return static_cast<unsigned>(GetExceptionCode());
+        return captureSehCode(static_cast<unsigned>(GetExceptionCode()));
     }
 #else
     getCameraInfoBody(camera, outInfo, outStatus);
@@ -212,7 +266,7 @@ unsigned setHeartbeatInterval(mmind::eye::Camera* camera, int intervalMs)
         setHeartbeatBody(camera, intervalMs);
         return 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return static_cast<unsigned>(GetExceptionCode());
+        return captureSehCode(static_cast<unsigned>(GetExceptionCode()));
     }
 #else
     setHeartbeatBody(camera, intervalMs);
@@ -231,7 +285,7 @@ unsigned capture2D(
         capture2DBody(camera, outFrame, timeoutMs, outStatus);
         return 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return static_cast<unsigned>(GetExceptionCode());
+        return captureSehCode(static_cast<unsigned>(GetExceptionCode()));
     }
 #else
     capture2DBody(camera, outFrame, timeoutMs, outStatus);
@@ -250,7 +304,7 @@ unsigned capture3D(
         capture3DBody(camera, outFrame, timeoutMs, outStatus);
         return 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return static_cast<unsigned>(GetExceptionCode());
+        return captureSehCode(static_cast<unsigned>(GetExceptionCode()));
     }
 #else
     capture3DBody(camera, outFrame, timeoutMs, outStatus);
@@ -269,7 +323,7 @@ unsigned capture2DAnd3D(
         capture2DAnd3DBody(camera, outFrame, timeoutMs, outStatus);
         return 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return static_cast<unsigned>(GetExceptionCode());
+        return captureSehCode(static_cast<unsigned>(GetExceptionCode()));
     }
 #else
     capture2DAnd3DBody(camera, outFrame, timeoutMs, outStatus);
@@ -278,5 +332,11 @@ unsigned capture2DAnd3D(
 }
 
 }  // namespace sdk_seh
+
+bool isMechEyeSdkProcessIsolated()
+{
+    return sdk_seh::isSdkProcessIsolated();
+}
+
 }  // namespace mech_eye
 }  // namespace scan_tracking

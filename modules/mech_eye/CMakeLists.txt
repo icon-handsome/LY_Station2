@@ -30,12 +30,17 @@ target_link_libraries(scan_tracking_mech_eye
     PUBLIC
         Qt5::Core
         Qt5::Gui
+        Qt5::Network
         scan_tracking_common
     PRIVATE
         MechEyeSdk::MechEyeApi
 )
 
 target_compile_features(scan_tracking_mech_eye PUBLIC cxx_std_17)
+
+if(WIN32)
+    target_link_libraries(scan_tracking_mech_eye PRIVATE iphlpapi ws2_32)
+endif()
 
 if(BUILD_TESTING)
     find_package(Qt5 REQUIRED COMPONENTS Test)

@@ -33,6 +33,8 @@ enum class CaptureErrorCode {
     Timeout = 8,
     InvalidRequest = 9,
     UnknownError = 10,
+    /// Mech-Eye SDK 原生崩溃（如 AV）；进程内 SDK 已隔离，需重启进程后再用
+    SdkNativeFault = 11,
 };
 
 /* 相机运行状态 */
@@ -128,6 +130,9 @@ struct CaptureResult {
         return errorCode == CaptureErrorCode::Success;
     }
 };
+
+/// 进程内 Mech-Eye SDK 是否已因原生 AV 隔离（需重启进程后再用）
+bool isMechEyeSdkProcessIsolated();
 
 }  // namespace mech_eye
 }  // namespace scan_tracking
