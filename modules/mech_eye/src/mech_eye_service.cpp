@@ -1,7 +1,10 @@
 #include "scan_tracking/mech_eye/mech_eye_service.h"
 
 #include <QtCore/QLoggingCategory>
+#include <QtCore/QMetaObject>
 #include <QtCore/QThread>
+
+#include <mutex>
 
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/mech_eye/mech_eye_worker.h"
@@ -16,20 +19,28 @@ namespace mech_eye {
  */
 void MechEyeService::registerMetaTypes()
 {
-    static bool registered = false;
-    if (registered) {
-        return;
-    }
+    static std::once_flag once;
+    std::call_once(once, [] {
+        // Only direct queued-signal argument types require runtime registration.
+        // Nested fields (point clouds, textures and snapshots) are copied by the
+        // top-level CaptureRequest/CaptureResult metatype and must not be
+        // registered separately.
+        qRegisterMetaType<scan_tracking::mech_eye::CaptureErrorCode>(
+            "scan_tracking::mech_eye::CaptureErrorCode");
+        qInfo(LOG_MECHEYE_SVC) << "registerMetaTypes: CaptureErrorCode OK";
 
-    qRegisterMetaType<scan_tracking::mech_eye::CaptureMode>("scan_tracking::mech_eye::CaptureMode");
-    qRegisterMetaType<scan_tracking::mech_eye::CaptureErrorCode>("scan_tracking::mech_eye::CaptureErrorCode");
-    qRegisterMetaType<scan_tracking::mech_eye::CameraRuntimeState>("scan_tracking::mech_eye::CameraRuntimeState");
-    qRegisterMetaType<scan_tracking::mech_eye::CameraInfoSnapshot>("scan_tracking::mech_eye::CameraInfoSnapshot");
-    qRegisterMetaType<scan_tracking::mech_eye::GrayTextureFrame>("scan_tracking::mech_eye::GrayTextureFrame");
-    qRegisterMetaType<scan_tracking::mech_eye::PointCloudFrame>("scan_tracking::mech_eye::PointCloudFrame");
-    qRegisterMetaType<scan_tracking::mech_eye::CaptureRequest>("scan_tracking::mech_eye::CaptureRequest");
-    qRegisterMetaType<scan_tracking::mech_eye::CaptureResult>("scan_tracking::mech_eye::CaptureResult");
-    registered = true;
+        qRegisterMetaType<scan_tracking::mech_eye::CameraRuntimeState>(
+            "scan_tracking::mech_eye::CameraRuntimeState");
+        qInfo(LOG_MECHEYE_SVC) << "registerMetaTypes: CameraRuntimeState OK";
+
+        qRegisterMetaType<scan_tracking::mech_eye::CaptureRequest>(
+            "scan_tracking::mech_eye::CaptureRequest");
+        qInfo(LOG_MECHEYE_SVC) << "registerMetaTypes: CaptureRequest OK";
+
+        qRegisterMetaType<scan_tracking::mech_eye::CaptureResult>(
+            "scan_tracking::mech_eye::CaptureResult");
+        qInfo(LOG_MECHEYE_SVC) << "registerMetaTypes: CaptureResult OK";
+    });
 }
 
 /* 构造函数 */
@@ -75,6 +86,9 @@ void MechEyeService::start(const QString& defaultCameraKey)
         << (m_roleName.isEmpty() ? QStringLiteral("[MechEye]") : QStringLiteral("[%1]").arg(m_roleName))
         << QStringLiteral(" start: registerMetaTypes");
     registerMetaTypes();
+    qInfo(LOG_MECHEYE_SVC).noquote()
+        << (m_roleName.isEmpty() ? QStringLiteral("[MechEye]") : QStringLiteral("[%1]").arg(m_roleName))
+        << QStringLiteral(" start: registerMetaTypes 完成");
 
     const auto* configManager = common::ConfigManager::instance();
     if (configManager != nullptr) {
@@ -132,10 +146,22 @@ void MechEyeService::start(const QString& defaultCameraKey)
     m_stopping = false;
     m_currentState = CameraRuntimeState::Idle;
 
-    emit sig_startWorker(m_defaultCameraKey);
+    // Initial SDK loading/connection is a serialized startup phase. It still
+    // runs on the worker thread, but completing it before other vendor modules
+    // start avoids overlapping DLL static initialization and SDK helper threads.
+    const bool invoked = QMetaObject::invokeMethod(
+        m_worker,
+        "startWorker",
+        Qt::BlockingQueuedConnection,
+        Q_ARG(QString, m_defaultCameraKey));
+    if (!invoked) {
+        qCritical(LOG_MECHEYE_SVC).noquote()
+            << (m_roleName.isEmpty() ? QStringLiteral("[MechEye]") : QStringLiteral("[%1]").arg(m_roleName))
+            << QStringLiteral(" start: 无法调用 worker startWorker");
+    }
     qInfo(LOG_MECHEYE_SVC).noquote()
         << (m_roleName.isEmpty() ? QStringLiteral("[MechEye]") : QStringLiteral("[%1]").arg(m_roleName))
-        << QStringLiteral(" start: 已投递 startWorker（异步连机）");
+        << QStringLiteral(" start: startWorker 已完成（串行连机）");
 }
 
 /* 停止 Mech-Eye 服务。

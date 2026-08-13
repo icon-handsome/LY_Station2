@@ -26,8 +26,12 @@ int main(int argc, char* argv[])
     app.setApplicationName("Scan Tracking");
     app.setOrganizationName("ScanTracking");
 
-    scan_tracking::common::Logger::initialize(
-        QCoreApplication::applicationDirPath() + QStringLiteral("/logs"));
+    const bool customLoggerEnabled =
+        !qEnvironmentVariableIsSet("SCAN_TRACKING_DISABLE_CUSTOM_LOGGER");
+    if (customLoggerEnabled) {
+        scan_tracking::common::Logger::initialize(
+            QCoreApplication::applicationDirPath() + QStringLiteral("/logs"));
+    }
     // 工位一依赖 start.bat 设置 GenTL；此处在进程内提前补齐，避免 IDE/直接双击启动时 CXP 枚举失败。
     scan_tracking::vision::ensureHikGenTlEnvironment();
     scan_tracking::common::ConfigManager::initialize();
@@ -38,6 +42,8 @@ int main(int argc, char* argv[])
     }();
 
     scan_tracking::common::ConfigManager::cleanup();
-    scan_tracking::common::Logger::cleanup();
+    if (customLoggerEnabled) {
+        scan_tracking::common::Logger::cleanup();
+    }
     return exit_code;
 }

@@ -452,7 +452,7 @@ void HikCameraCController::reportConfiguredCameraConnections() const
 
 void HikCameraCController::scheduleStartupConnectionReport()
 {
-    constexpr int kStartupConnectionReportDelayMs = 7500;
+    constexpr int kStartupConnectionReportDelayMs = 4000;
     QTimer::singleShot(kStartupConnectionReportDelayMs, this, [this]() {
         if (m_started) {
             reportConfiguredCameraConnections();

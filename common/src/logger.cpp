@@ -1,13 +1,22 @@
 #include "scan_tracking/common/logger.h"
 
 #include <QtCore/QDateTime>
+#include <QtCore/QDir>
+#include <QtCore/QFile>
+#include <QtCore/QMutexLocker>
+#include <QtCore/QReadLocker>
+#include <QtCore/QWriteLocker>
 
-#include <cstdio>
 #include <cstring>
-#include <filesystem>
-#include <iostream>
-#include <string>
-#include <system_error>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <cstdio>
+#endif
 
 namespace scan_tracking::common {
 
@@ -25,53 +34,58 @@ const char* safeCategoryName(const QMessageLogContext& context)
     return "default";
 }
 
-std::string instanceLogFilePath(const std::string& log_dir, const QDateTime& started_at)
+QString instanceLogFilePath(const QString& log_dir, const QDateTime& started_at)
 {
-    return log_dir + "/scan_tracking_"
-        + started_at.toString(QStringLiteral("yyyy-MM-dd_HHmmss_zzz")).toStdString()
-        + ".txt";
+    return QDir(log_dir).filePath(
+        QStringLiteral("scan_tracking_%1.txt")
+            .arg(started_at.toString(QStringLiteral("yyyy-MM-dd_HHmmss_zzz"))));
 }
 
-std::string instanceAlgorithmLogFilePath(const std::string& log_dir, const QDateTime& started_at)
+QString instanceAlgorithmLogFilePath(const QString& log_dir, const QDateTime& started_at)
 {
-    return log_dir + "/algorithm_scan_tracking_"
-        + started_at.toString(QStringLiteral("yyyy-MM-dd_HHmmss_zzz")).toStdString()
-        + ".txt";
+    return QDir(log_dir).filePath(
+        QStringLiteral("algorithm_scan_tracking_%1.txt")
+            .arg(started_at.toString(QStringLiteral("yyyy-MM-dd_HHmmss_zzz"))));
 }
 
-bool ensureLogDirectory(const std::string& log_dir)
+bool ensureLogDirectory(const QString& log_dir)
 {
-    if (log_dir.empty()) {
+    if (log_dir.isEmpty()) {
         return false;
     }
-
-    std::error_code ec;
-    std::filesystem::create_directories(log_dir, ec);
-    if (ec) {
-        return false;
-    }
-    return std::filesystem::is_directory(log_dir);
+    QDir dir(log_dir);
+    return (dir.exists() || dir.mkpath(QStringLiteral("."))) && dir.exists();
 }
 
 void writeConsoleLine(QtMsgType type, const char* data, std::size_t size)
 {
+#ifdef _WIN32
+    const DWORD streamId =
+        (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg)
+        ? STD_ERROR_HANDLE
+        : STD_OUTPUT_HANDLE;
+    const HANDLE handle = GetStdHandle(streamId);
+    if (handle != nullptr && handle != INVALID_HANDLE_VALUE) {
+        DWORD written = 0;
+        WriteFile(handle, data, static_cast<DWORD>(size), &written, nullptr);
+        WriteFile(handle, "\r\n", 2, &written, nullptr);
+    }
+#else
     FILE* out = (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg) ? stderr : stdout;
     std::fwrite(data, 1, size, out);
     std::fwrite("\n", 1, 1, out);
     std::fflush(out);
+#endif
 }
 
-std::string buildLogLine(
+QByteArray buildLogLine(
     const char* time_stamp,
     const char* severity,
     const char* category,
     const char* msg_utf8,
     const char* source_suffix)
 {
-    std::string line;
-    line.reserve(
-        std::strlen(time_stamp) + std::strlen(severity) + std::strlen(category)
-        + std::strlen(msg_utf8) + (source_suffix != nullptr ? std::strlen(source_suffix) : 0) + 32);
+    QByteArray line;
     line += '[';
     line += time_stamp;
     line += "] [";
@@ -86,16 +100,16 @@ std::string buildLogLine(
     return line;
 }
 
-std::string sourceLocationSuffix(const QMessageLogContext& context)
+QByteArray sourceLocationSuffix(const QMessageLogContext& context)
 {
     if (context.file == nullptr || context.line <= 0) {
         return {};
     }
 
-    std::string suffix = " (";
+    QByteArray suffix(" (");
     suffix += context.file;
     suffix += ':';
-    suffix += std::to_string(context.line);
+    suffix += QByteArray::number(context.line);
     suffix += ')';
     return suffix;
 }
@@ -111,27 +125,31 @@ void emitMinimalFallback(QtMsgType type, const QMessageLogContext& context, cons
         case QtFatalMsg: severity = "FTL"; break;
         default: break;
     }
-    const std::string suffix = (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg)
+    const QByteArray suffix = (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg)
         ? sourceLocationSuffix(context)
-        : std::string{};
-    const std::string line = buildLogLine(
+        : QByteArray{};
+    const QByteArray line = buildLogLine(
         "reentrant",
         severity,
         safeCategoryName(context),
         msg_utf8.constData(),
-        suffix.empty() ? nullptr : suffix.c_str());
-    writeConsoleLine(type, line.c_str(), line.size());
+        suffix.isEmpty() ? nullptr : suffix.constData());
+    writeConsoleLine(type, line.constData(), static_cast<std::size_t>(line.size()));
 }
 
-FILE* openLogFileWithBom(const std::string& path)
+QFile* openLogFileWithBom(const QString& path)
 {
-    FILE* file = std::fopen(path.c_str(), "wb");
-    if (file == nullptr) {
-        std::cerr << "严重错误：Logger 无法打开目标文件：" << path << "\n";
+    auto* file = new QFile(path);
+    if (!file->open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        const QByteArray message = QStringLiteral("严重错误：Logger 无法打开目标文件：%1")
+                                       .arg(path)
+                                       .toUtf8();
+        writeConsoleLine(QtCriticalMsg, message.constData(), message.size());
+        delete file;
         return nullptr;
     }
-    std::fwrite(kUtf8Bom, 1, 3, file);
-    std::fflush(file);
+    file->write(kUtf8Bom, 3);
+    file->flush();
     return file;
 }
 
@@ -139,13 +157,17 @@ FILE* openLogFileWithBom(const std::string& path)
 
 Logger* Logger::instance_ = nullptr;
 QtMessageHandler Logger::previous_handler_ = nullptr;
+QReadWriteLock Logger::instance_lock_(QReadWriteLock::Recursive);
 
 Logger::Logger(const QString& log_dir)
-    : log_dir_(log_dir.toStdString()),
+    : log_dir_(log_dir),
       min_level_(QtDebugMsg)
 {
     if (!ensureLogDirectory(log_dir_)) {
-        std::cerr << "严重错误：Logger 无法创建日志目录：" << log_dir_ << "\n";
+        const QByteArray message = QStringLiteral("严重错误：Logger 无法创建日志目录：%1")
+                                       .arg(log_dir_)
+                                       .toUtf8();
+        writeConsoleLine(QtCriticalMsg, message.constData(), message.size());
     }
     openLogFile();
 }
@@ -153,17 +175,20 @@ Logger::Logger(const QString& log_dir)
 Logger::~Logger()
 {
     if (log_file_ != nullptr) {
-        std::fclose(log_file_);
+        log_file_->close();
+        delete log_file_;
         log_file_ = nullptr;
     }
     if (algorithm_log_file_ != nullptr) {
-        std::fclose(algorithm_log_file_);
+        algorithm_log_file_->close();
+        delete algorithm_log_file_;
         algorithm_log_file_ = nullptr;
     }
 }
 
 void Logger::initialize(const QString& log_dir)
 {
+    QWriteLocker instance_guard(&instance_lock_);
     if (instance_ != nullptr) {
         return;
     }
@@ -174,6 +199,7 @@ void Logger::initialize(const QString& log_dir)
 
 void Logger::cleanup()
 {
+    QWriteLocker instance_guard(&instance_lock_);
     if (instance_ == nullptr) {
         return;
     }
@@ -185,20 +211,18 @@ void Logger::cleanup()
     Logger* doomed = instance_;
     instance_ = nullptr;
 
-    {
-        std::lock_guard<std::mutex> lock(doomed->mutex_);
-    }
     delete doomed;
 }
 
 Logger* Logger::instance()
 {
+    QReadLocker instance_guard(&instance_lock_);
     return instance_;
 }
 
 void Logger::setMinLevel(QtMsgType level)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    QMutexLocker lock(&mutex_);
     min_level_ = level;
 }
 
@@ -250,14 +274,14 @@ bool Logger::isAlgorithmLogCategory(const char* category)
         && std::strcmp(category + (catLen - sufLen), kMeasureServiceSuffix) == 0;
 }
 
-void Logger::writeLineToFile(FILE* file, const std::string& line)
+void Logger::writeLineToFile(QFile* file, const QByteArray& line)
 {
     if (file == nullptr) {
         return;
     }
-    std::fwrite(line.c_str(), 1, line.size(), file);
-    std::fwrite("\r\n", 1, 2, file);
-    std::fflush(file);
+    file->write(line);
+    file->write("\r\n", 2);
+    file->flush();
 }
 
 void Logger::openLogFile()
@@ -267,11 +291,13 @@ void Logger::openLogFile()
     algorithm_log_file_path_ = instanceAlgorithmLogFilePath(log_dir_, started_at);
 
     if (log_file_ != nullptr) {
-        std::fclose(log_file_);
+        log_file_->close();
+        delete log_file_;
         log_file_ = nullptr;
     }
     if (algorithm_log_file_ != nullptr) {
-        std::fclose(algorithm_log_file_);
+        algorithm_log_file_->close();
+        delete algorithm_log_file_;
         algorithm_log_file_ = nullptr;
     }
 
@@ -282,6 +308,7 @@ void Logger::openLogFile()
 
 void Logger::messageHandler(QtMsgType type, const QMessageLogContext& context, const QString& msg)
 {
+    QReadLocker instance_guard(&instance_lock_);
     Logger* logger = instance_;
     if (logger != nullptr) {
         logger->log(type, context, msg);
@@ -306,31 +333,31 @@ void Logger::log(QtMsgType type, const QMessageLogContext& context, const QStrin
         return;
     }
 
-    std::lock_guard<std::mutex> lock(mutex_);
+    QMutexLocker lock(&mutex_);
 
     if (getSeverityLevel(type) < getSeverityLevel(min_level_)) {
         return;
     }
 
     const QDateTime now = QDateTime::currentDateTime();
-    const std::string time_stamp = now.toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz")).toStdString();
+    const QByteArray time_stamp = now.toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz")).toUtf8();
     const char* category = safeCategoryName(context);
-    const std::string suffix = (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg)
+    const QByteArray suffix = (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg)
         ? sourceLocationSuffix(context)
-        : std::string{};
-    const std::string line = buildLogLine(
-        time_stamp.c_str(),
+        : QByteArray{};
+    const QByteArray line = buildLogLine(
+        time_stamp.constData(),
         getLogSeverity(type),
         category,
         msg_utf8.constData(),
-        suffix.empty() ? nullptr : suffix.c_str());
+        suffix.isEmpty() ? nullptr : suffix.constData());
 
     writeLineToFile(log_file_, line);
     if (isAlgorithmLogCategory(category)) {
         writeLineToFile(algorithm_log_file_, line);
     }
 
-    writeConsoleLine(type, line.c_str(), line.size());
+    writeConsoleLine(type, line.constData(), static_cast<std::size_t>(line.size()));
 }
 
 }  // namespace scan_tracking::common

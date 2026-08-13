@@ -503,31 +503,11 @@ void ConsoleRuntime::initModules()
 
     qInfo(appLog).noquote() << QStringLiteral("调用 梅卡-伸缩杆 start…");
     mechEyeTelescopicService_->start(telescopicMechKey);
-    qInfo(appLog).noquote() << QStringLiteral("梅卡-伸缩杆 start() 已返回，等待首路连机稳定后再启机械臂…");
-
-    // 工控机多网卡下 MechEye SDK 双路并发 new/connect 易随机 AV；串行等待首路 Ready/Error。
-    {
-        constexpr int kWaitMs = 20000;
-        constexpr int kStepMs = 100;
-        int waited = 0;
-        while (waited < kWaitMs) {
-            const auto st = mechEyeTelescopicService_->state();
-            if (st == scan_tracking::mech_eye::CameraRuntimeState::Ready ||
-                st == scan_tracking::mech_eye::CameraRuntimeState::Error) {
-                break;
-            }
-            QThread::msleep(static_cast<unsigned long>(kStepMs));
-            QCoreApplication::processEvents(QEventLoop::AllEvents, kStepMs);
-            waited += kStepMs;
-        }
-        qInfo(appLog).noquote()
-            << QStringLiteral("梅卡-伸缩杆当前状态=")
-            << static_cast<int>(mechEyeTelescopicService_->state())
-            << QStringLiteral(" waitedMs=") << waited;
-    }
-
-    // 冲刷 worker → 主线程的 fatalError，确保 lastFatalCode 已写入
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+    // startWorker 已在专属 worker 线程串行完成；这里只投递一次状态/错误结果。
+    QCoreApplication::processEvents(QEventLoop::AllEvents);
+    qInfo(appLog).noquote()
+        << QStringLiteral("梅卡-伸缩杆 start() 已返回，当前状态=")
+        << static_cast<int>(mechEyeTelescopicService_->state());
 
     const bool skipArmMechEye =
         scan_tracking::mech_eye::isMechEyeSdkProcessIsolated() ||

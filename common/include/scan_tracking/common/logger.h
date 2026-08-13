@@ -1,11 +1,11 @@
 ﻿#pragma once
 
 #include <QtCore/QString>
+#include <QtCore/QMutex>
+#include <QtCore/QReadWriteLock>
 #include <QtCore/QtMessageHandler>
 
-#include <cstdio>
-#include <mutex>
-#include <string>
+class QFile;
 
 namespace scan_tracking::common {
 
@@ -34,21 +34,22 @@ private:
     void openLogFile();
     void log(QtMsgType type, const QMessageLogContext& context, const QString& msg);
     static bool isAlgorithmLogCategory(const char* category);
-    static void writeLineToFile(FILE* file, const std::string& line);
+    static void writeLineToFile(QFile* file, const QByteArray& line);
 
     static const char* getLogSeverity(QtMsgType type);
     static int getSeverityLevel(QtMsgType type);
 
-    std::string log_dir_;
-    std::string log_file_path_;
-    std::string algorithm_log_file_path_;
-    FILE* log_file_ = nullptr;
-    FILE* algorithm_log_file_ = nullptr;
-    std::mutex mutex_;
+    QString log_dir_;
+    QString log_file_path_;
+    QString algorithm_log_file_path_;
+    QFile* log_file_ = nullptr;
+    QFile* algorithm_log_file_ = nullptr;
+    QMutex mutex_;
     QtMsgType min_level_;
 
     static Logger* instance_;
     static QtMessageHandler previous_handler_;
+    static QReadWriteLock instance_lock_;
 };
 
 }  // namespace scan_tracking::common
