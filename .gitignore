@@ -12,11 +12,12 @@ CMakeLists.txt.user
 # Local scratch / transfer helpers (not part of product)
 _xfer/
 
-# Large point-cloud templates (deploy offline; keep weld_measure ini tracked)
+# Large point-cloud / model assets（本地部署；仅跟踪 weld_measure ini 等配置）
 *.pcd
 !config/length_volume_measure/Data/sample_cylinder.pcd
 !config/length_volume_measure/Data/sample_cylinder_cut.pcd
 config/weld_measure/Data/
+models/
 
 # JetBrains IDE (local)
 .idea/
