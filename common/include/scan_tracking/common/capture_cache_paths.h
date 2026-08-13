@@ -48,7 +48,7 @@ QString captureCacheHikMonoCameraDir(const QString& root, const QString& cameraT
 /// Orbbec Gemini 深度/点云：<root>/orbbec
 QString captureCacheOrbbecDir(const QString& root);
 
-/// 同一次分段落盘共用的时间戳：yyyyMMdd_HHmmss_zzz
+/// 同一次分段落盘共用的时间戳：yyyy_MM_dd_HH_mm_ss_zzz
 QString buildCaptureTimestamp();
 
 /// 单次 PLC 任务采集落盘根目录：<applicationDir>/output/run_{taskId}_{timestamp}

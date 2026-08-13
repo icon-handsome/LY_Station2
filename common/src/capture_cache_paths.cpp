@@ -170,7 +170,7 @@ QString captureCacheHikMonoCameraDir(const QString& root, const QString& cameraT
 
 QString buildCaptureTimestamp()
 {
-    return QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss_zzz"));
+    return QDateTime::currentDateTime().toString(QStringLiteral("yyyy_MM_dd_HH_mm_ss_zzz"));
 }
 
 QString buildRunCaptureRoot(quint32 taskId, const QString& timestamp)

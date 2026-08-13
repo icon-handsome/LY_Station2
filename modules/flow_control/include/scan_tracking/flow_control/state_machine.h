@@ -9,9 +9,9 @@
 #include <QtCore/QtGlobal>
 
 #include <atomic>
+#include <deque>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <thread>
 
 #include "scan_tracking/flow_control/inspection_types.h"
@@ -288,7 +288,7 @@ private:
     InspectionQuota buildActiveInspectionQuota() const;
     static bool isBackgroundMeasurableAlgorithm(const QString& algorithm);
     /// 快照缓存后后台解算（真结果经 generation 校验后仅推 HMI）。
-    /// 单飞：最多 1 个执行中 + 1 个 pending；新任务覆盖未执行的 pending，避免多套点云堆积。
+    /// 单线程串行：最多 1 个执行中 + 2 个 pending（FIFO）；队列满时丢最旧未执行快照。
     void startBackgroundInspectionSolve(
         InspectionCloudSnapshot snapshot,
         quint32 taskId,
@@ -413,11 +413,12 @@ private:
     /// 落盘完成回投门闩：stop 先关闸，已入队的 QueuedConnection 回调不得再碰 this。
     std::shared_ptr<std::atomic_bool> m_persistAcceptResults{
         std::make_shared<std::atomic_bool>(true)};
-    /// 后台解算：单线程 + 最多 1 个 pending；stop/析构时必须 join。
+    /// 后台解算：单线程串行 + pending 深度 2；stop/析构时必须 join。
+    static constexpr std::size_t kBgSolvePendingCapacity = 2;
     std::mutex m_bgSolveThreadsMutex;
     std::thread m_bgSolveThread;
     bool m_bgSolveWorkerBusy = false;
-    std::optional<BackgroundInspectionJob> m_bgSolvePending;
+    std::deque<BackgroundInspectionJob> m_bgSolvePending;
     /// 工作线程只读此 gate（shared_ptr），禁止跨线程读 QPointer / StateMachine 成员判活。
     std::shared_ptr<std::atomic_bool> m_bgSolveAcceptResults{
         std::make_shared<std::atomic_bool>(true)};

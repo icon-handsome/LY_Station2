@@ -203,33 +203,6 @@ bool extractFiniteXyz(
     return appendFiniteXyz(frame, xyzOut, finitePointCount);
 }
 
-/// Mech-Eye 整幅云可达约 432 万点；WeldMeasure.dll 内 std::map 体素降采样会 AV/卡死。
-/// 模板 PCD 约 12 万点，送入前均匀抽稀到该量级。
-constexpr int kWeldMeasureMaxPoints = 200000;
-
-void limitXyzPointCount(std::vector<float>* xyz, int* pointCount, int maxPoints)
-{
-    if (xyz == nullptr || pointCount == nullptr || maxPoints <= 0) {
-        return;
-    }
-    const int srcCount = *pointCount;
-    if (srcCount <= maxPoints) {
-        return;
-    }
-
-    const int stride = (srcCount + maxPoints - 1) / maxPoints;
-    std::vector<float> limited;
-    limited.reserve(static_cast<size_t>(maxPoints) * 3u);
-    for (int i = 0; i < srcCount; i += stride) {
-        const size_t base = static_cast<size_t>(i) * 3u;
-        limited.push_back((*xyz)[base + 0u]);
-        limited.push_back((*xyz)[base + 1u]);
-        limited.push_back((*xyz)[base + 2u]);
-    }
-    *xyz = std::move(limited);
-    *pointCount = static_cast<int>(xyz->size() / 3u);
-}
-
 void accumulateMeasurement(
     InspectionMeasurement* agg,
     const scan_tracking::weld_measure::WeldSectionMeasurement& section)
@@ -394,9 +367,6 @@ InspectionResult evaluateWeldSectionInspection(
             return result;
         }
 
-        const int rawFiniteCount = finiteCount;
-        limitXyzPointCount(&xyz, &finiteCount, kWeldMeasureMaxPoints);
-
         auto& weldService = (key.device == common::ScanDeviceKind::Arm)
             ? sharedWeldMeasureServiceArm()
             : sharedWeldMeasureServiceTelescopic();
@@ -408,8 +378,7 @@ InspectionResult evaluateWeldSectionInspection(
             << "pathId" << quota.pathId
             << common::ConfigManager::scanDeviceKindToString(key.device)
             << "localIndex" << key.localIndex
-            << "measureFrame begin rawFinite=" << rawFiniteCount
-            << "fedPoints=" << finiteCount;
+            << "measureFrame begin fedPoints=" << finiteCount;
         // Formal V2.0 flow: FrameN <-> localIndex, ICP+section extract inside DLL.
         if (!weldService.measureFrame(key.localIndex, xyz.data(), pointCount, &frame, &error)) {
             result.resultCode = 2;

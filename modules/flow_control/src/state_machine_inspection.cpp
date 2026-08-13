@@ -206,7 +206,7 @@ void StateMachine::joinBackgroundInspectionSolves()
     {
         std::lock_guard<std::mutex> lock(m_bgSolveThreadsMutex);
         // 立刻丢掉未执行快照，避免 stop 期间继续拖住点云。
-        m_bgSolvePending.reset();
+        m_bgSolvePending.clear();
         running = std::move(m_bgSolveThread);
     }
     if (!running.joinable()) {
@@ -221,7 +221,7 @@ void StateMachine::joinBackgroundInspectionSolves()
     {
         std::lock_guard<std::mutex> lock(m_bgSolveThreadsMutex);
         m_bgSolveWorkerBusy = false;
-        m_bgSolvePending.reset();
+        m_bgSolvePending.clear();
     }
     qInfo(LOG_ALGORITHM).noquote()
         << QStringLiteral("后台解算线程已接合。");
@@ -277,22 +277,30 @@ void StateMachine::startBackgroundInspectionSolve(
             return;
         }
 
-        // 已有执行中任务：只保留最新 pending，丢掉更早未执行快照（内存上限=执行中+1）。
+        // 已有执行中任务：FIFO 入队；满则丢最旧（内存上限=执行中+pendingCapacity）。
         if (m_bgSolveWorkerBusy) {
-            if (m_bgSolvePending.has_value()) {
+            if (m_bgSolvePending.size() >= kBgSolvePendingCapacity) {
+                const BackgroundInspectionJob& dropped = m_bgSolvePending.front();
                 qWarning(LOG_ALGORITHM).noquote()
-                    << QStringLiteral("后台解算繁忙，丢弃未执行任务 pathId=")
-                    << m_bgSolvePending->quota.pathId
-                    << QStringLiteral(" algorithm=") << m_bgSolvePending->quota.algorithm
-                    << QStringLiteral("，改排 pathId=") << quota.pathId
+                    << QStringLiteral("后台解算队列已满(")
+                    << static_cast<int>(kBgSolvePendingCapacity)
+                    << QStringLiteral(")，丢弃最旧未执行任务 pathId=")
+                    << dropped.quota.pathId
+                    << QStringLiteral(" algorithm=") << dropped.quota.algorithm
+                    << QStringLiteral("，入队 pathId=") << quota.pathId
                     << QStringLiteral(" algorithm=") << quota.algorithm;
+                m_bgSolvePending.pop_front();
             } else {
                 qInfo(LOG_ALGORITHM).noquote()
-                    << QStringLiteral("后台解算进行中，新任务进入唯一等待槽 pathId=")
+                    << QStringLiteral("后台解算进行中，新任务进入等待队列 pathId=")
                     << quota.pathId
-                    << QStringLiteral(" algorithm=") << quota.algorithm;
+                    << QStringLiteral(" algorithm=") << quota.algorithm
+                    << QStringLiteral(" pending=")
+                    << (static_cast<int>(m_bgSolvePending.size()) + 1)
+                    << QLatin1Char('/')
+                    << static_cast<int>(kBgSolvePendingCapacity);
             }
-            m_bgSolvePending = std::move(job);
+            m_bgSolvePending.push_back(std::move(job));
             return;
         }
 
@@ -332,13 +340,13 @@ void StateMachine::startBackgroundInspectionSolve(
                     {
                         std::lock_guard<std::mutex> lock(receiver->m_bgSolveThreadsMutex);
                         if (!acceptResults->load(std::memory_order_acquire) ||
-                            !receiver->m_bgSolvePending.has_value()) {
-                            receiver->m_bgSolvePending.reset();
+                            receiver->m_bgSolvePending.empty()) {
+                            receiver->m_bgSolvePending.clear();
                             receiver->m_bgSolveWorkerBusy = false;
                             return;
                         }
-                        job = std::move(*receiver->m_bgSolvePending);
-                        receiver->m_bgSolvePending.reset();
+                        job = std::move(receiver->m_bgSolvePending.front());
+                        receiver->m_bgSolvePending.pop_front();
                     }
                 }
             });
