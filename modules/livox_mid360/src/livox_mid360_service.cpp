@@ -4,6 +4,7 @@
 #include <QtCore/QDir>
 #include <QtCore/QFileInfo>
 #include <QtCore/QLoggingCategory>
+#include <QtCore/QMetaObject>
 #include <QtCore/QThread>
 
 #include "scan_tracking/common/config_manager.h"
@@ -173,9 +174,18 @@ void LivoxMid360Service::stop()
 
     m_stopping = true;
 
-    if (m_worker != nullptr) {
-        emit sig_stopWorker();
+    // 与 Orbbec/MechEye 一致：阻塞释放 SDK → 同线程 deleteLater → quit/wait。
+    if (m_worker != nullptr && m_workerThread != nullptr && m_workerThread->isRunning()) {
+        QMetaObject::invokeMethod(
+            m_worker,
+            "stopWorker",
+            Qt::BlockingQueuedConnection);
+        m_worker->deleteLater();
+    } else {
+        delete m_worker;
     }
+    m_worker = nullptr;
+
     if (m_workerThread != nullptr) {
         m_workerThread->quit();
         if (!m_workerThread->wait(10000)) {
@@ -183,8 +193,6 @@ void LivoxMid360Service::stop()
         }
     }
 
-    delete m_worker;
-    m_worker = nullptr;
     delete m_workerThread;
     m_workerThread = nullptr;
 

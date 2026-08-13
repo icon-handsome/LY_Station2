@@ -165,7 +165,7 @@ void MechEyeService::start(const QString& defaultCameraKey)
 }
 
 /* 停止 Mech-Eye 服务。
- * 采用 stop -> quit -> wait 的顺序，确保 worker 先释放 SDK，再退出线程。
+ * 与 Orbbec 一致：先在 worker 线程阻塞释放 SDK，再 deleteLater，最后 quit/wait。
  */
 void MechEyeService::stop()
 {
@@ -176,9 +176,17 @@ void MechEyeService::stop()
     m_stopping = true;
     m_busy = false;
 
-    if (m_worker != nullptr) {
-        emit sig_stopWorker();
+    if (m_worker != nullptr && m_workerThread != nullptr && m_workerThread->isRunning()) {
+        QMetaObject::invokeMethod(
+            m_worker,
+            "stopWorker",
+            Qt::BlockingQueuedConnection);
+        m_worker->deleteLater();
+    } else {
+        delete m_worker;
     }
+    m_worker = nullptr;
+
     if (m_workerThread != nullptr) {
         m_workerThread->quit();
         if (!m_workerThread->wait(10000)) {
@@ -186,8 +194,6 @@ void MechEyeService::stop()
         }
     }
 
-    delete m_worker;
-    m_worker = nullptr;
     delete m_workerThread;
     m_workerThread = nullptr;
 
