@@ -15,6 +15,8 @@
 #include <QtCore/QThread>
 
 #include <cstring>
+#include <exception>
+#include <new>
 #include <thread>
 #include <utility>
 
@@ -314,8 +316,49 @@ void StateMachine::startBackgroundInspectionSolve(
                     const quint64 generation = job.generation;
                     const QString triggerLabel = job.triggerLabel;
                     const QString runCaptureRoot = job.runCaptureRoot;
-                    const InspectionResult result = evaluateStation2Inspection(
-                        job.cloudSnapshot, job.taskId, job.quota);
+                    InspectionResult result;
+                    try {
+                        result = evaluateStation2Inspection(
+                            job.cloudSnapshot, job.taskId, job.quota);
+                    } catch (const std::bad_alloc&) {
+                        result.resultCode = 2;
+                        result.ngReasonWord0 = 1u << 3;
+                        result.measureItemCount = 1;
+                        result.sourcePointCount = job.cloudSnapshot.segmentCount();
+                        result.pathId = job.quota.pathId;
+                        result.pathName = job.quota.pathName;
+                        result.algorithm = job.quota.algorithm;
+                        result.measurement.qualityCode = 2;
+                        result.message = QStringLiteral(
+                            "后台算法解算内存不足（std::bad_alloc），已终止本路径解算。请检查点云规模与可用内存。");
+                        qCritical(LOG_ALGORITHM).noquote()
+                            << triggerLabel << QLatin1String("：") << result.message;
+                    } catch (const std::exception& ex) {
+                        result.resultCode = 2;
+                        result.ngReasonWord0 = 1u << 3;
+                        result.measureItemCount = 1;
+                        result.sourcePointCount = job.cloudSnapshot.segmentCount();
+                        result.pathId = job.quota.pathId;
+                        result.pathName = job.quota.pathName;
+                        result.algorithm = job.quota.algorithm;
+                        result.measurement.qualityCode = 2;
+                        result.message = QStringLiteral("后台算法解算异常：%1")
+                                             .arg(QString::fromLocal8Bit(ex.what()));
+                        qCritical(LOG_ALGORITHM).noquote()
+                            << triggerLabel << QLatin1String("：") << result.message;
+                    } catch (...) {
+                        result.resultCode = 2;
+                        result.ngReasonWord0 = 1u << 3;
+                        result.measureItemCount = 1;
+                        result.sourcePointCount = job.cloudSnapshot.segmentCount();
+                        result.pathId = job.quota.pathId;
+                        result.pathName = job.quota.pathName;
+                        result.algorithm = job.quota.algorithm;
+                        result.measurement.qualityCode = 2;
+                        result.message = QStringLiteral("后台算法解算发生未知异常，已阻止进程退出。");
+                        qCritical(LOG_ALGORITHM).noquote()
+                            << triggerLabel << QLatin1String("：") << result.message;
+                    }
                     // 解算结束立刻丢掉点云快照，只保留结果回投所需字段。
                     job.cloudSnapshot.clear();
 

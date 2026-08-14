@@ -125,6 +125,23 @@ function(scan_tracking_deploy_weld_measure_runtime target_name)
             )
         endif()
 
+        set(_ring_arm_ini "${_config_dir}/weld_measurement-ring-arm.ini")
+        set(_ring_tele_ini "${_config_dir}/weld_measurement-ring-telescopic.ini")
+        if(EXISTS "${_ring_arm_ini}")
+            list(APPEND _copy_cmds
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_ring_arm_ini}"
+                    "$<TARGET_FILE_DIR:${target_name}>/config/weld_measure/weld_measurement-ring-arm.ini"
+            )
+        endif()
+        if(EXISTS "${_ring_tele_ini}")
+            list(APPEND _copy_cmds
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_ring_tele_ini}"
+                    "$<TARGET_FILE_DIR:${target_name}>/config/weld_measure/weld_measurement-ring-telescopic.ini"
+            )
+        endif()
+
         # V2.1 shared templates (arm 1/2/9 + telescopic 1/4/7), relative to config/weld_measure/
         set(_template_dir "${_config_dir}/Data/path1")
         if(EXISTS "${_template_dir}")
@@ -134,6 +151,16 @@ function(scan_tracking_deploy_weld_measure_runtime target_name)
                 COMMAND ${CMAKE_COMMAND} -E copy_directory
                     "${_template_dir}"
                     "$<TARGET_FILE_DIR:${target_name}>/config/weld_measure/Data/path1"
+            )
+        endif()
+        set(_ring_template_dir "${_config_dir}/Data/path5")
+        if(EXISTS "${_ring_template_dir}")
+            list(APPEND _copy_cmds
+                COMMAND ${CMAKE_COMMAND} -E make_directory
+                    "$<TARGET_FILE_DIR:${target_name}>/config/weld_measure/Data/path5"
+                COMMAND ${CMAKE_COMMAND} -E copy_directory
+                    "${_ring_template_dir}"
+                    "$<TARGET_FILE_DIR:${target_name}>/config/weld_measure/Data/path5"
             )
         endif()
     endif()

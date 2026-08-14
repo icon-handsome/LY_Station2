@@ -5,6 +5,7 @@
 
 #include <QtCore/QVector>
 
+#include <memory>
 #include <vector>
 
 namespace scan_tracking::flow_control {
@@ -19,7 +20,8 @@ struct InspectionQuota {
     int total() const { return expectedArmCount + expectedTelescopicCount; }
 };
 
-/// 检测用轻量段云：仅有限值 XYZ + 元数据，不含完整 PointCloudFrame / 纹理 / CXP 图。
+/// 检测用轻量段云：共享采集点云的 XYZ 缓冲 + 元数据，不含纹理 / 法向 / CXP 图。
+/// 后续算法逐帧提取有限值，避免路径齐套时为全部段深拷贝近 GB 级点云。
 struct InspectionSegmentCloud {
     common::ScanDeviceKind device = common::ScanDeviceKind::Arm;
     int localIndex = 0;
@@ -27,8 +29,8 @@ struct InspectionSegmentCloud {
     /// length_volume：CXP 参与段必须已 LB 变换。
     bool cxpParticipated = false;
     bool lbPoseOk = false;
-    std::vector<float> xyz;  ///< interleaved finite x,y,z
-    int finiteCount = 0;
+    std::shared_ptr<std::vector<float>> xyz;  ///< shared interleaved x,y,z
+    int pointCount = 0;
 };
 
 /// 后台解算 / 评估共用的点云快照（与 ScanSegmentCache 解耦，避免双持有全量 bundle）。
@@ -45,7 +47,7 @@ struct InspectionCloudSnapshot {
     const InspectionSegmentCloud* find(common::ScanDeviceKind device, int localIndex) const;
 };
 
-/// 从段缓存提取有限 XYZ；调用后主缓存可安全清空/剥离，快照独立持有数据。
+/// 从段缓存共享 XYZ 缓冲；调用后主缓存可安全清空，快照通过 shared_ptr 保持数据存活。
 InspectionCloudSnapshot buildInspectionCloudSnapshot(const ScanSegmentCache& cache);
 
 /// 基于轻量快照执行第二工位综合检测。

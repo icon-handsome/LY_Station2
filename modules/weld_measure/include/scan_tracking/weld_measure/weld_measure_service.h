@@ -23,6 +23,10 @@ public:
     static QString defaultArmConfigPath();
     /// Telescopic straight-weld ini (7 frames).
     static QString defaultTelescopicConfigPath();
+    /// Arm ring-weld ini (18 frames).
+    static QString defaultRingArmConfigPath();
+    /// Telescopic ring-weld ini (18 frames).
+    static QString defaultRingTelescopicConfigPath();
     /// Default model: <applicationDir>/models/weld_measure/pointnet_weld_seam_V7.3_good.onnx
     static QString defaultModelPath();
 
@@ -38,7 +42,7 @@ public:
 
     void shutdown();
 
-    /// Formal V2.0 frame pipeline: downsample -> ICP -> multi-section -> average.
+    /// Formal V2.2 frame pipeline: optional ROI -> downsample -> ICP -> multi-section -> average.
     /// @param frameIndex1Based matches Frame1..N in the loaded ini.
     bool measureFrame(
         int frameIndex1Based,

@@ -106,31 +106,39 @@ QString incompleteQuotaMessage(
         .arg(quota.expectedArmCount);
 }
 
-scan_tracking::weld_measure::WeldMeasureService& sharedWeldMeasureServiceArm()
+scan_tracking::weld_measure::WeldMeasureService& sharedWeldMeasureService(
+    common::ScanDeviceKind device,
+    bool ringWeld)
 {
-    static scan_tracking::weld_measure::WeldMeasureService service;
-    return service;
-}
-
-scan_tracking::weld_measure::WeldMeasureService& sharedWeldMeasureServiceTelescopic()
-{
-    static scan_tracking::weld_measure::WeldMeasureService service;
-    return service;
+    static scan_tracking::weld_measure::WeldMeasureService straightArm;
+    static scan_tracking::weld_measure::WeldMeasureService straightTelescopic;
+    static scan_tracking::weld_measure::WeldMeasureService ringArm;
+    static scan_tracking::weld_measure::WeldMeasureService ringTelescopic;
+    const bool isArm = device == common::ScanDeviceKind::Arm;
+    if (ringWeld) {
+        return isArm ? ringArm : ringTelescopic;
+    }
+    return isArm ? straightArm : straightTelescopic;
 }
 
 bool ensureWeldMeasureReadyForDevice(
     common::ScanDeviceKind device,
+    bool ringWeld,
     QString* errorMessage)
 {
     const bool isArm = (device == common::ScanDeviceKind::Arm);
-    auto& service = isArm ? sharedWeldMeasureServiceArm() : sharedWeldMeasureServiceTelescopic();
+    auto& service = sharedWeldMeasureService(device, ringWeld);
     if (service.isReady()) {
         return true;
     }
 
-    const QString configPath = isArm
-        ? scan_tracking::weld_measure::WeldMeasureService::defaultArmConfigPath()
-        : scan_tracking::weld_measure::WeldMeasureService::defaultTelescopicConfigPath();
+    const QString configPath = ringWeld
+        ? (isArm
+               ? scan_tracking::weld_measure::WeldMeasureService::defaultRingArmConfigPath()
+               : scan_tracking::weld_measure::WeldMeasureService::defaultRingTelescopicConfigPath())
+        : (isArm
+               ? scan_tracking::weld_measure::WeldMeasureService::defaultArmConfigPath()
+               : scan_tracking::weld_measure::WeldMeasureService::defaultTelescopicConfigPath());
 
     scan_tracking::weld_measure::WeldMeasureError error;
     if (!service.initializeFromIni(configPath, &error)) {
@@ -264,6 +272,8 @@ InspectionResult evaluateWeldSectionInspection(
     InspectionResult result;
     fillPathMeta(&result, quota);
     const int expectedTotal = quota.total();
+    const bool ringWeld = quota.pathId == 5 ||
+        quota.pathName.trimmed().compare(QStringLiteral("ring_weld"), Qt::CaseInsensitive) == 0;
     result.sourcePointCount = expectedTotal > 0 ? expectedTotal : cache.cachedSegmentCount();
 
     if (cache.cachedSegmentCount() == 0) {
@@ -313,7 +323,7 @@ InspectionResult evaluateWeldSectionInspection(
     }
 
     QString initError;
-    if (!ensureWeldMeasureReadyForDevice(common::ScanDeviceKind::Arm, &initError)) {
+    if (!ensureWeldMeasureReadyForDevice(common::ScanDeviceKind::Arm, ringWeld, &initError)) {
         result.resultCode = 2;
         result.ngReasonWord0 = kNgReasonAlgorithmFailed;
         result.measurement.qualityCode = 2;
@@ -324,7 +334,8 @@ InspectionResult evaluateWeldSectionInspection(
         return result;
     }
     if (quota.expectedTelescopicCount > 0 &&
-        !ensureWeldMeasureReadyForDevice(common::ScanDeviceKind::Telescopic, &initError)) {
+        !ensureWeldMeasureReadyForDevice(
+            common::ScanDeviceKind::Telescopic, ringWeld, &initError)) {
         result.resultCode = 2;
         result.ngReasonWord0 = kNgReasonAlgorithmFailed;
         result.measurement.qualityCode = 2;
@@ -367,9 +378,7 @@ InspectionResult evaluateWeldSectionInspection(
             return result;
         }
 
-        auto& weldService = (key.device == common::ScanDeviceKind::Arm)
-            ? sharedWeldMeasureServiceArm()
-            : sharedWeldMeasureServiceTelescopic();
+        auto& weldService = sharedWeldMeasureService(key.device, ringWeld);
 
         scan_tracking::weld_measure::WeldFrameMeasurement frame;
         scan_tracking::weld_measure::WeldMeasureError error;
@@ -379,7 +388,7 @@ InspectionResult evaluateWeldSectionInspection(
             << common::ConfigManager::scanDeviceKindToString(key.device)
             << "localIndex" << key.localIndex
             << "measureFrame begin fedPoints=" << finiteCount;
-        // Formal V2.0 flow: FrameN <-> localIndex, ICP+section extract inside DLL.
+        // Formal V2.2 flow: FrameN <-> localIndex, ROI/ICP/section extraction inside DLL.
         if (!weldService.measureFrame(key.localIndex, xyz.data(), pointCount, &frame, &error)) {
             result.resultCode = 2;
             result.ngReasonWord0 = kNgReasonAlgorithmFailed;
@@ -1332,13 +1341,18 @@ InspectionCloudSnapshot buildInspectionCloudSnapshot(const ScanSegmentCache& cac
         segment.lbPoseOk = lb.invoked && lb.success && lb.poseMatrix.valid;
 
         if (segment.captureOk) {
-            if (!extractFiniteXyz(
-                    entry->bundle.mechEyeResult.pointCloud,
-                    &segment.xyz,
-                    &segment.finiteCount)) {
+            const auto& frame = entry->bundle.mechEyeResult.pointCloud;
+            const int bufferPointCount = frame.pointsXYZ
+                ? static_cast<int>(frame.pointsXYZ->size() / 3u)
+                : 0;
+            segment.pointCount = std::min(frame.pointCount, bufferPointCount);
+            if (segment.pointCount <= 0) {
                 segment.captureOk = false;
-                segment.xyz.clear();
-                segment.finiteCount = 0;
+                segment.pointCount = 0;
+            } else {
+                // PointCloudFrame 本身就是 shared_ptr 大缓冲；快照只共享所有权。
+                // 有限值过滤仍在 evaluate* 的逐帧 extractFiniteXyz 中完成。
+                segment.xyz = frame.pointsXYZ;
             }
         }
 
@@ -1381,11 +1395,10 @@ ScanSegmentCache materializeInspectionCache(const InspectionCloudSnapshot& snaps
             bundle.mechEyeResult.errorMessage = QStringLiteral("snapshot captureOk=false");
         }
 
-        if (!segment.xyz.empty() && segment.finiteCount > 0) {
-            auto points = std::make_shared<std::vector<float>>(segment.xyz);
-            bundle.mechEyeResult.pointCloud.pointsXYZ = std::move(points);
-            bundle.mechEyeResult.pointCloud.pointCount = segment.finiteCount;
-            bundle.mechEyeResult.pointCloud.width = segment.finiteCount;
+        if (segment.xyz && !segment.xyz->empty() && segment.pointCount > 0) {
+            bundle.mechEyeResult.pointCloud.pointsXYZ = segment.xyz;
+            bundle.mechEyeResult.pointCloud.pointCount = segment.pointCount;
+            bundle.mechEyeResult.pointCloud.width = segment.pointCount;
             bundle.mechEyeResult.pointCloud.height = 1;
         }
 

@@ -101,6 +101,18 @@ QString WeldMeasureService::defaultTelescopicConfigPath()
     return dir.filePath(QStringLiteral("weld_measurement-伸缩杆直焊缝.ini"));
 }
 
+QString WeldMeasureService::defaultRingArmConfigPath()
+{
+    return QDir(QCoreApplication::applicationDirPath())
+        .filePath(QStringLiteral("config/weld_measure/weld_measurement-ring-arm.ini"));
+}
+
+QString WeldMeasureService::defaultRingTelescopicConfigPath()
+{
+    return QDir(QCoreApplication::applicationDirPath())
+        .filePath(QStringLiteral("config/weld_measure/weld_measurement-ring-telescopic.ini"));
+}
+
 QString WeldMeasureService::defaultModelPath()
 {
     return QDir(QCoreApplication::applicationDirPath())
