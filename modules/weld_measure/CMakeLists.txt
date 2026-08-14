@@ -2,6 +2,8 @@ scan_tracking_require_weld_measure_sdk()
 
 add_library(scan_tracking_weld_measure STATIC
     src/weld_measure_service.cpp
+    src/weld_measure_sdk_seh.cpp
+    src/weld_measure_sdk_seh.h
     include/scan_tracking/weld_measure/weld_measure_types.h
     include/scan_tracking/weld_measure/weld_measure_service.h
 )

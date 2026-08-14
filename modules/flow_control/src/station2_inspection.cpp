@@ -1275,6 +1275,51 @@ std::mutex& station2EvaluateMutex()
 
 }  // namespace
 
+bool prewarmActiveStation2InspectionAlgorithm(QString* errorMessage)
+{
+    const auto* cfgMgr = common::ConfigManager::instance();
+    if (cfgMgr == nullptr || !cfgMgr->flowControlConfig().algorithmEnabled) {
+        return true;
+    }
+
+    const QString algorithm = cfgMgr->activePathAlgorithm().trimmed();
+    if (algorithm != QLatin1String("weld_section")) {
+        return true;
+    }
+
+    const int pathId = cfgMgr->activePathId();
+    const QString pathName = cfgMgr->activePathName();
+    const bool ringWeld = pathId == 5 ||
+        pathName.compare(QStringLiteral("ring_weld"), Qt::CaseInsensitive) == 0;
+
+    QString detail;
+    qInfo(LOG_STATION2_INSPECTION).noquote()
+        << QStringLiteral("启动期预热焊缝算法 pathId=") << pathId
+        << QStringLiteral(" name=") << pathName
+        << QStringLiteral(" arm=") << cfgMgr->enabledArmPointCount()
+        << QStringLiteral(" telescopic=") << cfgMgr->enabledTelescopicPointCount();
+
+    if (cfgMgr->enabledArmPointCount() > 0 &&
+        !ensureWeldMeasureReadyForDevice(common::ScanDeviceKind::Arm, ringWeld, &detail)) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("机械臂焊缝算法预热失败：%1").arg(detail);
+        }
+        return false;
+    }
+    if (cfgMgr->enabledTelescopicPointCount() > 0 &&
+        !ensureWeldMeasureReadyForDevice(
+            common::ScanDeviceKind::Telescopic, ringWeld, &detail)) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("伸缩杆焊缝算法预热失败：%1").arg(detail);
+        }
+        return false;
+    }
+
+    qInfo(LOG_STATION2_INSPECTION).noquote()
+        << QStringLiteral("启动期焊缝算法预热完成 pathId=") << pathId;
+    return true;
+}
+
 void InspectionCloudSnapshot::clear()
 {
     runTaskId = 0;

@@ -1,5 +1,7 @@
 #include "scan_tracking/weld_measure/weld_measure_service.h"
 
+#include "weld_measure_sdk_seh.h"
+
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
 #include <QtCore/QFileInfo>
@@ -29,9 +31,21 @@ void FillError(WeldMeasureError* error, wm_status status, const QString& message
 void DestroyContext(wm_context*& ctx)
 {
     if (ctx != nullptr) {
-        wm_destroy(ctx);
+        const unsigned nativeFault = sdk_seh::destroy(ctx);
+        if (nativeFault != 0) {
+            qCritical(LOG_WELD_MEASURE).noquote()
+                << QStringLiteral("WeldMeasure destroy 原生异常 SEH=0x%1，服务已隔离。")
+                       .arg(nativeFault, 8, 16, QLatin1Char('0'));
+        }
         ctx = nullptr;
     }
+}
+
+QString NativeFaultMessage(const char* operation, unsigned nativeFault)
+{
+    return QStringLiteral("WeldMeasure %1 原生异常 SEH=0x%2；本进程内算法服务已隔离，请重启IPC。")
+        .arg(QString::fromLatin1(operation))
+        .arg(nativeFault, 8, 16, QLatin1Char('0'));
 }
 
 void FillSection(const wm_section_result& src, WeldSectionMeasurement* dst)
@@ -154,7 +168,17 @@ bool WeldMeasureService::initializeFromIni(const QString& configPath, WeldMeasur
 
     const QByteArray pathUtf8 = QDir::toNativeSeparators(resolved).toUtf8();
     wm_context* ctx = nullptr;
-    const wm_status status = wm_create_from_ini(pathUtf8.constData(), &ctx);
+    wm_status status = WM_ERR_INTERNAL;
+    qInfo(LOG_WELD_MEASURE).noquote()
+        << QStringLiteral("WeldMeasure initialize begin ini=") << resolved;
+    const unsigned nativeFault =
+        sdk_seh::createFromIni(pathUtf8.constData(), &ctx, &status);
+    if (nativeFault != 0) {
+        const QString message = NativeFaultMessage("create_from_ini", nativeFault);
+        FillError(error, WM_ERR_INTERNAL, message);
+        qCritical(LOG_WELD_MEASURE).noquote() << message;
+        return false;
+    }
     if (status != WM_OK || ctx == nullptr) {
         FillError(error, status, QString::fromUtf8(wm_status_string(status)));
         qWarning(LOG_WELD_MEASURE) << "wm_create_from_ini failed:" << wm_status_string(status)
@@ -189,7 +213,16 @@ bool WeldMeasureService::initialize(const QString& modelPath, WeldMeasureError* 
     onnx.model_path = modelUtf8.constData();
 
     wm_context* ctx = nullptr;
-    const wm_status status = wm_create(&onnx, &ctx);
+    wm_status status = WM_ERR_INTERNAL;
+    qInfo(LOG_WELD_MEASURE).noquote()
+        << QStringLiteral("WeldMeasure initialize begin model=") << resolved;
+    const unsigned nativeFault = sdk_seh::create(&onnx, &ctx, &status);
+    if (nativeFault != 0) {
+        const QString message = NativeFaultMessage("create", nativeFault);
+        FillError(error, WM_ERR_INTERNAL, message);
+        qCritical(LOG_WELD_MEASURE).noquote() << message;
+        return false;
+    }
     if (status != WM_OK || ctx == nullptr) {
         FillError(error, status, QString::fromUtf8(wm_status_string(status)));
         qWarning(LOG_WELD_MEASURE) << "wm_create failed:" << wm_status_string(status);
@@ -233,7 +266,8 @@ bool WeldMeasureService::measureFrame(
 
     wm_frame_result result{};
     char message[512] = {0};
-    const wm_status status = wm_measure_frame(
+    wm_status status = WM_ERR_INTERNAL;
+    const unsigned nativeFault = sdk_seh::measureFrame(
         m_impl->ctx,
         frameIndex1Based,
         xyz,
@@ -241,7 +275,18 @@ bool WeldMeasureService::measureFrame(
         nullptr,
         &result,
         message,
-        sizeof(message));
+        sizeof(message),
+        &status);
+
+    if (nativeFault != 0) {
+        // 原生异常后上下文状态未知，禁止 destroy/复用该句柄。
+        m_impl->ctx = nullptr;
+        const QString faultMessage = NativeFaultMessage("measure_frame", nativeFault);
+        FillError(error, WM_ERR_INTERNAL, faultMessage);
+        qCritical(LOG_WELD_MEASURE).noquote()
+            << faultMessage << QStringLiteral(" frame=") << frameIndex1Based;
+        return false;
+    }
 
     if (status != WM_OK) {
         FillError(
@@ -285,14 +330,24 @@ bool WeldMeasureService::measureSection(
 
     wm_section_result result{};
     char message[512] = {0};
-    const wm_status status = wm_measure_section(
+    wm_status status = WM_ERR_INTERNAL;
+    const unsigned nativeFault = sdk_seh::measureSection(
         m_impl->ctx,
         xyz,
         pointCount,
         &options,
         &result,
         message,
-        sizeof(message));
+        sizeof(message),
+        &status);
+
+    if (nativeFault != 0) {
+        m_impl->ctx = nullptr;
+        const QString faultMessage = NativeFaultMessage("measure_section", nativeFault);
+        FillError(error, WM_ERR_INTERNAL, faultMessage);
+        qCritical(LOG_WELD_MEASURE).noquote() << faultMessage;
+        return false;
+    }
 
     if (status != WM_OK) {
         FillError(

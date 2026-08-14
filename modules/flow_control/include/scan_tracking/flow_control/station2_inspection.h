@@ -47,6 +47,10 @@ struct InspectionCloudSnapshot {
     const InspectionSegmentCloud* find(common::ScanDeviceKind device, int localIndex) const;
 };
 
+/// 启动期预热当前路径算法上下文；当前仅对 weld_section 生效。
+/// 应在累计大点云前调用，避免路径齐套后才创建 ONNX 会话。
+bool prewarmActiveStation2InspectionAlgorithm(QString* errorMessage = nullptr);
+
 /// 从段缓存共享 XYZ 缓冲；调用后主缓存可安全清空，快照通过 shared_ptr 保持数据存活。
 InspectionCloudSnapshot buildInspectionCloudSnapshot(const ScanSegmentCache& cache);
 

@@ -30,6 +30,7 @@
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/common/logger.h"
 #include "scan_tracking/flow_control/state_machine.h"
+#include "scan_tracking/flow_control/station2_inspection.h"
 #include "scan_tracking/mech_eye/mech_eye_service.h"
 #include "scan_tracking/mech_eye/mech_eye_types.h"
 #include "scan_tracking/modbus/modbus_service.h"
@@ -427,6 +428,18 @@ void ConsoleRuntime::initModules()
     }
     qInfo(appLog) << QStringLiteral("启动阶段 =") << startupStage
                   << QStringLiteral(" (0=Modbus, 1=+MechEye, 2=+Hik, 3=+VisionPipeline, 4=+Tracking, 5=+StateMachine)");
+
+    // 完整流程启动时，先于所有相机厂商 SDK 加载焊缝 ONNX 与模板。
+    // 这样既没有19帧常驻点云，也不存在多个原生 SDK 并发初始化。
+    if (startupStage >= 5) {
+        QString algorithmPrewarmError;
+        if (!scan_tracking::flow_control::prewarmActiveStation2InspectionAlgorithm(
+                &algorithmPrewarmError)) {
+            qCritical(appLog).noquote()
+                << QStringLiteral("测量算法启动期预热失败：") << algorithmPrewarmError
+                << QStringLiteral("；采集流程继续，检测时将返回失败结果而不退出IPC。");
+        }
+    }
 
     modbusService_ = std::make_unique<scan_tracking::modbus::ModbusService>();
     qInfo(appLog) << "Modbus 服务已创建。";

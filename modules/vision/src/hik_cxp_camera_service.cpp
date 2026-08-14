@@ -414,38 +414,45 @@ bool HikCxpCameraService::captureMonoFrame(
     const unsigned int waitMs = static_cast<unsigned int>(timeoutMs > 0 ? timeoutMs : m_defaultCaptureTimeoutMs);
     const unsigned int actualWaitMs = waitMs < 5000 ? 5000 : waitMs;
 
-    bool alreadyGrabbing = false;
+    // CXP 相机连接后处于连续自由采集。仅调用 ClearImageBuffer 只能清 SDK
+    // 输出队列，不能清掉采集卡/链路上的在途帧；路径切换后的首点可能因此取到
+    // 上一段的旧图。每次请求都重置一次采集状态，保证本次等待从新采集周期开始。
+    const int stopResult = MV_CC_StopGrabbing(handle);
+    if (stopResult != MV_OK && stopResult != MV_E_CALLORDER) {
+        qWarning() << QStringLiteral("[%1] CXP 采图前 StopGrabbing 失败 0x%2")
+                          .arg(m_roleName)
+                          .arg(static_cast<quint32>(stopResult), 8, 16, QLatin1Char('0'));
+    }
     {
         QMutexLocker locker(&m_impl->mutex);
-        alreadyGrabbing = m_impl->grabbing;
+        m_impl->grabbing = false;
     }
-    if (!alreadyGrabbing) {
-        const int startResult = MV_CC_StartGrabbing(handle);
-        if (startResult != MV_OK && startResult != MV_E_CALLORDER) {
-            if (errorMessage != nullptr) {
-                *errorMessage = QStringLiteral("MV_CC_StartGrabbing 失败，错误码=0x%1")
-                                    .arg(static_cast<quint32>(startResult), 8, 16, QLatin1Char('0'));
-            }
-            return false;
+
+    QElapsedTimer grabTimer;
+    grabTimer.start();
+    const int clearResult = MV_CC_ClearImageBuffer(handle);
+    qInfo() << QStringLiteral("[%1] CXP 采图前 ClearImageBuffer 结果=0x%2（丢弃队列旧帧）")
+                   .arg(m_roleName)
+                   .arg(static_cast<quint32>(clearResult), 8, 16, QLatin1Char('0'));
+
+    const int startResult = MV_CC_StartGrabbing(handle);
+    if (startResult != MV_OK && startResult != MV_E_CALLORDER) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("MV_CC_StartGrabbing 失败，错误码=0x%1")
+                                .arg(static_cast<quint32>(startResult), 8, 16, QLatin1Char('0'));
         }
+        return false;
+    }
+    {
         QMutexLocker locker(&m_impl->mutex);
         m_impl->grabbing = true;
     }
 
-    // 连续自由跑会在梅卡采图窗口内堆积旧帧；默认 OneByOne 会先吐旧图。
-    // 采前清缓冲 + LatestImagesOnly，尽量拿到“当前时刻附近”的新帧。
-    QElapsedTimer grabTimer;
-    grabTimer.start();
     const int strategyResult =
         MV_CC_SetGrabStrategy(handle, MV_GrabStrategy_LatestImagesOnly);
     qInfo() << QStringLiteral("[%1] CXP 采图前设置 GrabStrategy=LatestImagesOnly 结果=0x%2")
                    .arg(m_roleName)
                    .arg(static_cast<quint32>(strategyResult), 8, 16, QLatin1Char('0'));
-
-    const int clearResult = MV_CC_ClearImageBuffer(handle);
-    qInfo() << QStringLiteral("[%1] CXP 采图前 ClearImageBuffer 结果=0x%2（丢弃队列旧帧）")
-                   .arg(m_roleName)
-                   .arg(static_cast<quint32>(clearResult), 8, 16, QLatin1Char('0'));
 
     MV_FRAME_OUT frameOut{};
     const int getBufferResult = MV_CC_GetImageBuffer(handle, &frameOut, actualWaitMs);
