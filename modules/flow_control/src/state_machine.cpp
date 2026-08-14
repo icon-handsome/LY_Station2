@@ -146,7 +146,7 @@ void StateMachine::start()
 
     // HMI CmdStop → CmdStart/CmdReset 同实例重启：恢复 stop 关掉的门闩，否则后台解算/落盘回投永久跳过。
     m_stopped.store(false, std::memory_order_release);
-    m_bgSolveAcceptResults = std::make_shared<std::atomic_bool>(true);
+    m_bgSolveAcceptResults.store(true, std::memory_order_release);
     m_persistAcceptResults->store(true, std::memory_order_release);
     m_scanPersistWorker.restart();
     blockSignals(false);
@@ -190,8 +190,8 @@ void StateMachine::stop()
     if (firstStop) {
         bumpWorkpieceGeneration(QStringLiteral("state_machine.stop"));
     }
-    // 先关回投门闩再 join：工作线程/已排队回调只读 shared atomic，不得再碰 this。
-    m_bgSolveAcceptResults->store(false, std::memory_order_release);
+    // 先关回投门闩再 join：保证后台线程停止访问 StateMachine 后才继续析构。
+    m_bgSolveAcceptResults.store(false, std::memory_order_release);
     m_persistAcceptResults->store(false, std::memory_order_release);
     joinBackgroundInspectionSolves();
     m_scanPersistWorker.stopAndJoin();

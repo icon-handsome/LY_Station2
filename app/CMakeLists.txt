@@ -61,6 +61,11 @@ if(MSVC)
         /DELAYLOAD:LengthVolumeMeasure.dll
         /DELAYLOAD:opencv_world343.dll
     )
+    # Keep a linker map beside the executable for resolving field crash RVAs.
+    target_link_options(scan_tracking PRIVATE
+        "/MAP:${CMAKE_CURRENT_BINARY_DIR}/scan-tracking.map"
+        /MAPINFO:EXPORTS
+    )
 endif()
 
 set_target_properties(scan_tracking PROPERTIES

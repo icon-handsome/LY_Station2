@@ -256,9 +256,8 @@ void StateMachine::startBackgroundInspectionSolve(
         << QStringLiteral(" snapSeg=") << snapshot.segmentCount()
         << QStringLiteral(" workpieceGen=") << generation;
 
-    // 工作线程禁止使用 QPointer（非线程安全）。判活/是否回投只读 shared atomic；
-    // receiver 仅在 gate 仍开且 stop 尚未 join 完成时用于 invokeMethod（对象仍存活）。
-    const auto acceptResults = m_bgSolveAcceptResults;
+    // 工作线程禁止使用 QPointer（非线程安全）。stop 先关闭 gate 并 join，
+    // 因此线程访问 receiver 期间 StateMachine 仍然存活。
     StateMachine* const receiver = this;
 
     BackgroundInspectionJob job;
@@ -273,7 +272,7 @@ void StateMachine::startBackgroundInspectionSolve(
     {
         std::lock_guard<std::mutex> lock(m_bgSolveThreadsMutex);
         if (m_stopped.load(std::memory_order_acquire) ||
-            !acceptResults->load(std::memory_order_acquire)) {
+            !m_bgSolveAcceptResults.load(std::memory_order_acquire)) {
             qWarning(LOG_ALGORITHM).noquote()
                 << triggerLabel << QStringLiteral("：StateMachine 已 stop，跳过后台解算。");
             return;
@@ -311,7 +310,7 @@ void StateMachine::startBackgroundInspectionSolve(
             finishedThread = std::move(m_bgSolveThread);
         }
         m_bgSolveThread = std::thread(
-            [acceptResults, receiver, job = std::move(job)]() mutable {
+            [receiver, job = std::move(job)]() mutable {
                 for (;;) {
                     const quint64 generation = job.generation;
                     const QString triggerLabel = job.triggerLabel;
@@ -362,16 +361,16 @@ void StateMachine::startBackgroundInspectionSolve(
                     // 解算结束立刻丢掉点云快照，只保留结果回投所需字段。
                     job.cloudSnapshot.clear();
 
-                    if (acceptResults->load(std::memory_order_acquire)) {
+                    if (receiver->m_bgSolveAcceptResults.load(std::memory_order_acquire)) {
                         QMetaObject::invokeMethod(
                             receiver,
-                            [acceptResults,
-                             receiver,
+                            [receiver,
                              generation,
                              result,
                              triggerLabel,
                              runCaptureRoot]() {
-                                if (!acceptResults->load(std::memory_order_acquire)) {
+                                if (!receiver->m_bgSolveAcceptResults.load(
+                                        std::memory_order_acquire)) {
                                     return;
                                 }
                                 receiver->applyBackgroundInspectionResult(
@@ -382,7 +381,7 @@ void StateMachine::startBackgroundInspectionSolve(
 
                     {
                         std::lock_guard<std::mutex> lock(receiver->m_bgSolveThreadsMutex);
-                        if (!acceptResults->load(std::memory_order_acquire) ||
+                        if (!receiver->m_bgSolveAcceptResults.load(std::memory_order_acquire) ||
                             receiver->m_bgSolvePending.empty()) {
                             receiver->m_bgSolvePending.clear();
                             receiver->m_bgSolveWorkerBusy = false;

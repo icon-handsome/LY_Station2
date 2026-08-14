@@ -419,9 +419,8 @@ private:
     std::thread m_bgSolveThread;
     bool m_bgSolveWorkerBusy = false;
     std::deque<BackgroundInspectionJob> m_bgSolvePending;
-    /// 工作线程只读此 gate（shared_ptr），禁止跨线程读 QPointer / StateMachine 成员判活。
-    std::shared_ptr<std::atomic_bool> m_bgSolveAcceptResults{
-        std::make_shared<std::atomic_bool>(true)};
+    /// 后台解算回投门闩；stop 先关闸并 join，保证工作线程访问期间对象仍存活。
+    std::atomic_bool m_bgSolveAcceptResults{true};
 };
 
 }  // namespace flow_control
