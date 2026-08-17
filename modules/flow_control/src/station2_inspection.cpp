@@ -12,6 +12,7 @@
 #include <QtCore/QVector>
 
 #include <algorithm>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <utility>
@@ -346,9 +347,6 @@ InspectionResult evaluateWeldSectionInspection(
         return result;
     }
 
-    std::vector<float> xyz;
-    int measuredOk = 0;
-
     qInfo(LOG_STATION2_INSPECTION).noquote()
         << QStringLiteral("开始焊缝正式流程测量 pathId=") << quota.pathId
         << QStringLiteral(" name=") << quota.pathName
@@ -356,75 +354,143 @@ InspectionResult evaluateWeldSectionInspection(
         << QStringLiteral(" 配额臂=") << quota.expectedArmCount
         << QStringLiteral(" 伸缩杆=") << quota.expectedTelescopicCount;
 
+    using WeldFrameMeasurement = scan_tracking::weld_measure::WeldFrameMeasurement;
+
+    struct DeviceMeasurement {
+        common::ScanDeviceKind device = common::ScanDeviceKind::Arm;
+        std::vector<WeldFrameMeasurement> frames;
+        QString error;
+        int errorCode = 0;  // 1 = invalid point cloud, 2 = algorithm failure
+        int errorLocalIndex = 0;
+        int measuredOk = 0;
+    };
+
+    std::vector<ScanSegmentCacheKey> armKeys;
+    std::vector<ScanSegmentCacheKey> telescopicKeys;
     for (const ScanSegmentCacheKey& key : cache.cachedKeys()) {
         if (!isWithinDeviceQuota(key.device, key.localIndex, quota)) {
             continue;
         }
-
-        const ScanSegmentCacheEntry* entry = cache.entry(key.device, key.localIndex);
-        const auto& cloud = entry->bundle.mechEyeResult.pointCloud;
-
-        int finiteCount = 0;
-        if (!extractFiniteXyz(cloud, &xyz, &finiteCount)) {
-            result.resultCode = 2;
-            result.ngReasonWord0 = kNgReasonPointCloudInvalid;
-            result.measurement.qualityCode = 2;
-            result.measureItemCount = 1;
-            result.message =
-                QStringLiteral("pathId=%1 %2 段 %3 点云无效或无可测点。")
-                    .arg(quota.pathId)
-                    .arg(common::ConfigManager::scanDeviceKindToString(key.device))
-                    .arg(key.localIndex);
-            return result;
-        }
-
-        auto& weldService = sharedWeldMeasureService(key.device, ringWeld);
-
-        scan_tracking::weld_measure::WeldFrameMeasurement frame;
-        scan_tracking::weld_measure::WeldMeasureError error;
-        const size_t pointCount = static_cast<size_t>(finiteCount);
-        qInfo(LOG_STATION2_INSPECTION)
-            << "pathId" << quota.pathId
-            << common::ConfigManager::scanDeviceKindToString(key.device)
-            << "localIndex" << key.localIndex
-            << "measureFrame begin fedPoints=" << finiteCount;
-        // Formal V2.2 flow: FrameN <-> localIndex, ROI/ICP/section extraction inside DLL.
-        if (!weldService.measureFrame(key.localIndex, xyz.data(), pointCount, &frame, &error)) {
-            result.resultCode = 2;
-            result.ngReasonWord0 = kNgReasonAlgorithmFailed;
-            result.measurement.qualityCode = 2;
-            result.measureItemCount = 1;
-            result.message =
-                QStringLiteral("pathId=%1 %2 段 %3 焊缝测量失败：%4")
-                    .arg(quota.pathId)
-                    .arg(common::ConfigManager::scanDeviceKindToString(key.device))
-                    .arg(key.localIndex)
-                    .arg(error.message);
-            qWarning(LOG_STATION2_INSPECTION)
-                << "pathId" << quota.pathId
-                << common::ConfigManager::scanDeviceKindToString(key.device)
-                << "localIndex" << key.localIndex
-                << "measureFrame failed:" << error.message
-                << "points=" << finiteCount;
-            return result;
-        }
-
-        accumulateMeasurement(&result.measurement, frame.average);
-
-        ++measuredOk;
-        qInfo(LOG_STATION2_INSPECTION)
-            << "pathId" << quota.pathId
-            << common::ConfigManager::scanDeviceKindToString(key.device)
-            << "localIndex" << key.localIndex
-            << "validSections=" << frame.validSections << "/" << frame.totalSections
-            << "mismatch=" << frame.average.mismatchMm
-            << "reinforcement=" << frame.average.reinforcementMm
-            << "angularity=" << frame.average.angularityMm
-            << "maxUndercutDepth=" << frame.average.maxUndercutMm
-            << "undercutLengthL/R=" << frame.leftUndercutLengthMm << "/"
-            << frame.rightUndercutLengthMm
-            << "points=" << finiteCount;
+        (key.device == common::ScanDeviceKind::Arm ? armKeys : telescopicKeys).push_back(key);
     }
+
+    // Each device owns an independent WeldMeasure context. Keep each device's
+    // frame order intact while allowing the arm and telescopic pipelines to run
+    // concurrently. The outer evaluation mutex still serializes whole paths.
+    const auto measureDevice = [&](common::ScanDeviceKind device,
+                                   const std::vector<ScanSegmentCacheKey>& keys) {
+        DeviceMeasurement output;
+        output.device = device;
+        output.frames.reserve(keys.size());
+        auto& weldService = sharedWeldMeasureService(device, ringWeld);
+        std::vector<float> xyz;
+        for (const ScanSegmentCacheKey& key : keys) {
+            const ScanSegmentCacheEntry* entry = cache.entry(key.device, key.localIndex);
+            const auto& cloud = entry->bundle.mechEyeResult.pointCloud;
+
+            int finiteCount = 0;
+            if (!extractFiniteXyz(cloud, &xyz, &finiteCount)) {
+                output.errorCode = 1;
+                output.errorLocalIndex = key.localIndex;
+                output.error = QStringLiteral("%1 段 %2 点云无效或无可测点。")
+                                   .arg(common::ConfigManager::scanDeviceKindToString(device))
+                                   .arg(key.localIndex);
+                return output;
+            }
+
+            WeldFrameMeasurement frame;
+            scan_tracking::weld_measure::WeldMeasureError error;
+            qInfo(LOG_STATION2_INSPECTION)
+                << "pathId" << quota.pathId
+                << common::ConfigManager::scanDeviceKindToString(device)
+                << "localIndex" << key.localIndex
+                << "measureFrame begin fedPoints=" << finiteCount;
+            // Formal V2.2 flow: FrameN <-> localIndex, ROI/ICP/section extraction inside DLL.
+            if (!weldService.measureFrame(
+                    key.localIndex, xyz.data(), static_cast<size_t>(finiteCount), &frame, &error)) {
+                output.errorCode = 2;
+                output.errorLocalIndex = key.localIndex;
+                output.error = error.message;
+                qWarning(LOG_STATION2_INSPECTION)
+                    << "pathId" << quota.pathId
+                    << common::ConfigManager::scanDeviceKindToString(device)
+                    << "localIndex" << key.localIndex
+                    << "measureFrame failed:" << error.message
+                    << "points=" << finiteCount;
+                return output;
+            }
+
+            output.frames.push_back(frame);
+            ++output.measuredOk;
+            qInfo(LOG_STATION2_INSPECTION)
+                << "pathId" << quota.pathId
+                << common::ConfigManager::scanDeviceKindToString(device)
+                << "localIndex" << key.localIndex
+                << "validSections=" << frame.validSections << "/" << frame.totalSections
+                << "mismatch=" << frame.average.mismatchMm
+                << "reinforcement=" << frame.average.reinforcementMm
+                << "angularity=" << frame.average.angularityMm
+                << "maxUndercutDepth=" << frame.average.maxUndercutMm
+                << "undercutLengthL/R=" << frame.leftUndercutLengthMm << "/"
+                << frame.rightUndercutLengthMm
+                << "points=" << finiteCount;
+        }
+        return output;
+    };
+
+    std::future<DeviceMeasurement> armFuture =
+        std::async(std::launch::async, measureDevice, common::ScanDeviceKind::Arm, std::cref(armKeys));
+    std::future<DeviceMeasurement> telescopicFuture;
+    if (!telescopicKeys.empty()) {
+        telescopicFuture = std::async(
+            std::launch::async,
+            measureDevice,
+            common::ScanDeviceKind::Telescopic,
+            std::cref(telescopicKeys));
+    }
+
+    // Consume in the original cache order (Arm before Telescopic), preserving
+    // deterministic error precedence and metric aggregation semantics.
+    DeviceMeasurement armResult = armFuture.get();
+    DeviceMeasurement telescopicResult;
+    telescopicResult.device = common::ScanDeviceKind::Telescopic;
+    if (!telescopicKeys.empty()) {
+        telescopicResult = telescopicFuture.get();
+    }
+
+    const auto applyDeviceResult = [&](const DeviceMeasurement& deviceResult) {
+        if (deviceResult.errorCode != 0) {
+            result.resultCode = 2;
+            result.ngReasonWord0 = deviceResult.errorCode == 1
+                ? kNgReasonPointCloudInvalid
+                : kNgReasonAlgorithmFailed;
+            result.measurement.qualityCode = 2;
+            result.measureItemCount = 1;
+            if (deviceResult.errorCode == 1) {
+                result.message = QStringLiteral("pathId=%1 %2")
+                                     .arg(quota.pathId)
+                                     .arg(deviceResult.error);
+            } else {
+                result.message = QStringLiteral("pathId=%1 %2 段 %3 焊缝测量失败：%4")
+                                     .arg(quota.pathId)
+                                     .arg(common::ConfigManager::scanDeviceKindToString(
+                                         deviceResult.device))
+                                     .arg(deviceResult.errorLocalIndex)
+                                     .arg(deviceResult.error);
+            }
+            return false;
+        }
+        for (const WeldFrameMeasurement& frame : deviceResult.frames) {
+            accumulateMeasurement(&result.measurement, frame.average);
+        }
+        return true;
+    };
+
+    if (!applyDeviceResult(armResult) || !applyDeviceResult(telescopicResult)) {
+        return result;
+    }
+
+    const int measuredOk = armResult.measuredOk + telescopicResult.measuredOk;
 
     if (measuredOk <= 0) {
         result.resultCode = 3;
