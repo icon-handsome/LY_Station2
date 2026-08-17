@@ -70,3 +70,16 @@ if(SCAN_TRACKING_ENABLE_LB_POSE_DETECTION)
             scan_tracking_tracking
     )
 endif()
+
+add_executable(scan_tracking_path1_offline
+    tests/path1_offline_runner.cpp
+)
+
+target_link_libraries(scan_tracking_path1_offline
+    PRIVATE
+        scan_tracking_flow_control
+)
+
+set_target_properties(scan_tracking_path1_offline PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/app"
+)
