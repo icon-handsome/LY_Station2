@@ -14,6 +14,8 @@
 #include <QtCore/QCoreApplication>
 #include <QtCore/QThread>
 
+#include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <exception>
 #include <new>
@@ -229,12 +231,122 @@ void StateMachine::joinBackgroundInspectionSolves()
         << QStringLiteral("后台解算线程已接合。");
 }
 
+void StateMachine::scheduleIncrementalWeldSegment(
+    common::ScanDeviceKind device,
+    int segmentIndex,
+    const QString& triggerLabel)
+{
+    const auto* cfgMgr = common::ConfigManager::instance();
+    if (cfgMgr == nullptr ||
+        !cfgMgr->flowControlConfig().algorithmEnabled ||
+        cfgMgr->activePathAlgorithm().trimmed() != QLatin1String("weld_section")) {
+        return;
+    }
+
+    InspectionSegmentCloud segment;
+    if (!buildInspectionSegmentCloud(m_scanSegmentCache, device, segmentIndex, &segment)) {
+        qWarning(LOG_ALGORITHM).noquote()
+            << triggerLabel << QStringLiteral("：逐段焊缝解算投递失败，缓存中无此段 device=")
+            << common::ConfigManager::scanDeviceKindToString(device)
+            << QStringLiteral(" localIndex=") << segmentIndex;
+        return;
+    }
+
+    const int pathId = cfgMgr->activePathId();
+    const QString runKey = currentInspectionRunKey();
+    const bool ringWeld = pathId == 5 ||
+        cfgMgr->activePathName().trimmed().compare(
+            QStringLiteral("ring_weld"), Qt::CaseInsensitive) == 0;
+
+    std::lock_guard<std::mutex> lock(m_incrementalWeldMutex);
+    m_retiredIncrementalWeldTasks.erase(
+        std::remove_if(
+            m_retiredIncrementalWeldTasks.begin(),
+            m_retiredIncrementalWeldTasks.end(),
+            [](const std::shared_future<IncrementalWeldSegmentResult>& retired) {
+                return retired.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+            }),
+        m_retiredIncrementalWeldTasks.end());
+    if (!m_incrementalWeldTasks.empty() &&
+        (m_incrementalWeldTasks.front().pathId != pathId ||
+         m_incrementalWeldTasks.front().runKey != runKey)) {
+        for (IncrementalWeldTask& task : m_incrementalWeldTasks) {
+            if (task.future.valid()) {
+                m_retiredIncrementalWeldTasks.push_back(std::move(task.future));
+            }
+        }
+        m_incrementalWeldTasks.clear();
+        m_incrementalWeldArmTail = {};
+        m_incrementalWeldTelescopicTail = {};
+    }
+
+    auto& tail = device == common::ScanDeviceKind::Arm
+        ? m_incrementalWeldArmTail
+        : m_incrementalWeldTelescopicTail;
+    const std::shared_future<IncrementalWeldSegmentResult> predecessor = tail;
+    std::shared_future<IncrementalWeldSegmentResult> future = std::async(
+        std::launch::async,
+        [predecessor, segment = std::move(segment), pathId, ringWeld]() mutable {
+            if (predecessor.valid()) {
+                predecessor.wait();
+            }
+            return evaluateWeldSectionSegment(segment, pathId, ringWeld);
+        }).share();
+    tail = future;
+
+    m_incrementalWeldTasks.erase(
+        std::remove_if(
+            m_incrementalWeldTasks.begin(),
+            m_incrementalWeldTasks.end(),
+            [pathId, &runKey, device, segmentIndex](const IncrementalWeldTask& task) {
+                return task.pathId == pathId && task.runKey == runKey &&
+                       task.device == device && task.localIndex == segmentIndex;
+            }),
+        m_incrementalWeldTasks.end());
+    IncrementalWeldTask task;
+    task.pathId = pathId;
+    task.runKey = runKey;
+    task.device = device;
+    task.localIndex = segmentIndex;
+    task.future = std::move(future);
+    m_incrementalWeldTasks.push_back(std::move(task));
+
+    qInfo(LOG_ALGORITHM).noquote()
+        << triggerLabel << QStringLiteral("：已投递逐段焊缝解算 pathId=") << pathId
+        << QStringLiteral(" device=")
+        << common::ConfigManager::scanDeviceKindToString(device)
+        << QStringLiteral(" localIndex=") << segmentIndex
+        << QStringLiteral(" queued=") << static_cast<int>(m_incrementalWeldTasks.size());
+}
+
+void StateMachine::resetIncrementalWeldState()
+{
+    std::lock_guard<std::mutex> lock(m_incrementalWeldMutex);
+    for (IncrementalWeldTask& task : m_incrementalWeldTasks) {
+        if (task.future.valid()) {
+            m_retiredIncrementalWeldTasks.push_back(std::move(task.future));
+        }
+    }
+    m_incrementalWeldTasks.clear();
+    m_incrementalWeldArmTail = {};
+    m_incrementalWeldTelescopicTail = {};
+    m_retiredIncrementalWeldTasks.erase(
+        std::remove_if(
+            m_retiredIncrementalWeldTasks.begin(),
+            m_retiredIncrementalWeldTasks.end(),
+            [](const std::shared_future<IncrementalWeldSegmentResult>& retired) {
+                return retired.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+            }),
+        m_retiredIncrementalWeldTasks.end());
+}
+
 void StateMachine::startBackgroundInspectionSolve(
     InspectionCloudSnapshot snapshot,
     quint32 taskId,
     const InspectionQuota& quota,
     quint64 generation,
-    const QString& triggerLabel)
+    const QString& triggerLabel,
+    std::vector<IncrementalWeldTask> incrementalWeldTasks)
 {
     const auto* cfgMgr = common::ConfigManager::instance();
     if (cfgMgr != nullptr && !cfgMgr->flowControlConfig().algorithmEnabled) {
@@ -262,6 +374,7 @@ void StateMachine::startBackgroundInspectionSolve(
 
     BackgroundInspectionJob job;
     job.cloudSnapshot = std::move(snapshot);
+    job.incrementalWeldTasks = std::move(incrementalWeldTasks);
     job.taskId = taskId;
     job.quota = quota;
     job.generation = generation;
@@ -315,15 +428,32 @@ void StateMachine::startBackgroundInspectionSolve(
                     const quint64 generation = job.generation;
                     const QString triggerLabel = job.triggerLabel;
                     const QString runCaptureRoot = job.runCaptureRoot;
+                    const bool incrementalWeldJob = !job.incrementalWeldTasks.empty();
                     InspectionResult result;
                     try {
-                        result = evaluateStation2Inspection(
-                            job.cloudSnapshot, job.taskId, job.quota);
+                        if (!job.incrementalWeldTasks.empty()) {
+                            const auto finalizeStart = std::chrono::steady_clock::now();
+                            std::vector<IncrementalWeldSegmentResult> segments;
+                            segments.reserve(job.incrementalWeldTasks.size());
+                            for (const IncrementalWeldTask& task : job.incrementalWeldTasks) {
+                                segments.push_back(task.future.get());
+                            }
+                            const double elapsedSeconds = std::chrono::duration<double>(
+                                std::chrono::steady_clock::now() - finalizeStart).count();
+                            result = aggregateWeldSectionSegments(
+                                segments, job.quota, elapsedSeconds);
+                            job.incrementalWeldTasks.clear();
+                        } else {
+                            result = evaluateStation2Inspection(
+                                job.cloudSnapshot, job.taskId, job.quota);
+                        }
                     } catch (const std::bad_alloc&) {
                         result.resultCode = 2;
                         result.ngReasonWord0 = 1u << 3;
                         result.measureItemCount = 1;
-                        result.sourcePointCount = job.cloudSnapshot.segmentCount();
+                        result.sourcePointCount = incrementalWeldJob
+                            ? job.quota.total()
+                            : job.cloudSnapshot.segmentCount();
                         result.pathId = job.quota.pathId;
                         result.pathName = job.quota.pathName;
                         result.algorithm = job.quota.algorithm;
@@ -336,7 +466,9 @@ void StateMachine::startBackgroundInspectionSolve(
                         result.resultCode = 2;
                         result.ngReasonWord0 = 1u << 3;
                         result.measureItemCount = 1;
-                        result.sourcePointCount = job.cloudSnapshot.segmentCount();
+                        result.sourcePointCount = incrementalWeldJob
+                            ? job.quota.total()
+                            : job.cloudSnapshot.segmentCount();
                         result.pathId = job.quota.pathId;
                         result.pathName = job.quota.pathName;
                         result.algorithm = job.quota.algorithm;
@@ -349,7 +481,9 @@ void StateMachine::startBackgroundInspectionSolve(
                         result.resultCode = 2;
                         result.ngReasonWord0 = 1u << 3;
                         result.measureItemCount = 1;
-                        result.sourcePointCount = job.cloudSnapshot.segmentCount();
+                        result.sourcePointCount = incrementalWeldJob
+                            ? job.quota.total()
+                            : job.cloudSnapshot.segmentCount();
                         result.pathId = job.quota.pathId;
                         result.pathName = job.quota.pathName;
                         result.algorithm = job.quota.algorithm;
@@ -593,10 +727,53 @@ bool StateMachine::maybeStartInspectionSolveWhenQuotaComplete(const QString& tri
         return true;
     }
 
-    // 先抽轻量 XYZ 快照再 mark；不切路、不清缓存，等 Trig_Inspection 放行后再 prepareNext。
-    InspectionCloudSnapshot cloudSnapshot = buildInspectionCloudSnapshot(m_scanSegmentCache);
+    // weld_section 已在每段采集完成时开始解算；齐套后只移交 futures 做等待和聚合。
+    // 其他算法仍按原逻辑抽整路径轻量快照。
+    InspectionCloudSnapshot cloudSnapshot;
+    std::vector<IncrementalWeldTask> incrementalWeldTasks;
+    if (quota.algorithm.trimmed() == QLatin1String("weld_section")) {
+        const QString runKey = currentInspectionRunKey();
+        std::lock_guard<std::mutex> lock(m_incrementalWeldMutex);
+        const int matchingTaskCount = static_cast<int>(std::count_if(
+            m_incrementalWeldTasks.begin(),
+            m_incrementalWeldTasks.end(),
+            [&quota, &runKey](const IncrementalWeldTask& task) {
+                return task.pathId == quota.pathId && task.runKey == runKey;
+            }));
+        if (matchingTaskCount == quota.total()) {
+            for (auto it = m_incrementalWeldTasks.begin(); it != m_incrementalWeldTasks.end();) {
+                if (it->pathId == quota.pathId && it->runKey == runKey) {
+                    incrementalWeldTasks.push_back(std::move(*it));
+                    it = m_incrementalWeldTasks.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            m_incrementalWeldArmTail = {};
+            m_incrementalWeldTelescopicTail = {};
+            std::sort(
+                incrementalWeldTasks.begin(), incrementalWeldTasks.end(),
+                [](const IncrementalWeldTask& a, const IncrementalWeldTask& b) {
+                    if (a.device != b.device) {
+                        return static_cast<int>(a.device) < static_cast<int>(b.device);
+                    }
+                    return a.localIndex < b.localIndex;
+                });
+        }
+    }
+    if (static_cast<int>(incrementalWeldTasks.size()) != quota.total()) {
+        if (quota.algorithm.trimmed() == QLatin1String("weld_section")) {
+            qWarning(LOG_ALGORITHM).noquote()
+                << triggerLabel
+                << QStringLiteral("：逐段焊缝任务不完整，回退整路径解算 queued=")
+                << static_cast<int>(incrementalWeldTasks.size())
+                << QStringLiteral(" expected=") << quota.total();
+            incrementalWeldTasks.clear();
+        }
+        cloudSnapshot = buildInspectionCloudSnapshot(m_scanSegmentCache);
+    }
     const quint32 taskId =
-        m_activeTask.taskId != 0 ? m_activeTask.taskId : cloudSnapshot.runTaskId;
+        m_activeTask.taskId != 0 ? m_activeTask.taskId : m_scanSegmentCache.runTaskId();
     const quint64 generation = workpieceGeneration();
 
     markCurrentPathInspectionDone();
@@ -615,7 +792,8 @@ bool StateMachine::maybeStartInspectionSolveWhenQuotaComplete(const QString& tri
         taskId,
         quota,
         generation,
-        triggerLabel);
+        triggerLabel,
+        std::move(incrementalWeldTasks));
     return true;
 }
 

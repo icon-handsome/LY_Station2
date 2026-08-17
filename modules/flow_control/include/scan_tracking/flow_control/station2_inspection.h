@@ -2,6 +2,7 @@
 
 #include "scan_tracking/flow_control/inspection_types.h"
 #include "scan_tracking/flow_control/scan_segment_cache.h"
+#include "scan_tracking/weld_measure/weld_measure_types.h"
 
 #include <QtCore/QVector>
 
@@ -47,12 +48,43 @@ struct InspectionCloudSnapshot {
     const InspectionSegmentCloud* find(common::ScanDeviceKind device, int localIndex) const;
 };
 
+/// 单段焊缝解算结果。采集线程只投递轻量 XYZ，设备内段序由调用方保证。
+struct IncrementalWeldSegmentResult {
+    common::ScanDeviceKind device = common::ScanDeviceKind::Arm;
+    int localIndex = 0;
+    bool success = false;
+    int errorCode = 0;  ///< 1=点云无效，2=算法失败
+    QString errorMessage;
+    weld_measure::WeldFrameMeasurement frame;
+    double elapsedSeconds = 0.0;
+};
+
 /// 启动期预热当前路径算法上下文；当前仅对 weld_section 生效。
 /// 应在累计大点云前调用，避免路径齐套后才创建 ONNX 会话。
 bool prewarmActiveStation2InspectionAlgorithm(QString* errorMessage = nullptr);
 
 /// 从段缓存共享 XYZ 缓冲；调用后主缓存可安全清空，快照通过 shared_ptr 保持数据存活。
 InspectionCloudSnapshot buildInspectionCloudSnapshot(const ScanSegmentCache& cache);
+
+/// 从缓存提取单段轻量快照，不复制大点云缓冲。
+bool buildInspectionSegmentCloud(
+    const ScanSegmentCache& cache,
+    common::ScanDeviceKind device,
+    int localIndex,
+    InspectionSegmentCloud* out);
+
+/// 立即解算一个 weld_section 段。不同设备拥有独立算法 Context，可并发调用；
+/// 同一设备必须由调用方保持 localIndex 顺序。
+IncrementalWeldSegmentResult evaluateWeldSectionSegment(
+    const InspectionSegmentCloud& segment,
+    int pathId,
+    bool ringWeld);
+
+/// 按机械臂、伸缩杆、段号顺序聚合增量结果，判定逻辑与整路径入口一致。
+InspectionResult aggregateWeldSectionSegments(
+    const std::vector<IncrementalWeldSegmentResult>& segments,
+    const InspectionQuota& quota,
+    double wallElapsedSeconds);
 
 /// 基于轻量快照执行第二工位综合检测。
 /// 内部持有全局评估锁；后台工作线程可阻塞等待。GUI/主线程请用 tryEvaluateStation2Inspection。

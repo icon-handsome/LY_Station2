@@ -87,6 +87,10 @@ void StateMachine::onBundleCaptureFinished(vision::MultiCameraCaptureBundle bund
             bundleTaskId,
             std::move(bundle));
 
+        // weld_section 不再等待整条路径齐套：当前段缓存完成后立即进入对应设备算法链。
+        // 这里只共享 XYZ 所有权并启动异步任务，不阻塞 PLC ACK。
+        scheduleIncrementalWeldSegment(device, segmentIndex, triggerLabel);
+
         const auto* configMgr = common::ConfigManager::instance();
         const int armExpected = configMgr != nullptr ? configMgr->enabledArmPointCount() : 0;
         const int telescopicExpected =
@@ -316,6 +320,7 @@ void StateMachine::onMechEyeFatalError(mech_eye::CaptureErrorCode code, QString 
 
 void StateMachine::resetScanSegmentCache()
 {
+    resetIncrementalWeldState();
     m_scanSegmentCache.reset();
     qInfo(LOG_FLOW).noquote() << QStringLiteral("扫描段缓存已清空（含运行实例目录绑定）。");
 }
@@ -373,6 +378,7 @@ void StateMachine::onScanSegmentPersistFinished(
 
 void StateMachine::clearScanSegmentCacheForPathSwitch()
 {
+    resetIncrementalWeldState();
     m_scanSegmentCache.clearSegmentsKeepRunRoot();
     qInfo(LOG_FLOW).noquote()
         << QStringLiteral("已清段缓存并保留运行实例目录：")

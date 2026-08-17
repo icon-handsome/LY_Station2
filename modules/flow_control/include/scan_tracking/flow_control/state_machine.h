@@ -10,9 +10,11 @@
 
 #include <atomic>
 #include <deque>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 #include "scan_tracking/flow_control/inspection_types.h"
 #include "scan_tracking/flow_control/plc_task_host.h"
@@ -266,11 +268,25 @@ private:
     /// 编号段扫 Ack 已写出后，若 PLC 迟迟不拉低 Trig，延时强制收尾以免整线卡死。
     void scheduleCodeReadScanFinalizeWatchdog(int trigOffset);
     void finishSelfCheckCapture(const vision::MultiCameraCaptureBundle& bundle);
+    struct IncrementalWeldTask {
+        int pathId = 0;
+        QString runKey;
+        common::ScanDeviceKind device = common::ScanDeviceKind::Arm;
+        int localIndex = 0;
+        std::shared_future<IncrementalWeldSegmentResult> future;
+    };
+
     /// 当前路径检测成功后：清空段缓存/扫描完成寄存器，并自动切到下一条启用路径（不依赖 PLC ResultReset）。
     void prepareNextScanPathAfterSuccess();
     /// 路径齐套且为可后台测量算法时：立刻抽快照并启动后台解算（不切路、不 ACK Inspection）。
     /// @return 是否实际启动了解算
     bool maybeStartInspectionSolveWhenQuotaComplete(const QString& triggerLabel);
+    /// weld_section 每段采集成功后立即投递；设备内串行、设备间并行。
+    void scheduleIncrementalWeldSegment(
+        common::ScanDeviceKind device,
+        int segmentIndex,
+        const QString& triggerLabel);
+    void resetIncrementalWeldState();
     /// 离开当前路径前兜底：若尚未提前解算且已齐套，则后台跑算法并写 PLC 假成功。
     void maybeAutoRunInspectionBeforeLeavingPath();
     void markCurrentPathInspectionDone();
@@ -294,7 +310,8 @@ private:
         quint32 taskId,
         const InspectionQuota& quota,
         quint64 generation,
-        const QString& triggerLabel);
+        const QString& triggerLabel,
+        std::vector<IncrementalWeldTask> incrementalWeldTasks = {});
     /// stop/析构前接合后台解算线程，避免 detach 后静态析构竞态。
     void joinBackgroundInspectionSolves();
     void scheduleScanSegmentPersist(
@@ -313,6 +330,7 @@ private:
 
     struct BackgroundInspectionJob {
         InspectionCloudSnapshot cloudSnapshot;
+        std::vector<IncrementalWeldTask> incrementalWeldTasks;
         quint32 taskId = 0;
         InspectionQuota quota;
         quint64 generation = 0;
@@ -421,6 +439,13 @@ private:
     std::deque<BackgroundInspectionJob> m_bgSolvePending;
     /// 后台解算回投门闩；stop 先关闸并 join，保证工作线程访问期间对象仍存活。
     std::atomic_bool m_bgSolveAcceptResults{true};
+    /// 当前 weld_section 路径的逐段解算链。shared_future 让齐套收尾只等待、不重算。
+    std::mutex m_incrementalWeldMutex;
+    std::vector<IncrementalWeldTask> m_incrementalWeldTasks;
+    std::shared_future<IncrementalWeldSegmentResult> m_incrementalWeldArmTail;
+    std::shared_future<IncrementalWeldSegmentResult> m_incrementalWeldTelescopicTail;
+    /// 切路/重置时接管仍在运行的 async shared state，避免其析构阻塞采集线程。
+    std::vector<std::shared_future<IncrementalWeldSegmentResult>> m_retiredIncrementalWeldTasks;
 };
 
 }  // namespace flow_control

@@ -1490,6 +1490,200 @@ InspectionCloudSnapshot buildInspectionCloudSnapshot(const ScanSegmentCache& cac
     return snapshot;
 }
 
+bool buildInspectionSegmentCloud(
+    const ScanSegmentCache& cache,
+    common::ScanDeviceKind device,
+    int localIndex,
+    InspectionSegmentCloud* out)
+{
+    if (out == nullptr) {
+        return false;
+    }
+    const ScanSegmentCacheEntry* entry = cache.entry(device, localIndex);
+    if (entry == nullptr) {
+        return false;
+    }
+
+    InspectionSegmentCloud segment;
+    segment.device = device;
+    segment.localIndex = localIndex;
+    segment.captureOk = entry->bundle.success();
+    segment.cxpParticipated = entry->bundle.cxpParticipated();
+    const auto& lb = entry->bundle.lbPoseResult;
+    segment.lbPoseOk = lb.invoked && lb.success && lb.poseMatrix.valid;
+    if (segment.captureOk) {
+        const auto& frame = entry->bundle.mechEyeResult.pointCloud;
+        const int bufferPointCount = frame.pointsXYZ
+            ? static_cast<int>(frame.pointsXYZ->size() / 3u)
+            : 0;
+        segment.pointCount = std::min(frame.pointCount, bufferPointCount);
+        if (segment.pointCount <= 0) {
+            segment.captureOk = false;
+            segment.pointCount = 0;
+        } else {
+            segment.xyz = frame.pointsXYZ;
+        }
+    }
+    *out = std::move(segment);
+    return true;
+}
+
+IncrementalWeldSegmentResult evaluateWeldSectionSegment(
+    const InspectionSegmentCloud& segment,
+    int pathId,
+    bool ringWeld)
+{
+    IncrementalWeldSegmentResult result;
+    result.device = segment.device;
+    result.localIndex = segment.localIndex;
+    QElapsedTimer timer;
+    timer.start();
+
+    if (!segment.captureOk || !segment.xyz || segment.pointCount <= 0) {
+        result.errorCode = 1;
+        result.errorMessage = QStringLiteral("点云无效或无可测点。");
+        result.elapsedSeconds = timer.nsecsElapsed() / 1e9;
+        return result;
+    }
+
+    QString initError;
+    if (!ensureWeldMeasureReadyForDevice(segment.device, ringWeld, &initError)) {
+        result.errorCode = 2;
+        result.errorMessage = initError;
+        result.elapsedSeconds = timer.nsecsElapsed() / 1e9;
+        return result;
+    }
+
+    scan_tracking::mech_eye::PointCloudFrame cloud;
+    cloud.pointsXYZ = segment.xyz;
+    cloud.pointCount = segment.pointCount;
+    cloud.width = segment.pointCount;
+    cloud.height = 1;
+    std::vector<float> xyz;
+    int finiteCount = 0;
+    if (!extractFiniteXyz(cloud, &xyz, &finiteCount)) {
+        result.errorCode = 1;
+        result.errorMessage = QStringLiteral("点云无效或无可测点。");
+        result.elapsedSeconds = timer.nsecsElapsed() / 1e9;
+        return result;
+    }
+
+    weld_measure::WeldMeasureError error;
+    qInfo(LOG_STATION2_INSPECTION)
+        << "pathId" << pathId
+        << common::ConfigManager::scanDeviceKindToString(segment.device)
+        << "localIndex" << segment.localIndex
+        << "incremental measureFrame begin fedPoints=" << finiteCount;
+    auto& service = sharedWeldMeasureService(segment.device, ringWeld);
+    if (!service.measureFrame(
+            segment.localIndex,
+            xyz.data(),
+            static_cast<size_t>(finiteCount),
+            &result.frame,
+            &error)) {
+        result.errorCode = 2;
+        result.errorMessage = error.message;
+        result.elapsedSeconds = timer.nsecsElapsed() / 1e9;
+        return result;
+    }
+
+    result.success = true;
+    result.elapsedSeconds = timer.nsecsElapsed() / 1e9;
+    qInfo(LOG_STATION2_INSPECTION)
+        << "pathId" << pathId
+        << common::ConfigManager::scanDeviceKindToString(segment.device)
+        << "localIndex" << segment.localIndex
+        << "incremental measureFrame done elapsedSec=" << result.elapsedSeconds
+        << "validSections=" << result.frame.validSections << "/" << result.frame.totalSections;
+    return result;
+}
+
+InspectionResult aggregateWeldSectionSegments(
+    const std::vector<IncrementalWeldSegmentResult>& segments,
+    const InspectionQuota& quota,
+    double wallElapsedSeconds)
+{
+    InspectionResult result;
+    fillPathMeta(&result, quota);
+    result.sourcePointCount = quota.total() > 0
+        ? quota.total()
+        : static_cast<int>(segments.size());
+    result.elapsedSeconds = wallElapsedSeconds;
+
+    std::vector<IncrementalWeldSegmentResult> ordered = segments;
+    std::sort(
+        ordered.begin(), ordered.end(),
+        [](const IncrementalWeldSegmentResult& a, const IncrementalWeldSegmentResult& b) {
+            if (a.device != b.device) {
+                return static_cast<int>(a.device) < static_cast<int>(b.device);
+            }
+            return a.localIndex < b.localIndex;
+        });
+
+    int armCount = 0;
+    int telescopicCount = 0;
+    for (const IncrementalWeldSegmentResult& segment : ordered) {
+        if (segment.device == common::ScanDeviceKind::Arm) {
+            ++armCount;
+        } else {
+            ++telescopicCount;
+        }
+    }
+    if (armCount < quota.expectedArmCount || telescopicCount < quota.expectedTelescopicCount) {
+        result.resultCode = 3;
+        result.ngReasonWord0 = kNgReasonIncompleteSegments;
+        result.message = incompleteQuotaMessage(armCount, telescopicCount, quota);
+        return result;
+    }
+
+    int measuredOk = 0;
+    for (const IncrementalWeldSegmentResult& segment : ordered) {
+        if (!isWithinDeviceQuota(segment.device, segment.localIndex, quota)) {
+            continue;
+        }
+        if (!segment.success) {
+            result.resultCode = 2;
+            result.ngReasonWord0 = segment.errorCode == 1
+                ? kNgReasonPointCloudInvalid
+                : kNgReasonAlgorithmFailed;
+            result.measurement.qualityCode = 2;
+            result.measureItemCount = 1;
+            result.message = segment.errorCode == 1
+                ? QStringLiteral("pathId=%1 %2 段 %3 点云无效或无可测点。")
+                      .arg(quota.pathId)
+                      .arg(common::ConfigManager::scanDeviceKindToString(segment.device))
+                      .arg(segment.localIndex)
+                : QStringLiteral("pathId=%1 %2 段 %3 焊缝测量失败：%4")
+                      .arg(quota.pathId)
+                      .arg(common::ConfigManager::scanDeviceKindToString(segment.device))
+                      .arg(segment.localIndex)
+                      .arg(segment.errorMessage);
+            return result;
+        }
+        accumulateMeasurement(&result.measurement, segment.frame.average);
+        ++measuredOk;
+    }
+
+    result.resultCode = 1;
+    result.measureItemCount = 1;
+    result.measurement.qualityCode = 1;
+    result.message = QStringLiteral(
+        "焊缝检测通过：pathId=%1 (%2) 已测量 %3 段（机械臂 %4/%5，伸缩杆 %6/%7）；"
+        "错边=%8mm 余高=%9mm 棱角度=%10mm 最大咬边=%11mm")
+                         .arg(quota.pathId)
+                         .arg(quota.pathName.isEmpty() ? QStringLiteral("weld") : quota.pathName)
+                         .arg(measuredOk)
+                         .arg(armCount)
+                         .arg(quota.expectedArmCount)
+                         .arg(telescopicCount)
+                         .arg(quota.expectedTelescopicCount)
+                         .arg(result.measurement.mismatchMm, 0, 'f', 3)
+                         .arg(result.measurement.reinforcementMm, 0, 'f', 3)
+                         .arg(result.measurement.angularityMm, 0, 'f', 3)
+                         .arg(result.measurement.maxUndercutMm, 0, 'f', 3);
+    return result;
+}
+
 /// 将轻量快照物化为仅含有限 XYZ 的临时段缓存，供既有 evaluate* 复用。
 ScanSegmentCache materializeInspectionCache(const InspectionCloudSnapshot& snapshot)
 {
