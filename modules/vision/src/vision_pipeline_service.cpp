@@ -274,9 +274,10 @@ void VisionPipelineService::lbPoseWorkerLoop()
             m_lbPoseQueue.pop_front();
         }
 
+        // 现场立体约定：CXP-A = 右目（I2），CXP-B = 左目（I1）。
         job.bundle.lbPoseResult = runLbPoseDetection(
-            job.bundle.hikCameraAResult.frame,
             job.bundle.hikCameraBResult.frame,
+            job.bundle.hikCameraAResult.frame,
             job.lbConfig);
 
         // 拼接放在 LB worker，主线程只做缓存/ACK/投递落盘。
@@ -527,14 +528,14 @@ void VisionPipelineService::startPendingHikCapture()
         m_pending.bundle.hikCameraAResult.logicalName = m_config.hikCxpCameraA.logicalName;
         m_pending.bundle.hikCameraAResult.errorCode = VisionErrorCode::CaptureRejected;
         m_pending.bundle.hikCameraAResult.errorMessage =
-            QStringLiteral("CXP 左目采集启动失败。");
+            QStringLiteral("CXP 右目(A)采集启动失败。");
         m_pending.hikADone = true;
     }
     if (m_pending.hikBRequestId == 0) {
         m_pending.bundle.hikCameraBResult.logicalName = m_config.hikCxpCameraB.logicalName;
         m_pending.bundle.hikCameraBResult.errorCode = VisionErrorCode::CaptureRejected;
         m_pending.bundle.hikCameraBResult.errorMessage =
-            QStringLiteral("CXP 右目采集启动失败。");
+            QStringLiteral("CXP 左目(B)采集启动失败。");
         m_pending.hikBDone = true;
     }
     if (m_pending.hikADone && m_pending.hikBDone) {

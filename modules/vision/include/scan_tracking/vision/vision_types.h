@@ -145,8 +145,8 @@ struct MultiCameraCaptureRequest {
         scan_tracking::mech_eye::CaptureMode::Capture3DOnly;
     QString mechEyeCameraKey;
     int mechEyeTimeoutMs = 5000;
-    QString hikCameraAKey;
-    QString hikCameraBKey;
+    QString hikCameraAKey;  ///< 右目 CXP-A
+    QString hikCameraBKey;  ///< 左目 CXP-B
     int hikTimeoutMs = 1000;
     QString hikCameraCIp;
 };
@@ -154,8 +154,8 @@ struct MultiCameraCaptureRequest {
 struct MultiCameraCaptureBundle {
     MultiCameraCaptureRequest request;
     scan_tracking::mech_eye::CaptureResult mechEyeResult;
-    HikPoseCaptureResult hikCameraAResult;
-    HikPoseCaptureResult hikCameraBResult;
+    HikPoseCaptureResult hikCameraAResult;  ///< 右目
+    HikPoseCaptureResult hikCameraBResult;  ///< 左目
     QString hikCameraCImagePath;
     bool hikCameraCTriggerOk = false;
     LbPoseResult lbPoseResult;

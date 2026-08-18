@@ -3,7 +3,7 @@
 // 海康 CoaXPress（PCIe 采集卡）相机服务。
 //
 // 通过 MVS SDK 按序列号匹配 CXP 设备，在可接合的 std::thread 中执行连接与采图，
-// 避免阻塞主线程及 PLC Modbus 轮询。供 VisionPipelineService 作为双目左 A / 右 B 使用。
+// 避免阻塞主线程及 PLC Modbus 轮询。现场立体约定：CXP-A = 右目，CXP-B = 左目。
 // 输出 Mono8 灰度帧，经 HikPoseCaptureResult 异步回传。
 // stop() 会关闭异步回投闸门并 join 工作线程，避免 detach 悬空 this。
 

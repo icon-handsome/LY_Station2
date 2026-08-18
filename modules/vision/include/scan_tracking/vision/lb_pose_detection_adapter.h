@@ -18,8 +18,8 @@ namespace vision {
 
 /* 执行 LB 位姿检测（同步、阻塞调用，应在后台线程中使用）
  *
- * @param leftFrame  CXP 左目 Mono8 灰度帧
- * @param rightFrame CXP 右目 Mono8 灰度帧
+ * @param leftFrame  CXP 左目 Mono8 灰度帧（现场 = 相机 B，对应 track_config I1）
+ * @param rightFrame CXP 右目 Mono8 灰度帧（现场 = 相机 A，对应 track_config I2）
  * @param config     [LbPose] trackConfigFile 与可选 templateFile 覆盖
  * @return LbPoseResult，含 poseMatrix（4×4 Rt_global，IPC 侧作 T0）、framePointCount 及错误说明
  */

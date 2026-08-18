@@ -1,6 +1,7 @@
 #pragma once
 
 // 离线 LB 位姿检查（Trig_PoseCheck）：从 dataRoot 下左右 BMP 解算 Rt。
+// 目录约定与在线一致：L = 左目 = 相机 B，R = 右目 = 相机 A。
 
 #include <array>
 
