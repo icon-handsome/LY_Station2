@@ -89,7 +89,8 @@ void StateMachine::onBundleCaptureFinished(vision::MultiCameraCaptureBundle bund
 
         // weld_section 不再等待整条路径齐套：当前段缓存完成后立即进入对应设备算法链。
         // 这里只共享 XYZ 所有权并启动异步任务，不阻塞 PLC ACK。
-        scheduleIncrementalWeldSegment(device, segmentIndex, triggerLabel);
+        const bool incrementalWeldScheduled =
+            scheduleIncrementalWeldSegment(device, segmentIndex, triggerLabel);
 
         const auto* configMgr = common::ConfigManager::instance();
         const int armExpected = configMgr != nullptr ? configMgr->enabledArmPointCount() : 0;
@@ -121,6 +122,16 @@ void StateMachine::onBundleCaptureFinished(vision::MultiCameraCaptureBundle bund
         // 先回 PLC ACK，落盘在后台线程执行，避免阻塞 Modbus/HMI 事件循环。
         completeScanSegmentCapture(1, imageCount, cloudFrameCount, protocol::AckState::Completed, true);
         scheduleScanSegmentPersist(device, segmentIndex, triggerLabel);
+
+        // 两个后台消费者均已通过 shared_ptr 接管。缓存不再长期持有主点云；
+        // 缓冲会在落盘和 measureFrame 都完成后由最后一个持有者释放。
+        if (incrementalWeldScheduled &&
+            !m_scanSegmentCache.releaseSegmentPointCloud(device, segmentIndex)) {
+            qWarning(LOG_FLOW).noquote()
+                << QStringLiteral("释放逐段焊缝点云失败，段不在缓存 device=")
+                << common::ConfigManager::scanDeviceKindToString(device)
+                << QStringLiteral(" segment=") << segmentIndex;
+        }
 
         // 利用机械臂/伸缩杆回位真空期：齐套后立刻抽快照并后台解算。
         if (quotaComplete) {
@@ -321,6 +332,7 @@ void StateMachine::onMechEyeFatalError(mech_eye::CaptureErrorCode code, QString 
 void StateMachine::resetScanSegmentCache()
 {
     resetIncrementalWeldState();
+    m_latestScanPersistBarrier = {};
     m_scanSegmentCache.reset();
     qInfo(LOG_FLOW).noquote() << QStringLiteral("扫描段缓存已清空（含运行实例目录绑定）。");
 }
@@ -352,7 +364,7 @@ void StateMachine::scheduleScanSegmentPersist(
         << QStringLiteral(" runRoot=") << job.runRoot
         << QStringLiteral(" segment=") << segmentIndex;
 
-    m_scanPersistWorker.enqueue(std::move(job));
+    m_latestScanPersistBarrier = m_scanPersistWorker.enqueue(std::move(job));
 
     // 落盘 job 已持有 shared_ptr 副本；立即从缓存剥离纹理/raw/CXP，避免等磁盘期间双份驻留。
     if (!m_scanSegmentCache.stripHeavyPayloads(device, segmentIndex)) {
@@ -379,6 +391,7 @@ void StateMachine::onScanSegmentPersistFinished(
 void StateMachine::clearScanSegmentCacheForPathSwitch()
 {
     resetIncrementalWeldState();
+    m_latestScanPersistBarrier = {};
     m_scanSegmentCache.clearSegmentsKeepRunRoot();
     qInfo(LOG_FLOW).noquote()
         << QStringLiteral("已清段缓存并保留运行实例目录：")

@@ -282,7 +282,7 @@ private:
     /// @return 是否实际启动了解算
     bool maybeStartInspectionSolveWhenQuotaComplete(const QString& triggerLabel);
     /// weld_section 每段采集成功后立即投递；设备内串行、设备间并行。
-    void scheduleIncrementalWeldSegment(
+    bool scheduleIncrementalWeldSegment(
         common::ScanDeviceKind device,
         int segmentIndex,
         const QString& triggerLabel);
@@ -336,6 +336,7 @@ private:
         quint64 generation = 0;
         QString triggerLabel;
         QString runCaptureRoot;
+        std::shared_future<void> persistBarrier;
     };
     /// 当前活跃路径的臂+伸缩杆缓存是否已齐套。
     bool isActivePathQuotaComplete() const;
@@ -427,6 +428,8 @@ private:
     protocol::registers::Pose6f m_robotTcpPose;
     ScanSegmentCache m_scanSegmentCache;
     ScanSegmentPersistWorker m_scanPersistWorker;
+    /// 最近投递的段落盘任务；齐套快照捕获它，算法线程等待该段完全落盘后再进入 DLL。
+    std::shared_future<void> m_latestScanPersistBarrier;
     std::atomic_bool m_stopped{false};
     /// 落盘完成回投门闩：stop 先关闸，已入队的 QueuedConnection 回调不得再碰 this。
     std::shared_ptr<std::atomic_bool> m_persistAcceptResults{

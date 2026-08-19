@@ -5,6 +5,8 @@
 #include <condition_variable>
 #include <deque>
 #include <functional>
+#include <future>
+#include <memory>
 #include <mutex>
 #include <thread>
 
@@ -18,6 +20,7 @@ struct ScanSegmentPersistJob {
     QString captureTimestamp;
     vision::MultiCameraCaptureBundle bundle;
     QString triggerLabel;
+    std::shared_ptr<std::promise<void>> completion;
 };
 
 /// 单线程队列：扫描段 PLY/PNG/BMP 落盘不阻塞主线程与 PLC ACK。
@@ -33,7 +36,8 @@ public:
         std::function<void(common::ScanDeviceKind device, int segmentIndex, bool ok)>;
 
     void setPersistFinishedHandler(PersistFinishedHandler handler);
-    void enqueue(ScanSegmentPersistJob job);
+    /// 返回的 future 在该任务完成落盘后就绪；调用方可在非 UI 线程建立算法启动屏障。
+    std::shared_future<void> enqueue(ScanSegmentPersistJob job);
     /// stop/析构前 drain 队列并 join；可重复调用。
     void stopAndJoin();
     /// CmdStart 等重启后恢复可投递状态。

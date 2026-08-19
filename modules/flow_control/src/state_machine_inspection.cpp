@@ -231,7 +231,7 @@ void StateMachine::joinBackgroundInspectionSolves()
         << QStringLiteral("后台解算线程已接合。");
 }
 
-void StateMachine::scheduleIncrementalWeldSegment(
+bool StateMachine::scheduleIncrementalWeldSegment(
     common::ScanDeviceKind device,
     int segmentIndex,
     const QString& triggerLabel)
@@ -240,7 +240,7 @@ void StateMachine::scheduleIncrementalWeldSegment(
     if (cfgMgr == nullptr ||
         !cfgMgr->flowControlConfig().algorithmEnabled ||
         cfgMgr->activePathAlgorithm().trimmed() != QLatin1String("weld_section")) {
-        return;
+        return false;
     }
 
     InspectionSegmentCloud segment;
@@ -249,7 +249,7 @@ void StateMachine::scheduleIncrementalWeldSegment(
             << triggerLabel << QStringLiteral("：逐段焊缝解算投递失败，缓存中无此段 device=")
             << common::ConfigManager::scanDeviceKindToString(device)
             << QStringLiteral(" localIndex=") << segmentIndex;
-        return;
+        return false;
     }
 
     const int pathId = cfgMgr->activePathId();
@@ -317,6 +317,7 @@ void StateMachine::scheduleIncrementalWeldSegment(
         << common::ConfigManager::scanDeviceKindToString(device)
         << QStringLiteral(" localIndex=") << segmentIndex
         << QStringLiteral(" queued=") << static_cast<int>(m_incrementalWeldTasks.size());
+    return true;
 }
 
 void StateMachine::resetIncrementalWeldState()
@@ -380,6 +381,7 @@ void StateMachine::startBackgroundInspectionSolve(
     job.generation = generation;
     job.triggerLabel = triggerLabel;
     job.runCaptureRoot = m_scanSegmentCache.runCaptureRoot();
+    job.persistBarrier = m_latestScanPersistBarrier;
 
     std::thread finishedThread;
     {
@@ -431,6 +433,19 @@ void StateMachine::startBackgroundInspectionSolve(
                     const bool incrementalWeldJob = !job.incrementalWeldTasks.empty();
                     InspectionResult result;
                     try {
+                        if (job.persistBarrier.valid()) {
+                            qInfo(LOG_ALGORITHM).noquote()
+                                << triggerLabel
+                                << QStringLiteral("：等待扫描段后台落盘完成后再解算 pathId=")
+                                << job.quota.pathId
+                                << QStringLiteral(" algorithm=") << job.quota.algorithm;
+                            job.persistBarrier.wait();
+                            qInfo(LOG_ALGORITHM).noquote()
+                                << triggerLabel
+                                << QStringLiteral("：落盘屏障已通过，开始算法解算 pathId=")
+                                << job.quota.pathId
+                                << QStringLiteral(" algorithm=") << job.quota.algorithm;
+                        }
                         if (!job.incrementalWeldTasks.empty()) {
                             const auto finalizeStart = std::chrono::steady_clock::now();
                             std::vector<IncrementalWeldSegmentResult> segments;

@@ -51,8 +51,10 @@ void ScanSegmentPersistWorker::stopAndJoin()
     }
 }
 
-void ScanSegmentPersistWorker::enqueue(ScanSegmentPersistJob job)
+std::shared_future<void> ScanSegmentPersistWorker::enqueue(ScanSegmentPersistJob job)
 {
+    job.completion = std::make_shared<std::promise<void>>();
+    std::shared_future<void> completion = job.completion->get_future().share();
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (m_stopping) {
@@ -60,7 +62,8 @@ void ScanSegmentPersistWorker::enqueue(ScanSegmentPersistJob job)
                 << QStringLiteral("落盘 worker 已停止，丢弃段")
                 << job.segmentIndex
                 << QStringLiteral(" taskId=") << job.taskId;
-            return;
+            job.completion->set_value();
+            return completion;
         }
         // 软上限：扫描快于写盘时告警，便于发现内存堆积（不阻塞主线程）。
         constexpr std::size_t kSoftMaxPending = 4;
@@ -74,6 +77,7 @@ void ScanSegmentPersistWorker::enqueue(ScanSegmentPersistJob job)
         ensureWorkerRunning();
     }
     m_cv.notify_one();
+    return completion;
 }
 
 void ScanSegmentPersistWorker::ensureWorkerRunning()
@@ -126,6 +130,11 @@ void ScanSegmentPersistWorker::workerLoop()
                 << QStringLiteral(" 段=") << job.segmentIndex
                 << QStringLiteral(" taskId=") << job.taskId
                 << QStringLiteral(" runRoot=") << job.runRoot;
+        }
+
+        // 先放行等待落盘的算法线程；完成回调仍异步回投主线程做状态通知。
+        if (job.completion) {
+            job.completion->set_value();
         }
 
         PersistFinishedHandler finishedHandler;

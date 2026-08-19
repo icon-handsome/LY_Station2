@@ -78,6 +78,10 @@ public:
 
     bool stripHeavyPayloads(common::ScanDeviceKind device, int localIndex);
 
+    /// 算法与落盘任务都已通过 shared_ptr 接管后，释放缓存持有的主点云引用。
+    /// 实际缓冲会在最后一个后台使用者结束时自动释放。
+    bool releaseSegmentPointCloud(common::ScanDeviceKind device, int localIndex);
+
     const ScanSegmentCacheEntry* entry(common::ScanDeviceKind device, int localIndex) const;
     QVector<ScanSegmentCacheKey> cachedKeys() const;
     bool allCachedBundlesSuccessful() const;

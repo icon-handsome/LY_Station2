@@ -163,6 +163,27 @@ bool ScanSegmentCache::stripHeavyPayloads(common::ScanDeviceKind device, int loc
     return true;
 }
 
+bool ScanSegmentCache::releaseSegmentPointCloud(
+    common::ScanDeviceKind device,
+    int localIndex)
+{
+    const ScanSegmentCacheKey key{device, localIndex};
+    const auto iterator = m_entries.find(key);
+    if (iterator == m_entries.end()) {
+        return false;
+    }
+
+    auto& pointCloud = iterator->bundle.mechEyeResult.pointCloud;
+    const int pointCount = pointCloud.pointCount;
+    pointCloud = mech_eye::PointCloudFrame{};
+    qInfo(LOG_SCAN_CACHE).noquote()
+        << QStringLiteral("逐段算法与落盘已接管，释放段缓存主点云 device=")
+        << deviceTagForPath(device)
+        << QStringLiteral(" segment=") << localIndex
+        << QStringLiteral(" points=") << pointCount;
+    return true;
+}
+
 bool ScanSegmentCache::persistSegment(
     common::ScanDeviceKind device,
     int localIndex,

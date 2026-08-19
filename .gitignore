@@ -95,3 +95,4 @@ third_party/MVS/**/objnetfx/
 third_party/MVS/**/bin/
 /scripts
 /build2
+/config/container_total_length/Data/sample_cylinder.pcd.bak_placeholder_20260819_133706

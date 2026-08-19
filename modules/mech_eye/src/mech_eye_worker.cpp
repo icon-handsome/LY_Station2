@@ -24,6 +24,7 @@
 #include <fstream>
 #include <limits>
 #include <mutex>
+#include <new>
 #include <vector>
 #include <qdir.h>
 #include <qcoreapplication.h>
@@ -706,6 +707,17 @@ void MechEyeWorker::performCapture(const scan_tracking::mech_eye::CaptureRequest
             << QStringLiteral(" 耗时ms=") << result.elapsedMs;
         emit captureFinished(result);
 #if defined(__cpp_exceptions) || defined(_CPPUNWIND)
+    } catch (const std::bad_alloc&) {
+        m_busy = false;
+        const QString failureMessage = QStringLiteral(
+            "采集内存不足（std::bad_alloc），本段失败；相机保持连接，可重试");
+        setRuntimeState(CameraRuntimeState::Ready, failureMessage);
+        qWarning(LOG_MECHEYE_WORKER).noquote() << taggedMessage(failureMessage);
+        emit captureFinished(makeFailureResult(
+            normalized,
+            CaptureErrorCode::CaptureFailed,
+            failureMessage,
+            timer.elapsed()));
     } catch (const std::exception& exception) {
         m_busy = false;
         m_connected = false;
