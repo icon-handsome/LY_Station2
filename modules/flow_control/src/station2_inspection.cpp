@@ -1,7 +1,7 @@
 #include "scan_tracking/flow_control/station2_inspection.h"
 
+#include "scan_tracking/container_total_length_measure/container_total_length_service.h"
 #include "scan_tracking/inner_surface_measure/inner_surface_measure_service.h"
-#include "scan_tracking/length_volume_measure/length_volume_measure_service.h"
 #include "scan_tracking/thickness_measure/thickness_measure_service.h"
 #include "scan_tracking/weld_measure/weld_measure_service.h"
 
@@ -24,12 +24,12 @@ namespace scan_tracking::flow_control {
 
 namespace {
 
-using LengthVolumeMeasureService =
-    ::scan_tracking::length_volume_measure::LengthVolumeMeasureService;
-using LengthVolumeMeasureError =
-    ::scan_tracking::length_volume_measure::LengthVolumeMeasureError;
-using LengthVolumeMeasurement =
-    ::scan_tracking::length_volume_measure::LengthVolumeMeasurement;
+using ContainerTotalLengthService =
+    ::scan_tracking::container_total_length_measure::ContainerTotalLengthService;
+using ContainerTotalLengthError =
+    ::scan_tracking::container_total_length_measure::ContainerTotalLengthError;
+using ContainerTotalLengthMeasurement =
+    ::scan_tracking::container_total_length_measure::ContainerTotalLengthMeasurement;
 
 constexpr quint16 kNgReasonIncompleteSegments = 1u << 0;
 constexpr quint16 kNgReasonBundleInvalid = 1u << 1;
@@ -1003,20 +1003,20 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
     return result;
 }
 
-LengthVolumeMeasureService& sharedLengthVolumeMeasureService()
+ContainerTotalLengthService& sharedContainerTotalLengthService()
 {
-    static LengthVolumeMeasureService service;
+    static ContainerTotalLengthService service;
     return service;
 }
 
-bool ensureLengthVolumeMeasureReady(QString* errorMessage)
+bool ensureContainerTotalLengthReady(QString* errorMessage)
 {
-    auto& service = sharedLengthVolumeMeasureService();
+    auto& service = sharedContainerTotalLengthService();
     if (service.isReady()) {
         return true;
     }
 
-    LengthVolumeMeasureError error;
+    ContainerTotalLengthError error;
     if (!service.initializeFromIni(QString(), &error)) {
         if (errorMessage != nullptr) {
             *errorMessage = error.message;
@@ -1192,60 +1192,68 @@ InspectionResult evaluateLengthVolumeInspection(
     }
 
     QString initError;
-    if (!ensureLengthVolumeMeasureReady(&initError)) {
+    if (!ensureContainerTotalLengthReady(&initError)) {
         result.resultCode = 2;
         result.ngReasonWord0 = kNgReasonAlgorithmFailed;
         result.measurement.qualityCode = 2;
         result.measureItemCount = 1;
         result.message = QStringLiteral(
-                             "pathId=%1 长度容积测量初始化失败：%2"
-                             "（请确认 config/length_volume_measure/config.ini 与 Data/sample_cylinder.pcd）")
+                             "pathId=%1 筒体总长测量初始化失败：%2"
+                             "（请确认 config/container_total_length/config.ini 与 Data/sample_cylinder.pcd）")
                              .arg(quota.pathId)
                              .arg(initError);
         return result;
     }
 
-    // 对照源码：lvm_create_from_ini + 一次 lvm_measure(合并外表面云, volume_radius_mm)
+    // 对照源码：ctl_create_from_ini + 一次 ctl_measure(合并外表面云)；容积由 IPC 用 πr²L 补算。
     const double volumeRadiusMm = resolveVolumeRadiusMm(quota);
     qInfo(LOG_STATION2_INSPECTION).noquote()
-        << QStringLiteral("开始长度容积测量 pathId=") << quota.pathId
+        << QStringLiteral("开始筒体总长测量 pathId=") << quota.pathId
         << QStringLiteral(" name=") << quota.pathName
         << QStringLiteral(" 段数=") << segmentCount
         << QStringLiteral(" 合并点数=") << static_cast<qulonglong>(mergedCount)
         << QStringLiteral(" volumeRadiusMm=") << volumeRadiusMm;
 
-    LengthVolumeMeasurement measurement;
-    LengthVolumeMeasureError error;
-    if (!sharedLengthVolumeMeasureService().measure(
-            mergedXyz.data(), mergedCount, volumeRadiusMm, &measurement, &error) ||
+    ContainerTotalLengthMeasurement measurement;
+    ContainerTotalLengthError error;
+    if (!sharedContainerTotalLengthService().measure(
+            mergedXyz.data(), mergedCount, &measurement, &error) ||
         !measurement.valid) {
         result.resultCode = 2;
         result.ngReasonWord0 = kNgReasonAlgorithmFailed;
         result.measurement.qualityCode = 2;
         result.measureItemCount = 1;
-        result.message = QStringLiteral("pathId=%1 长度容积测量失败：%2")
+        result.message = QStringLiteral("pathId=%1 筒体总长测量失败：%2")
                              .arg(quota.pathId)
                              .arg(error.message.isEmpty() ? QStringLiteral("测量无效")
                                                          : error.message);
         return result;
     }
 
+    const double volumeLiters =
+        kPi * volumeRadiusMm * volumeRadiusMm * measurement.lengthMm / 1.0e6;
+
     result.resultCode = 1;
     result.measureItemCount = 2;
     result.measurement.qualityCode = 1;
     result.measurement.measuredSegmentCount = segmentCount;
     result.measurement.lengthMm = measurement.lengthMm;
-    result.measurement.volumeLiters = measurement.volumeLiters;
-    result.measurement.volumeRadiusMm = measurement.volumeRadiusMm;
-    result.measurement.fittedOuterRadiusMm = measurement.fittedOuterRadiusMm;
+    result.measurement.volumeLiters = volumeLiters;
+    result.measurement.volumeRadiusMm = volumeRadiusMm;
+    result.measurement.fittedOuterRadiusMm = static_cast<double>(measurement.fittedRadiusMm);
+    result.measurement.containerLeftEndPositionMm = measurement.leftEndPosition;
+    result.measurement.containerRightEndPositionMm = measurement.rightEndPosition;
+    result.measurement.containerIcpFitness = measurement.icpFitness;
+    result.measurement.containerFittedRadiusMm = static_cast<double>(measurement.fittedRadiusMm);
+    result.measurement.containerIcpConverged = measurement.icpConverged;
     result.message = QStringLiteral(
-                         "pathId=%1 长度容积 OK：length=%2 mm, volume=%3 L, "
+                         "pathId=%1 筒体总长 OK：length=%2 mm, volume=%3 L, "
                          "radius=%4 mm, fittedOuter=%5 mm, segments=%6")
                          .arg(quota.pathId)
                          .arg(measurement.lengthMm, 0, 'f', 3)
-                         .arg(measurement.volumeLiters, 0, 'f', 3)
-                         .arg(measurement.volumeRadiusMm, 0, 'f', 3)
-                         .arg(measurement.fittedOuterRadiusMm, 0, 'f', 3)
+                         .arg(volumeLiters, 0, 'f', 3)
+                         .arg(volumeRadiusMm, 0, 'f', 3)
+                         .arg(measurement.fittedRadiusMm, 0, 'f', 3)
                          .arg(segmentCount);
     qInfo(LOG_STATION2_INSPECTION).noquote() << result.message;
     return result;

@@ -61,7 +61,7 @@ target_link_libraries(scan_tracking_flow_control
         scan_tracking_weld_measure
         scan_tracking_thickness_measure
         scan_tracking_inner_surface_measure
-        scan_tracking_length_volume_measure
+        scan_tracking_container_total_length_measure
 )
 
 if(SCAN_TRACKING_ENABLE_LB_POSE_DETECTION)

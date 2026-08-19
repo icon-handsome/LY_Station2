@@ -28,11 +28,16 @@ struct InspectionMeasurement {
     double innerRoundness = 0.0;
     int innerSurfacePairCount = 0;
     int innerSurfaceSuccessCount = 0;
-    // length_volume
+    // path3 container total length (algorithm id remains length_volume for compatibility)
     double lengthMm = 0.0;
     double volumeLiters = 0.0;
     double volumeRadiusMm = 0.0;
     double fittedOuterRadiusMm = 0.0;
+    double containerLeftEndPositionMm = 0.0;
+    double containerRightEndPositionMm = 0.0;
+    double containerIcpFitness = 0.0;
+    double containerFittedRadiusMm = 0.0;
+    bool containerIcpConverged = false;
     QString codeValue;
 };
 

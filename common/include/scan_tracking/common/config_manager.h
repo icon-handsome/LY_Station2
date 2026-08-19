@@ -202,7 +202,7 @@ struct ScanPathConfig {
     int pathId = 0;               ///< 路径 ID，在 JSON 内唯一
     bool enabled = true;          ///< 无 activePathId 时参与配额汇总；有 activePathId 时仅作文档/回退
     QString name;                 ///< 稳定短名，如 straight_weld / code_read
-    QString algorithm;            ///< 检测算法：weld_section / code_read / thickness_inner_surface / length_volume；空则按 name 推断
+    QString algorithm;            ///< 检测算法：weld_section / code_read / thickness_inner_surface / length_volume（path3 总长）；空则按 name 推断
     QString segmentKind = QStringLiteral("external");  ///< 旧字段；新版以 devices 为准
     QString description;          ///< 人类可读描述
     int totalPoints = 0;          ///< 声明总点数；新版 = 各设备配额之和

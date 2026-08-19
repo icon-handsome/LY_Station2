@@ -34,7 +34,7 @@ target_link_libraries(scan_tracking
         scan_tracking_thickness_measure
         scan_tracking_inner_surface_measure
         scan_tracking_undercut_length_measure
-        scan_tracking_length_volume_measure
+        scan_tracking_container_total_length_measure
         scan_tracking_modbus
         scan_tracking_flow_control
         scan_tracking_hmi_server
@@ -58,7 +58,7 @@ if(MSVC)
         /DELAYLOAD:ThicknessMeasure.dll
         /DELAYLOAD:InnerSurfaceMeasure.dll
         /DELAYLOAD:UndercutLengthMeasure.dll
-        /DELAYLOAD:LengthVolumeMeasure.dll
+        /DELAYLOAD:ContainerTotalLength.dll
         /DELAYLOAD:opencv_world343.dll
     )
     # Keep a linker map beside the executable for resolving field crash RVAs.
@@ -92,7 +92,7 @@ scan_tracking_deploy_weld_measure_runtime(scan_tracking)
 scan_tracking_deploy_thickness_measure_runtime(scan_tracking)
 scan_tracking_deploy_inner_surface_measure_runtime(scan_tracking)
 scan_tracking_deploy_undercut_length_measure_runtime(scan_tracking)
-scan_tracking_deploy_length_volume_measure_runtime(scan_tracking)
+scan_tracking_deploy_container_total_length_runtime(scan_tracking)
 if(SCAN_TRACKING_ENABLE_LB_POSE_DETECTION)
     scan_tracking_deploy_opencv_runtime(scan_tracking)
     scan_tracking_deploy_lb_pose_runtime(scan_tracking)

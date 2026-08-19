@@ -62,6 +62,13 @@ void appendInspectionMeasurementFields(QJsonObject& payload, const InspectionMea
     headMetrics[QStringLiteral("volume_radius_mm")] = measurement.volumeRadiusMm;
     headMetrics[QStringLiteral("fittedOuterRadiusMm")] = measurement.fittedOuterRadiusMm;
     headMetrics[QStringLiteral("fitted_outer_radius_mm")] = measurement.fittedOuterRadiusMm;
+    headMetrics[QStringLiteral("containerLeftEndPositionMm")] =
+        measurement.containerLeftEndPositionMm;
+    headMetrics[QStringLiteral("containerRightEndPositionMm")] =
+        measurement.containerRightEndPositionMm;
+    headMetrics[QStringLiteral("containerIcpFitness")] = measurement.containerIcpFitness;
+    headMetrics[QStringLiteral("containerFittedRadiusMm")] = measurement.containerFittedRadiusMm;
+    headMetrics[QStringLiteral("containerIcpConverged")] = measurement.containerIcpConverged;
     if (!measurement.codeValue.isEmpty()) {
         headMetrics[QStringLiteral("codeValue")] = measurement.codeValue;
     }
@@ -130,6 +137,15 @@ QString formatInspectionResultTextBlock(const InspectionResult& result)
         appendKeyValue(&text, QStringLiteral("volumeLiters"), m.volumeLiters);
         appendKeyValue(&text, QStringLiteral("volumeRadiusMm"), m.volumeRadiusMm);
         appendKeyValue(&text, QStringLiteral("fittedOuterRadiusMm"), m.fittedOuterRadiusMm);
+        appendKeyValue(&text, QStringLiteral("containerLeftEndPositionMm"),
+                       m.containerLeftEndPositionMm);
+        appendKeyValue(&text, QStringLiteral("containerRightEndPositionMm"),
+                       m.containerRightEndPositionMm);
+        appendKeyValue(&text, QStringLiteral("containerIcpFitness"), m.containerIcpFitness);
+        appendKeyValue(&text, QStringLiteral("containerFittedRadiusMm"),
+                       m.containerFittedRadiusMm);
+        appendKeyValue(&text, QStringLiteral("containerIcpConverged"),
+                       m.containerIcpConverged ? 1 : 0);
         appendKeyValue(&text, QStringLiteral("measuredSegmentCount"),
                        static_cast<qint64>(m.measuredSegmentCount));
     } else if (algorithm == QLatin1String("code_read") && !m.codeValue.isEmpty()) {

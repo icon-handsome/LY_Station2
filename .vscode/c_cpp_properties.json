@@ -8,6 +8,7 @@
             "includePath": [
                 "${workspaceFolder}/modules/flow_control/include",
                 "${workspaceFolder}/modules/length_volume_measure/include",
+                "${workspaceFolder}/modules/container_total_length_measure/include",
                 "${workspaceFolder}/modules/thickness_measure/include",
                 "${workspaceFolder}/modules/inner_surface_measure/include",
                 "${workspaceFolder}/modules/weld_measure/include",

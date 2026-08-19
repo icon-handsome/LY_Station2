@@ -37,7 +37,7 @@
       "enabled": true,
       "name": "length_volume",
       "algorithm": "length_volume",
-      "description": "外表面长度和容积：AO47(臂)×8；启用臂 3D+CXP，不启用智能相机与伸缩杆。volumeRadiusMm 需与现场核对",
+      "description": "筒体总长：AO47(臂)×8；启用臂 3D+CXP，不启用智能相机与伸缩杆。体积由 IPC 用 volumeRadiusMm 按 πr²L 补算",
       "volumeRadiusMm": 600.0,
       "capture": {
         "arm": {

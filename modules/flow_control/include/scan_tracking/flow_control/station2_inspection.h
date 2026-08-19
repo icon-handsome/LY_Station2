@@ -27,7 +27,7 @@ struct InspectionSegmentCloud {
     common::ScanDeviceKind device = common::ScanDeviceKind::Arm;
     int localIndex = 0;
     bool captureOk = false;
-    /// length_volume：CXP 参与段必须已 LB 变换。
+    /// path3 length_volume/container-total-length：CXP 参与段必须已 LB 变换。
     bool cxpParticipated = false;
     bool lbPoseOk = false;
     std::shared_ptr<std::vector<float>> xyz;  ///< shared interleaved x,y,z
