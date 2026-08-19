@@ -7,6 +7,7 @@
 #include "scan_tracking/app/console_runtime.h"
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/common/logger.h"
+#include "scan_tracking/common/win_crash_dump.h"
 #include "scan_tracking/vision/hik_mvs_sdk_runtime.h"
 
 #ifdef _WIN32
@@ -19,6 +20,9 @@ int main(int argc, char* argv[])
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
 #endif
+    // Install as early as possible so SEH / std::terminate can write MiniDump
+    // under <exeDir>/crash_dumps even when WER LocalDumps misses the crash.
+    scan_tracking::common::installWinCrashDumpHandler();
 
     QCoreApplication app(argc, argv);
     QNetworkProxyFactory::setUseSystemConfiguration(false);

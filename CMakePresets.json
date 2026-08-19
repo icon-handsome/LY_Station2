@@ -51,11 +51,13 @@
   "buildPresets": [
     {
       "name": "win-msvc2019-qtcore-ninja-debug",
-      "configurePreset": "win-msvc2019-qtcore-ninja-debug"
+      "configurePreset": "win-msvc2019-qtcore-ninja-debug",
+      "cleanFirst": true
     },
     {
       "name": "win-msvc2019-qtcore-ninja-release",
-      "configurePreset": "win-msvc2019-qtcore-ninja-release"
+      "configurePreset": "win-msvc2019-qtcore-ninja-release",
+      "cleanFirst": true
     }
   ]
 }
