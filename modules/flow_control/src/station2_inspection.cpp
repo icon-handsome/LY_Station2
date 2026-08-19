@@ -1701,6 +1701,8 @@ ScanSegmentCache materializeInspectionCache(const InspectionCloudSnapshot& snaps
 
     for (const InspectionSegmentCloud& segment : snapshot.segments) {
         vision::MultiCameraCaptureBundle bundle;
+        // 快照已持有共享 XYZ，CXP 图像帧不再需要；保留采集成功状态。
+        bundle.heavyPayloadsStripped = true;
         if (segment.captureOk) {
             bundle.mechEyeResult.errorCode = mech_eye::CaptureErrorCode::Success;
         } else {

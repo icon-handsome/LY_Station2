@@ -159,6 +159,8 @@ struct MultiCameraCaptureBundle {
     QString hikCameraCImagePath;
     bool hikCameraCTriggerOk = false;
     LbPoseResult lbPoseResult;
+    /// 落盘后 CXP/海康图像帧可能被清理，但采集状态仍应保持有效。
+    bool heavyPayloadsStripped = false;
 
     bool hikCameraCCaptureOk() const
     {
@@ -187,10 +189,14 @@ struct MultiCameraCaptureBundle {
             return false;
         }
         if (cxpParticipated() &&
-            !(hikCameraAResult.success() && hikCameraBResult.success())) {
+            !(hikCameraAResult.errorCode == VisionErrorCode::Success &&
+              hikCameraBResult.errorCode == VisionErrorCode::Success &&
+              (heavyPayloadsStripped ||
+               (hikCameraAResult.frame.isValid() && hikCameraBResult.frame.isValid())))) {
             return false;
         }
-        if (hikCParticipated() && !hikCameraCOk()) {
+        if (hikCParticipated() &&
+            !(heavyPayloadsStripped ? hikCameraCTriggerOk : hikCameraCOk())) {
             return false;
         }
         return true;

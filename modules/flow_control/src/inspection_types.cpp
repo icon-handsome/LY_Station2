@@ -145,7 +145,7 @@ QString formatInspectionResultTextBlock(const InspectionResult& result)
         appendKeyValue(&text, QStringLiteral("containerFittedRadiusMm"),
                        m.containerFittedRadiusMm);
         appendKeyValue(&text, QStringLiteral("containerIcpConverged"),
-                       m.containerIcpConverged ? 1 : 0);
+                       static_cast<qint64>(m.containerIcpConverged ? 1 : 0));
         appendKeyValue(&text, QStringLiteral("measuredSegmentCount"),
                        static_cast<qint64>(m.measuredSegmentCount));
     } else if (algorithm == QLatin1String("code_read") && !m.codeValue.isEmpty()) {

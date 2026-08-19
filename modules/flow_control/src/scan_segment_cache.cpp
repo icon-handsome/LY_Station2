@@ -480,6 +480,7 @@ void stripScanSegmentHeavyPayloads(vision::MultiCameraCaptureBundle* bundle)
     bundle->hikCameraAResult.frame = vision::HikMonoFrame{};
     bundle->hikCameraBResult.frame = vision::HikMonoFrame{};
     bundle->hikCameraCImagePath.clear();
+    bundle->heavyPayloadsStripped = true;
 }
 
 }  // namespace scan_tracking::flow_control
