@@ -121,6 +121,16 @@ function(scan_tracking_deploy_container_total_length_runtime target_name)
         )
     endif()
 
+    if(EXISTS "${_config_data_dir}/Template_Path3_Arm_All_Samp.pcd")
+        list(APPEND _copy_cmds
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_FILE_DIR:${target_name}>/config/container_total_length/Data"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_config_data_dir}/Template_Path3_Arm_All_Samp.pcd"
+                "$<TARGET_FILE_DIR:${target_name}>/config/container_total_length/Data/Template_Path3_Arm_All_Samp.pcd"
+        )
+    endif()
+
     add_custom_command(TARGET ${target_name} POST_BUILD
         ${_copy_cmds}
         COMMENT "Deploying ContainerTotalLength SDK runtime"

@@ -83,3 +83,16 @@ target_link_libraries(scan_tracking_path1_offline
 set_target_properties(scan_tracking_path1_offline PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/app"
 )
+
+add_executable(scan_tracking_path3_offline
+    tests/path3_offline_runner.cpp
+)
+
+target_link_libraries(scan_tracking_path3_offline
+    PRIVATE
+        scan_tracking_flow_control
+)
+
+set_target_properties(scan_tracking_path3_offline PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/app"
+)
