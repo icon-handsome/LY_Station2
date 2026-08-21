@@ -59,7 +59,7 @@ target_link_libraries(scan_tracking_flow_control
         scan_tracking_mech_eye
         scan_tracking_vision
         scan_tracking_weld_measure
-        scan_tracking_thickness_measure
+        scan_tracking_thickness_measure_v2
         scan_tracking_inner_surface_measure
         scan_tracking_container_total_length_measure
 )
@@ -94,5 +94,19 @@ target_link_libraries(scan_tracking_path3_offline
 )
 
 set_target_properties(scan_tracking_path3_offline PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/app"
+)
+
+add_executable(scan_tracking_path4_offline
+    tests/path4_offline_runner.cpp
+)
+
+target_link_libraries(scan_tracking_path4_offline
+    PRIVATE
+        scan_tracking_flow_control
+        scan_tracking_common
+)
+
+set_target_properties(scan_tracking_path4_offline PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/app"
 )

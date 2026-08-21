@@ -32,7 +32,7 @@ typedef struct ism_context ism_context;
 
 typedef struct ism_config {
     float voxel_size;
-    int outlier_k;
+    int outlier_k; /* <=1 skips SOR (matches path4 console default behavior) */
     double outlier_std;
 
     int fit_iterations;
@@ -51,6 +51,9 @@ typedef struct ism_config {
     double cylinder_axis_y;
     double cylinder_axis_z;
     float cylinder_radius;
+
+    /* Effective inner length (mm) for volume = pi*(d/2)^2*L / 1e6 */
+    double container_length_mm;
 } ism_config;
 
 typedef struct ism_frame_result {
@@ -69,34 +72,22 @@ typedef struct ism_average_result {
     double circumference_mm;
     double roundness; /* mean of two frame average roundness values */
     int valid; /* 0/1 */
+    double volume_liters; /* pi*(d/2)^2*container_length / 1e6; 0 if length unset */
+    double container_length_mm;
 } ism_average_result;
 
-/** Fill config with algorithm defaults (matches console Config defaults). */
 INNER_SURFACE_MEASURE_API void ism_config_default(ism_config* config);
 
-/**
- * Create context with in-memory template cloud.
- * Template is copied internally; xyz is interleaved float x,y,z.
- */
 INNER_SURFACE_MEASURE_API ism_status ism_create(
     const ism_config* config,
     const float* template_xyz,
     size_t template_count,
     ism_context** out_ctx);
 
-/**
- * Create context from config.ini.
- * Loads template PCD path from [CylinderTemplate]/templateCloud.
- * InputFrames section is ignored (scan clouds come from memory APIs).
- */
 INNER_SURFACE_MEASURE_API ism_status ism_create_from_ini(
     const char* ini_path,
     ism_context** out_ctx);
 
-/**
- * Measure one end-frame scan cloud (memory point cloud).
- * Non-finite points are skipped.
- */
 INNER_SURFACE_MEASURE_API ism_status ism_measure_frame(
     ism_context* ctx,
     const float* scan_xyz,
@@ -105,10 +96,6 @@ INNER_SURFACE_MEASURE_API ism_status ism_measure_frame(
     char* message,
     size_t message_capacity);
 
-/**
- * Measure two end frames and return averaged diameter / circumference / roundness.
- * On success both out_frame1 and out_frame2 are filled when non-null.
- */
 INNER_SURFACE_MEASURE_API ism_status ism_measure_two_frames_average(
     ism_context* ctx,
     const float* frame1_xyz,

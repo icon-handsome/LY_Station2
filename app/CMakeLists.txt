@@ -31,7 +31,7 @@ target_link_libraries(scan_tracking
         scan_tracking_livox_mid360
         scan_tracking_tfmini_plus
         scan_tracking_vision
-        scan_tracking_thickness_measure
+        scan_tracking_thickness_measure_v2
         scan_tracking_inner_surface_measure
         scan_tracking_undercut_length_measure
         scan_tracking_container_total_length_measure
@@ -55,7 +55,7 @@ if(MSVC)
         /DELAYLOAD:OrbbecSDK.dll
         /DELAYLOAD:MVCameraControl.dll
         /DELAYLOAD:WeldMeasure.dll
-        /DELAYLOAD:ThicknessMeasure.dll
+        /DELAYLOAD:ThicknessMeasureV2.dll
         /DELAYLOAD:InnerSurfaceMeasure.dll
         /DELAYLOAD:UndercutLengthMeasure.dll
         /DELAYLOAD:ContainerTotalLength.dll
@@ -89,7 +89,7 @@ scan_tracking_deploy_orbbec_runtime(scan_tracking)
 scan_tracking_deploy_livox_runtime(scan_tracking)
 scan_tracking_deploy_hik_mvs_runtime(scan_tracking)
 scan_tracking_deploy_weld_measure_runtime(scan_tracking)
-scan_tracking_deploy_thickness_measure_runtime(scan_tracking)
+scan_tracking_deploy_thickness_measure_v2_runtime(scan_tracking)
 scan_tracking_deploy_inner_surface_measure_runtime(scan_tracking)
 scan_tracking_deploy_undercut_length_measure_runtime(scan_tracking)
 scan_tracking_deploy_container_total_length_runtime(scan_tracking)

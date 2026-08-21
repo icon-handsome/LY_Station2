@@ -59,7 +59,7 @@
       "enabled": true,
       "name": "thickness_inner_surface",
       "algorithm": "thickness_inner_surface",
-      "description": "厚度+内表面：AO47×12；点1/2/11/12厚度（内外配对），点3–10内表面；启用臂 3D+CXP，不启用智能相机与伸缩杆",
+      "description": "厚度V2+内表面(+容积)：AO47×12；点1/2/11/12厚度，点3–10内表面两端平均；容积=π(内径/2)²·containerLength",
       "capture": {
         "arm": { "mechEye3d": true, "hikSmartC": false, "hikCxp": true },
         "telescopic": { "mechEye3d": false, "hikSmartC": false }

@@ -56,6 +56,7 @@ ism_config ToCApiConfig(const InnerSurfaceConfig& src)
     dst.cylinder_axis_y = src.cylinderAxisY;
     dst.cylinder_axis_z = src.cylinderAxisZ;
     dst.cylinder_radius = src.cylinderRadius;
+    dst.container_length_mm = src.containerLengthMm;
     return dst;
 }
 
@@ -269,6 +270,8 @@ bool InnerSurfaceMeasureService::measureTwoFramesAverage(
     outAverage->diameterMm = average.diameter_mm;
     outAverage->circumferenceMm = average.circumference_mm;
     outAverage->roundness = average.roundness;
+    outAverage->volumeLiters = average.volume_liters;
+    outAverage->containerLengthMm = average.container_length_mm;
     outAverage->valid = average.valid != 0;
 
     if (outFrame1 != nullptr) {

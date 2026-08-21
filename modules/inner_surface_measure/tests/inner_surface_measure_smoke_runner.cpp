@@ -217,7 +217,7 @@ InnerSurfaceConfig MakeConfigFromIniSample()
 {
     InnerSurfaceConfig config;
     config.voxelSize = 1.0f;
-    config.outlierK = 10;
+    config.outlierK = 0;  // path4: skip SOR
     config.outlierStd = 3.0;
     config.fitIterations = 5;
     config.cylinderInlierBand = 0.0f;
@@ -233,6 +233,7 @@ InnerSurfaceConfig MakeConfigFromIniSample()
     config.cylinderAxisY = 0.0;
     config.cylinderAxisZ = 1.0;
     config.cylinderRadius = 600.0f;
+    config.containerLengthMm = 2194.0;
     return config;
 }
 
@@ -250,7 +251,7 @@ void PrintFrame(const char* title, const InnerSurfaceFrameMeasurement& r)
 
 QString DefaultDataDir()
 {
-    return QStringLiteral("D:/work/LY/第二工位测量源码/内表面测量/InnerSurfaceMeasure/Data");
+    return QStringLiteral("D:/work/LY/IPC_Station2/third_party/inner_surface_measure/Data");
 }
 
 }  // namespace
@@ -308,6 +309,8 @@ int main(int argc, char* argv[])
     std::printf("Average diameter: %.6f\n", average.diameterMm);
     std::printf("Average circumference: %.6f\n", average.circumferenceMm);
     std::printf("Average roundness (6 sections): %.6f\n", average.roundness);
+    std::printf("Container length (mm): %.3f\n", average.containerLengthMm);
+    std::printf("Average volume (L): %.6f\n", average.volumeLiters);
     std::printf("Average valid: %d\n", average.valid ? 1 : 0);
     return 0;
 }

@@ -2,7 +2,7 @@
 
 #include "scan_tracking/container_total_length_measure/container_total_length_service.h"
 #include "scan_tracking/inner_surface_measure/inner_surface_measure_service.h"
-#include "scan_tracking/thickness_measure/thickness_measure_service.h"
+#include "scan_tracking/thickness_measure_v2/thickness_measure_v2_service.h"
 #include "scan_tracking/weld_measure/weld_measure_service.h"
 
 #include "scan_tracking/common/config_manager.h"
@@ -737,9 +737,9 @@ bool selectInnerSurfaceTwoEnds(
     return *outFrame1 != nullptr && *outFrame2 != nullptr && *outFrame1 != *outFrame2;
 }
 
-scan_tracking::thickness_measure::ThicknessMeasureService& sharedThicknessMeasureService()
+scan_tracking::thickness_measure_v2::ThicknessMeasureV2Service& sharedThicknessMeasureV2Service()
 {
-    static scan_tracking::thickness_measure::ThicknessMeasureService service;
+    static scan_tracking::thickness_measure_v2::ThicknessMeasureV2Service service;
     return service;
 }
 
@@ -751,15 +751,16 @@ scan_tracking::inner_surface_measure::InnerSurfaceMeasureService& sharedInnerSur
 
 bool ensureThicknessMeasureReady(QString* errorMessage)
 {
-    auto& service = sharedThicknessMeasureService();
+    auto& service = sharedThicknessMeasureV2Service();
     if (service.isReady()) {
         return true;
     }
-    scan_tracking::thickness_measure::ThicknessMeasureError error;
-    if (!service.initializeFromJson(QString(), &error)) {
+    scan_tracking::thickness_measure_v2::ThicknessV2Error error;
+    if (!service.initializeFromIni(QString(), &error)) {
         if (errorMessage != nullptr) {
             *errorMessage = error.message + QStringLiteral(
-                "（请确认 config/thickness_measure/thickness_config.json 及模板 PCD 路径可用）");
+                "（请确认 config/thickness_measure_v2/thickness_measurement.ini、"
+                "外模板 PCD 与 models/thickness_measure_v2/*.onnx 可用）");
         }
         return false;
     }
@@ -851,8 +852,8 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
         << QStringLiteral(" 内表面=")
         << (hasInnerEnds ? innerEndsDetail : QStringLiteral("无两端帧"));
 
-    // --- 厚度：严格对照源码 C API（tm_create_from_json + tm_measure_pairs_average）---
-    // 预处理（SOR/体素）只在 DLL 内按 thickness_config.json 执行，IPC 不再二次降采样。
+    // --- 厚度 V2：tmv2_create_from_ini + tmv2_measure_pairs_average（ONNX 截面/回退特征点）---
+    // 预处理仅在 DLL 内按 thickness_measurement.ini 执行，IPC 不再二次降采样。
     if (!thicknessPairs.isEmpty()) {
         QString initError;
         if (!ensureThicknessMeasureReady(&initError)) {
@@ -860,31 +861,31 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
             result.ngReasonWord0 = kNgReasonAlgorithmFailed;
             result.measurement.qualityCode = 2;
             result.measureItemCount = 1;
-            result.message = QStringLiteral("pathId=%1 厚度测量初始化失败：%2")
+            result.message = QStringLiteral("pathId=%1 厚度测量(V2)初始化失败：%2")
                                  .arg(quota.pathId)
                                  .arg(initError);
             return result;
         }
 
-        QVector<scan_tracking::thickness_measure::ThicknessPairClouds> pairClouds;
+        QVector<scan_tracking::thickness_measure_v2::ThicknessV2PairClouds> pairClouds;
         pairClouds.reserve(thicknessPairs.size());
         for (const ThicknessPairRefs& pair : thicknessPairs) {
-            scan_tracking::thickness_measure::ThicknessPairClouds cloudsView;
+            scan_tracking::thickness_measure_v2::ThicknessV2PairClouds cloudsView;
             cloudsView.inner.xyz = pair.inner->xyz.data();
             cloudsView.inner.pointCount = static_cast<size_t>(pair.inner->finiteCount);
             cloudsView.outer.xyz = pair.outer->xyz.data();
             cloudsView.outer.pointCount = static_cast<size_t>(pair.outer->finiteCount);
             pairClouds.push_back(cloudsView);
             qInfo(LOG_STATION2_INSPECTION)
-                << "thickness pair inner=" << pair.innerIndex
+                << "thickness V2 pair inner=" << pair.innerIndex
                 << "outer=" << pair.outerIndex
                 << "innerPts=" << pair.inner->finiteCount
                 << "outerPts=" << pair.outer->finiteCount;
         }
 
-        scan_tracking::thickness_measure::ThicknessAverageMeasurement average;
-        scan_tracking::thickness_measure::ThicknessMeasureError error;
-        if (!sharedThicknessMeasureService().measurePairsAverage(pairClouds, &average, &error) ||
+        scan_tracking::thickness_measure_v2::ThicknessV2AverageMeasurement average;
+        scan_tracking::thickness_measure_v2::ThicknessV2Error error;
+        if (!sharedThicknessMeasureV2Service().measurePairsAverage(pairClouds, &average, &error) ||
             !average.valid ||
             average.successCount == 0) {
             result.resultCode = 2;
@@ -895,7 +896,7 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
                                                                         ? average.pairCount
                                                                         : pairClouds.size());
             result.measurement.thicknessSuccessCount = static_cast<int>(average.successCount);
-            result.message = QStringLiteral("pathId=%1 厚度测量失败：%2（成功对 %3/%4）")
+            result.message = QStringLiteral("pathId=%1 厚度测量(V2)失败：%2（成功对 %3/%4）")
                                  .arg(quota.pathId)
                                  .arg(error.message.isEmpty() ? QStringLiteral("无有效厚度对")
                                                              : error.message)
@@ -910,7 +911,7 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
         result.measurement.thicknessSuccessCount = static_cast<int>(average.successCount);
         qInfo(LOG_STATION2_INSPECTION)
             << "pathId" << quota.pathId
-            << "thicknessMm=" << average.thicknessMm
+            << "thicknessV2Mm=" << average.thicknessMm
             << "success=" << average.successCount << "/" << average.pairCount;
     }
 
@@ -966,12 +967,18 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
         result.measurement.innerRoundness = avg.roundness;
         result.measurement.innerSurfacePairCount = 1;
         result.measurement.innerSurfaceSuccessCount = 1;
+        if (avg.containerLengthMm > 0.0 && avg.diameterMm > 0.0) {
+            result.measurement.volumeLiters = avg.volumeLiters;
+            result.measurement.volumeRadiusMm = avg.diameterMm * 0.5;
+        }
         qInfo(LOG_STATION2_INSPECTION)
             << "pathId" << quota.pathId
             << "inner_surface ends" << innerFrame1->localIndex << innerFrame2->localIndex
             << "diameter=" << avg.diameterMm
             << "circumference=" << avg.circumferenceMm
             << "roundness=" << avg.roundness
+            << "volumeL=" << avg.volumeLiters
+            << "containerLengthMm=" << avg.containerLengthMm
             << "frame1.valid=" << frame1.valid
             << "frame2.valid=" << frame2.valid;
     }
@@ -986,7 +993,7 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
         (result.measurement.innerSurfaceSuccessCount > 0 ? 2 : 0);
     result.message = QStringLiteral(
         "厚度+内表面通过：pathId=%1 (%2)；厚度=%3mm（%4/%5 对），"
-        "内径=%6mm 周长=%7mm 圆度=%8（两端 %9）")
+        "内径=%6mm 周长=%7mm 圆度=%8 容积=%9L（两端 %10）")
                          .arg(quota.pathId)
                          .arg(quota.pathName.isEmpty() ? QStringLiteral("thickness_inner_surface")
                                                       : quota.pathName)
@@ -996,6 +1003,7 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
                          .arg(result.measurement.innerDiameterMm, 0, 'f', 3)
                          .arg(result.measurement.innerCircumferenceMm, 0, 'f', 3)
                          .arg(result.measurement.innerRoundness, 0, 'f', 3)
+                         .arg(result.measurement.volumeLiters, 0, 'f', 3)
                          .arg(hasInnerEnds ? QStringLiteral("%1/%2")
                                                 .arg(innerFrame1->localIndex)
                                                 .arg(innerFrame2->localIndex)
@@ -1357,12 +1365,35 @@ bool prewarmActiveStation2InspectionAlgorithm(QString* errorMessage)
     }
 
     const QString algorithm = cfgMgr->activePathAlgorithm().trimmed();
+    const int pathId = cfgMgr->activePathId();
+    const QString pathName = cfgMgr->activePathName();
+
+    if (algorithm == QLatin1String("thickness_inner_surface")) {
+        QString detail;
+        qInfo(LOG_STATION2_INSPECTION).noquote()
+            << QStringLiteral("启动期预热厚度V2+内表面 pathId=") << pathId
+            << QStringLiteral(" name=") << pathName;
+        if (!ensureThicknessMeasureReady(&detail)) {
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral("厚度V2算法预热失败：%1").arg(detail);
+            }
+            return false;
+        }
+        if (!ensureInnerSurfaceMeasureReady(&detail)) {
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral("内表面算法预热失败：%1").arg(detail);
+            }
+            return false;
+        }
+        qInfo(LOG_STATION2_INSPECTION).noquote()
+            << QStringLiteral("启动期厚度V2+内表面预热完成 pathId=") << pathId;
+        return true;
+    }
+
     if (algorithm != QLatin1String("weld_section")) {
         return true;
     }
 
-    const int pathId = cfgMgr->activePathId();
-    const QString pathName = cfgMgr->activePathName();
     const bool ringWeld = pathId == 5 ||
         pathName.compare(QStringLiteral("ring_weld"), Qt::CaseInsensitive) == 0;
 

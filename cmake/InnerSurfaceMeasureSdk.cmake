@@ -103,6 +103,25 @@ function(scan_tracking_deploy_inner_surface_measure_runtime target_name)
                 "$<TARGET_FILE_DIR:${target_name}>/config/inner_surface_measure/config.ini"
         )
     endif()
+    if(EXISTS "${_sdk_dir}/Data/sample_cylinder.pcd")
+        list(APPEND _copy_cmds
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_FILE_DIR:${target_name}>/config/inner_surface_measure/Data"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_sdk_dir}/Data/sample_cylinder.pcd"
+                "$<TARGET_FILE_DIR:${target_name}>/config/inner_surface_measure/Data/sample_cylinder.pcd"
+        )
+    endif()
+    if(EXISTS "${_sdk_dir}/Data/sample_cylinder_cut_1.pcd")
+        list(APPEND _copy_cmds
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_sdk_dir}/Data/sample_cylinder_cut_1.pcd"
+                "$<TARGET_FILE_DIR:${target_name}>/config/inner_surface_measure/Data/sample_cylinder_cut_1.pcd"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_sdk_dir}/Data/sample_cylinder_cut_2.pcd"
+                "$<TARGET_FILE_DIR:${target_name}>/config/inner_surface_measure/Data/sample_cylinder_cut_2.pcd"
+        )
+    endif()
 
     add_custom_command(TARGET ${target_name} POST_BUILD
         ${_copy_cmds}
