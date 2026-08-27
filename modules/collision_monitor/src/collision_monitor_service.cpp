@@ -1,3 +1,5 @@
+// 碰撞检测服务实现：封装 CollisionDetection.dll C API，提供线程安全的 Qt 接口。
+
 #include "scan_tracking/collision_monitor/collision_monitor_service.h"
 
 #include <QtCore/QCoreApplication>
@@ -15,6 +17,7 @@ namespace scan_tracking::collision_monitor {
 
 namespace {
 
+/// 将底层 C API 告警等级枚举映射为本模块 CollisionAlertLevel。
 CollisionAlertLevel ToAlertLevel(int level)
 {
     switch (level) {
@@ -29,6 +32,7 @@ CollisionAlertLevel ToAlertLevel(int level)
     }
 }
 
+/// 填充错误输出结构；error 为 nullptr 时静默忽略。
 void FillError(CollisionMonitorError* error, cd_status status, const QString& message)
 {
     if (error == nullptr) {
@@ -40,6 +44,7 @@ void FillError(CollisionMonitorError* error, cd_status status, const QString& me
         : message;
 }
 
+/// 安全销毁 cd_context，并将指针置空。
 void DestroyContext(cd_context*& ctx)
 {
     if (ctx != nullptr) {
@@ -48,6 +53,7 @@ void DestroyContext(cd_context*& ctx)
     }
 }
 
+/// 将 cd_detect_result 逐字段拷贝到 CollisionDetectResult，含障碍物距离列表。
 void FillResult(const cd_detect_result& src, CollisionDetectResult* dst)
 {
     dst->roiPointCount = src.roi_point_count;
@@ -72,11 +78,12 @@ void FillResult(const cd_detect_result& src, CollisionDetectResult* dst)
 
 }  // namespace
 
+/// 服务私有实现：持有 DLL 上下文、互斥锁及运行状态。
 struct CollisionMonitorService::Impl {
-    mutable std::mutex mutex;
-    cd_context* ctx = nullptr;
-    bool backgroundSet = false;
-    QString configPath;
+    mutable std::mutex mutex;   ///< 串行化所有 C API 调用
+    cd_context* ctx = nullptr;  ///< CollisionDetection.dll 检测上下文
+    bool backgroundSet = false; ///< 背景点云是否已设置
+    QString configPath;         ///< 当前使用的配置文件路径
 };
 
 CollisionMonitorService::CollisionMonitorService()
@@ -120,6 +127,14 @@ QString CollisionMonitorService::configPath() const
     return m_impl != nullptr ? m_impl->configPath : QString();
 }
 
+/// 从 INI 配置文件创建检测上下文。
+///
+/// 步骤：
+/// 1. 销毁已有上下文（若存在）
+/// 2. 解析 configPath，空则回退到 defaultConfigPath()
+/// 3. 校验文件存在后调用 cd_create_from_ini 创建上下文
+///
+/// 成功返回 true，ctx 与 configPath 写入 Impl；失败时 error 携带原因。
 bool CollisionMonitorService::initializeFromIni(const QString& configPath, CollisionMonitorError* error)
 {
     std::lock_guard<std::mutex> lock(m_impl->mutex);
@@ -149,6 +164,10 @@ bool CollisionMonitorService::initializeFromIni(const QString& configPath, Colli
     return true;
 }
 
+/// 设置静态背景点云，作为运动检测的参考基准。
+///
+/// 要求：采集背景时场景中不得有吊运物体，否则后续会将物体误判为静止背景。
+/// 调用 cd_set_background 后会重置 DLL 内部连续帧告警状态。
 bool CollisionMonitorService::setBackground(
     const float* xyz,
     size_t pointCount,
@@ -184,6 +203,15 @@ bool CollisionMonitorService::setBackground(
     return setBackground(cloud.xyz, cloud.pointCount, error);
 }
 
+/// 对一帧实时点云执行碰撞检测（核心接口）。
+///
+/// 前置条件：已 initializeFromIni 且 setBackground。
+/// 流程：
+/// 1. 校验 out 指针与初始化/背景状态
+/// 2. 调用 cd_detect，传入 xyz 与点数
+/// 3. 将 cd_detect_result 映射为 CollisionDetectResult
+///
+/// DLL 内部维护连续帧告警确认逻辑，confirmedLevel 需多帧一致才升级。
 bool CollisionMonitorService::detect(
     const float* xyz,
     size_t pointCount,
@@ -236,6 +264,7 @@ bool CollisionMonitorService::detect(
     return detect(cloud.xyz, cloud.pointCount, out, error);
 }
 
+/// 重置 DLL 连续帧告警状态，保留上下文与背景点云。
 void CollisionMonitorService::resetState()
 {
     if (m_impl == nullptr) {
@@ -247,6 +276,7 @@ void CollisionMonitorService::resetState()
     }
 }
 
+/// 销毁检测上下文，清空背景标志与配置路径。
 void CollisionMonitorService::shutdown()
 {
     if (m_impl == nullptr) {

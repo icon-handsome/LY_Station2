@@ -28,7 +28,6 @@
 #include <vector>
 #include <qdir.h>
 #include <qcoreapplication.h>
-#include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/mech_eye/mech_eye_sdk_seh.h"
 #include "ErrorStatus.h"
 #include "area_scan_3d_camera/Camera.h"
@@ -565,51 +564,6 @@ void MechEyeWorker::performCapture(const scan_tracking::mech_eye::CaptureRequest
         } else if (normalized.mode == CaptureMode::Capture3DOnly) {
             mmind::eye::Frame3D frame3D;
 
-            // ---- 采集前设置深度范围 ----
-            {
-                struct DepthRangeCtx {
-                    mmind::eye::Camera* camera = nullptr;
-                    int minMm = 0;
-                    int maxMm = 0;
-                    bool ok = false;
-                } depthCtx;
-                depthCtx.camera = m_impl->camera.get();
-                const auto& visionCfg = common::ConfigManager::instance()->visionConfig();
-                depthCtx.minMm = visionCfg.mechDepthRangeMin;
-                depthCtx.maxMm = visionCfg.mechDepthRangeMax;
-
-                const unsigned depthSeh = sdk_seh::invokeVoid(
-                    [](void* raw) {
-                        auto* ctx = static_cast<DepthRangeCtx*>(raw);
-                        auto& userSet = ctx->camera->currentUserSet();
-                        mmind::eye::Range<int> configuredRange(ctx->minMm, ctx->maxMm);
-                        ctx->ok = userSet.setRangeValue("DepthRange", configuredRange).isOK();
-                    },
-                    &depthCtx);
-                if (depthSeh != 0) {
-                    qWarning(LOG_MECHEYE_WORKER).noquote()
-                        << taggedMessage(formatSdkSehError(depthSeh) +
-                                         QStringLiteral("（设置 DepthRange 已跳过）"));
-                    if (sdk_seh::isAccessViolationSeh(depthSeh)) {
-                        resetSdkCamera();
-                        m_busy = false;
-                        setRuntimeState(CameraRuntimeState::Error, formatSdkSehError(depthSeh));
-                        emit captureFinished(makeFailureResult(
-                            normalized,
-                            CaptureErrorCode::SdkNativeFault,
-                            formatSdkSehError(depthSeh),
-                            timer.elapsed()));
-                        return;
-                    }
-                } else {
-                    qInfo(LOG_MECHEYE_WORKER) << QStringLiteral("[深度范围] 设置为 [")
-                                              << depthCtx.minMm << QStringLiteral(",")
-                                              << depthCtx.maxMm << QStringLiteral("] mm，成功=")
-                                              << depthCtx.ok;
-                }
-            }
-
-            // 先尝试 capture3D（不含相机侧法向量计算）
             sehCode = sdk_seh::capture3D(
                 m_impl->camera.get(),
                 &frame3D,
@@ -625,7 +579,7 @@ void MechEyeWorker::performCapture(const scan_tracking::mech_eye::CaptureRequest
 
                 if (validCount == 0) {
                     qWarning(LOG_MECHEYE_WORKER)
-                        << QStringLiteral("点云全 NaN，请检查 DepthRange 配置和目标物距离；本段将不会写入内存缓存");
+                        << QStringLiteral("点云全 NaN，请检查相机 UserSet 中的 DepthRange 和目标物距离；本段将不会写入内存缓存");
                 }
             }
         } else {

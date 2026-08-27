@@ -57,32 +57,35 @@ QString resolveLivoxConfigFilePath(
         return QDir::cleanPath(relativePath);
     }
 
-    const QString sdkRoot = resolveSdkRoot(config, configIniPath);
-    if (!sdkRoot.isEmpty()) {
-        const QString sdkPath = QDir(sdkRoot).filePath(relativePath);
-        if (QFileInfo::exists(sdkPath)) {
-            return QDir::cleanPath(sdkPath);
-        }
-        return QDir::cleanPath(sdkPath);
-    }
-
-    const QString configDirPath =
-        QFileInfo(configIniPath).absoluteDir().filePath(relativePath);
-    if (QFileInfo::exists(configDirPath)) {
-        return QDir::cleanPath(configDirPath);
-    }
-
-    const QString exeDirPath =
-        QDir(QCoreApplication::applicationDirPath()).filePath(relativePath);
-    if (QFileInfo::exists(exeDirPath)) {
-        return QDir::cleanPath(exeDirPath);
-    }
-
-    if (!sdkRoot.isEmpty()) {
-        return QDir::cleanPath(QDir(sdkRoot).filePath(relativePath));
-    }
-
+  const QString configDirPath =
+      QFileInfo(configIniPath).absoluteDir().filePath(relativePath);
+  if (QFileInfo::exists(configDirPath)) {
     return QDir::cleanPath(configDirPath);
+  }
+
+  const QString exeDir = QCoreApplication::applicationDirPath();
+  const QString exeDirPath = QDir(exeDir).filePath(relativePath);
+  if (QFileInfo::exists(exeDirPath)) {
+    return QDir::cleanPath(exeDirPath);
+  }
+
+  const QString exeLivoxPath =
+      QDir(exeDir).filePath(QStringLiteral("livox/mid360_config.json"));
+  if (relativePath.endsWith(QStringLiteral("mid360_config.json"))
+      && QFileInfo::exists(exeLivoxPath)) {
+    return QDir::cleanPath(exeLivoxPath);
+  }
+
+  const QString sdkRoot = resolveSdkRoot(config, configIniPath);
+  if (!sdkRoot.isEmpty()) {
+    const QString sdkPath = QDir(sdkRoot).filePath(relativePath);
+    if (QFileInfo::exists(sdkPath)) {
+      return QDir::cleanPath(sdkPath);
+    }
+    return QDir::cleanPath(sdkPath);
+  }
+
+  return QDir::cleanPath(configDirPath);
 }
 
 }  // namespace
