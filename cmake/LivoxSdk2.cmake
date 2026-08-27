@@ -53,16 +53,25 @@ function(scan_tracking_deploy_livox_runtime target_name)
     scan_tracking_require_livox_sdk2()
 
     get_property(_sdk_root GLOBAL PROPERTY SCAN_TRACKING_LIVOX_SDK_ROOT)
-    set(_config_file "${_sdk_root}/bin/mid360_config.json")
-
-    if(EXISTS "${_config_file}")
-        add_custom_command(TARGET ${target_name} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E make_directory
-                "$<TARGET_FILE_DIR:${target_name}>/livox"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${_config_file}"
-                "$<TARGET_FILE_DIR:${target_name}>/livox/mid360_config.json"
-            COMMENT "Deploying Livox MID-360 config"
-        )
+    set(_repo_config "${CMAKE_SOURCE_DIR}/bin/mid360_config.json")
+    set(_sdk_config "${_sdk_root}/bin/mid360_config.json")
+    if(EXISTS "${_repo_config}")
+        set(_config_file "${_repo_config}")
+    elseif(EXISTS "${_sdk_config}")
+        set(_config_file "${_sdk_config}")
+    else()
+        message(WARNING
+            "Livox MID-360 config not found. Expected bin/mid360_config.json or "
+            "third_party/Livox-SDK2/bin/mid360_config.json")
+        return()
     endif()
+
+    add_custom_command(TARGET ${target_name} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:${target_name}>/livox"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${_config_file}"
+            "$<TARGET_FILE_DIR:${target_name}>/livox/mid360_config.json"
+        COMMENT "Deploying Livox MID-360 config"
+    )
 endfunction()

@@ -2,7 +2,11 @@
 
 #include <QtCore/QObject>
 #include <QtCore/QString>
+#include <QtCore/QTimer>
 #include <QtCore/QVector>
+
+#include <mutex>
+#include <vector>
 
 #include "scan_tracking/livox_mid360/livox_mid360_types.h"
 
@@ -15,6 +19,9 @@ class LivoxMid360Worker : public QObject {
 public:
     explicit LivoxMid360Worker(QObject* parent = nullptr);
     ~LivoxMid360Worker() override;
+
+    void appendPointCloudPoints(std::vector<float> points);
+    quint32 selectedHandleForPointCloud() const { return m_selectedHandle; }
 
 public slots:
     void startWorker(const scan_tracking::livox_mid360::LivoxMid360OpenConfig& config);
@@ -37,12 +44,17 @@ signals:
         QString description);
     void logMessage(QString message);
     void discoveryWindowFinished();
+    void pointCloudFrameReady(QVector<float> xyz);
+
+private slots:
+    void flushPointCloudBuffer();
 
 private:
     void finishDiscovery();
-    void teardownSdk();
-    void cleanupTempConfigFile();
-    QString resolveConfigPathForSdk(const QString& configPath, QString* warningMessage);
+    void startPointCloudStream(quint32 handle);
+    void stopPointCloudStream();
+
+    static int pointCloudFeedIntervalMs(const LivoxMid360OpenConfig& config);
 
     bool m_sdkInitialized = false;
     bool m_discoveryActive = false;
@@ -50,6 +62,15 @@ private:
     QVector<LivoxMid360DeviceSummary> m_discoveredDevices;
     LivoxMid360OpenConfig m_openConfig;
     QString m_tempConfigPath;
+
+    quint32 m_selectedHandle = 0;
+    bool m_pointCloudStreamActive = false;
+    QTimer* m_pointCloudFlushTimer = nullptr;
+    std::mutex m_pointCloudMutex;
+    std::vector<float> m_pointCloudBuffer;
+    void teardownSdk();
+    void cleanupTempConfigFile();
+    QString resolveConfigPathForSdk(const QString& configPath, QString* warningMessage);
 };
 
 }  // namespace livox_mid360

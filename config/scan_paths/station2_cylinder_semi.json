@@ -99,7 +99,7 @@
     },
     {
       "pathId": 7,
-      "enabled": true,
+      "enabled": false,
       "name": "self_check",
       "algorithm": "self_check",
       "description": "自检：机械臂 2 点位；转盘+伸缩杆须回零；Trig_SelfCheck 采臂 3D+CXP，不用智能相机。PLC 在每点写 AO47=1/2 后触发",

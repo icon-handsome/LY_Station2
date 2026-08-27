@@ -35,6 +35,7 @@ signals:
         scan_tracking::livox_mid360::LivoxMid360RuntimeState newState,
         QString description);
     void logMessage(QString message);
+    void pointCloudFrameReady(QVector<float> xyz);
 
 private slots:
     void onWorkerEnumerateFinished(
@@ -47,6 +48,7 @@ private slots:
         scan_tracking::livox_mid360::LivoxMid360RuntimeState newState,
         QString description);
     void onWorkerLogMessage(QString message);
+    void onWorkerPointCloudFrameReady(QVector<float> xyz);
 
 signals:
     void sig_startWorker(scan_tracking::livox_mid360::LivoxMid360OpenConfig config);

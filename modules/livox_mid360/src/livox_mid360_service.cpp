@@ -102,6 +102,9 @@ void LivoxMid360Service::registerMetaTypes()
         "scan_tracking::livox_mid360::LivoxMid360DeviceSummary");
     qRegisterMetaType<QVector<scan_tracking::livox_mid360::LivoxMid360DeviceSummary>>(
         "QVector<scan_tracking::livox_mid360::LivoxMid360DeviceSummary>");
+    qRegisterMetaType<scan_tracking::livox_mid360::LivoxMid360PointCloudFrame>(
+        "scan_tracking::livox_mid360::LivoxMid360PointCloudFrame");
+    qRegisterMetaType<QVector<float>>("QVector<float>");
     registered = true;
 }
 
@@ -155,6 +158,8 @@ void LivoxMid360Service::start()
             this, &LivoxMid360Service::onWorkerStateChanged, Qt::QueuedConnection);
     connect(m_worker, &LivoxMid360Worker::logMessage,
             this, &LivoxMid360Service::onWorkerLogMessage, Qt::QueuedConnection);
+    connect(m_worker, &LivoxMid360Worker::pointCloudFrameReady,
+            this, &LivoxMid360Service::onWorkerPointCloudFrameReady, Qt::QueuedConnection);
 
     m_workerThread->setObjectName(QStringLiteral("LivoxMid360WorkerThread"));
     m_workerThread->start();
@@ -226,6 +231,11 @@ void LivoxMid360Service::onWorkerStateChanged(
 void LivoxMid360Service::onWorkerLogMessage(QString message)
 {
     emit logMessage(std::move(message));
+}
+
+void LivoxMid360Service::onWorkerPointCloudFrameReady(QVector<float> xyz)
+{
+    emit pointCloudFrameReady(std::move(xyz));
 }
 
 }  // namespace livox_mid360

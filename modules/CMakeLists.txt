@@ -22,6 +22,15 @@ add_subdirectory(inner_surface_measure)
 add_subdirectory(undercut_length_measure)
 add_subdirectory(length_volume_measure)
 add_subdirectory(container_total_length_measure)
+set(_collision_sdk "${CMAKE_SOURCE_DIR}/third_party/collision_detection")
+if(NOT EXISTS "${_collision_sdk}/include/collision_detection_c_api.h"
+   OR NOT EXISTS "${_collision_sdk}/lib/Release/CollisionDetection.lib"
+   OR NOT EXISTS "${_collision_sdk}/bin/Release/CollisionDetection.dll")
+    message(FATAL_ERROR
+        "CollisionDetection SDK missing under third_party/collision_detection.\n"
+        "Build CollisionDetectionDll and run scripts/package_sdk_to_ipc.ps1.")
+endif()
+add_subdirectory(collision_monitor)
 add_subdirectory(modbus)
 add_subdirectory(flow_control)
 add_subdirectory(hmi_server)

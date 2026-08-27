@@ -1,5 +1,6 @@
 #include "scan_tracking/orbbec_gemini/orbbec_gemini_service.h"
 #include "scan_tracking/livox_mid360/livox_mid360_service.h"
+#include "scan_tracking/collision_monitor/collision_monitor_pipeline.h"
 #include "scan_tracking/tfmini_plus/tfmini_plus_service.h"
 #include "scan_tracking/app/console_runtime.h"
 
@@ -470,8 +471,7 @@ void ConsoleRuntime::initModules()
             << QStringLiteral(" enablePoseCheck=") << profile.enablePoseCheck
             << QStringLiteral(" enableTelescopicScan=") << profile.enableTelescopicScan
             << QStringLiteral(" enableHoistAssist=") << profile.enableHoistAssist
-            << QStringLiteral(" enableCollisionMonitor=") << profile.enableCollisionMonitor
-            << QStringLiteral(" (reserved, not enforced in stage1)");
+            << QStringLiteral(" enableCollisionMonitor=") << profile.enableCollisionMonitor;
     }
 
     const auto visionConfigForMech = configManager != nullptr
@@ -599,8 +599,14 @@ void ConsoleRuntime::initModules()
         }
 
         const auto& livoxConfig = configManager->livoxMid360Config();
+        const bool collisionMonitorRequested =
+            configManager != nullptr && configManager->stationProfile().enableCollisionMonitor;
         if (!livoxConfig.enabled) {
             qInfo(appLog) << QStringLiteral("[LivoxMid360] disabled (livoxMid360Enabled=false)");
+            if (collisionMonitorRequested) {
+                qWarning(appLog)
+                    << QStringLiteral("[CollisionMonitor] enabled in station profile but Livox is disabled");
+            }
         } else {
             livoxMid360Service_ = std::make_unique<scan_tracking::livox_mid360::LivoxMid360Service>();
             QObject::connect(
@@ -619,18 +625,53 @@ void ConsoleRuntime::initModules()
                         << static_cast<int>(state)
                         << description;
                 });
-            QObject::connect(
-                livoxMid360Service_.get(),
-                &scan_tracking::livox_mid360::LivoxMid360Service::openFinished,
-                [](bool success,
-                   scan_tracking::livox_mid360::LivoxMid360DeviceSummary,
-                   const QString& errorMessage) {
-                    if (!success && !errorMessage.isEmpty()) {
-                        qWarning(appLog).noquote()
-                            << QStringLiteral("[LivoxMid360] Open failed:")
-                            << errorMessage;
-                    }
-                });
+            if (collisionMonitorRequested) {
+                collisionMonitorPipeline_ =
+                    std::make_unique<scan_tracking::collision_monitor::CollisionMonitorPipeline>();
+                QObject::connect(
+                    livoxMid360Service_.get(),
+                    &scan_tracking::livox_mid360::LivoxMid360Service::pointCloudFrameReady,
+                    collisionMonitorPipeline_.get(),
+                    &scan_tracking::collision_monitor::CollisionMonitorPipeline::onPointCloudFrame);
+                QObject::connect(
+                    livoxMid360Service_.get(),
+                    &scan_tracking::livox_mid360::LivoxMid360Service::openFinished,
+                    this,
+                    [this](bool success,
+                           scan_tracking::livox_mid360::LivoxMid360DeviceSummary deviceInfo,
+                           const QString& errorMessage) {
+                        if (!success) {
+                            if (!errorMessage.isEmpty()) {
+                                qWarning(appLog).noquote()
+                                    << QStringLiteral("[LivoxMid360] Open failed:")
+                                    << errorMessage;
+                            }
+                            return;
+                        }
+                        if (collisionMonitorPipeline_ == nullptr) {
+                            return;
+                        }
+                        if (collisionMonitorPipeline_->start()) {
+                            qInfo(appLog).noquote()
+                                << QStringLiteral("[CollisionMonitor] started for Livox SN=")
+                                << deviceInfo.serialNumber;
+                        }
+                    });
+                qInfo(appLog) << QStringLiteral("[CollisionMonitor] pipeline wired (0.3s point cloud feed)");
+            } else {
+                QObject::connect(
+                    livoxMid360Service_.get(),
+                    &scan_tracking::livox_mid360::LivoxMid360Service::openFinished,
+                    [](bool success,
+                       scan_tracking::livox_mid360::LivoxMid360DeviceSummary,
+                       const QString& errorMessage) {
+                        if (!success && !errorMessage.isEmpty()) {
+                            qWarning(appLog).noquote()
+                                << QStringLiteral("[LivoxMid360] Open failed:")
+                                << errorMessage;
+                        }
+                    });
+            }
             qInfo(appLog) << QStringLiteral("[LivoxMid360] service created (deferred start).");
         }
 
@@ -936,6 +977,10 @@ void ConsoleRuntime::printShutdownStatus()
     if (orbbecGeminiService_) {
         orbbecGeminiService_->stop();
         orbbecGeminiService_.reset();
+    }
+    if (collisionMonitorPipeline_) {
+        collisionMonitorPipeline_->stop();
+        collisionMonitorPipeline_.reset();
     }
     if (livoxMid360Service_) {
         livoxMid360Service_->stop();

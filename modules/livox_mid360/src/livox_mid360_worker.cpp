@@ -86,6 +86,64 @@ QString formatOpenedDeviceLine(const LivoxMid360DeviceSummary& summary)
 LivoxMid360Worker* g_activeWorker = nullptr;
 std::mutex g_livoxCallbackMutex;
 
+constexpr int kDefaultPointCloudFeedIntervalMs = 300;
+
+void noopLivoxAsyncControlCallback(
+    livox_status /*status*/,
+    uint32_t /*handle*/,
+    LivoxLidarAsyncControlResponse* /*response*/,
+    void* /*client_data*/)
+{
+}
+
+void appendPacketPoints(const LivoxLidarEthernetPacket* packet, std::vector<float>* out)
+{
+    if (packet == nullptr || out == nullptr || packet->dot_num == 0) {
+        return;
+    }
+
+    out->reserve(out->size() + static_cast<size_t>(packet->dot_num) * 3);
+
+    if (packet->data_type == kLivoxLidarCartesianCoordinateHighData) {
+        const auto* points = reinterpret_cast<const LivoxLidarCartesianHighRawPoint*>(packet->data);
+        for (uint16_t i = 0; i < packet->dot_num; ++i) {
+            out->push_back(static_cast<float>(points[i].x) / 1000.0f);
+            out->push_back(static_cast<float>(points[i].y) / 1000.0f);
+            out->push_back(static_cast<float>(points[i].z) / 1000.0f);
+        }
+    } else if (packet->data_type == kLivoxLidarCartesianCoordinateLowData) {
+        const auto* points = reinterpret_cast<const LivoxLidarCartesianLowRawPoint*>(packet->data);
+        for (uint16_t i = 0; i < packet->dot_num; ++i) {
+            out->push_back(static_cast<float>(points[i].x) / 100.0f);
+            out->push_back(static_cast<float>(points[i].y) / 100.0f);
+            out->push_back(static_cast<float>(points[i].z) / 100.0f);
+        }
+    }
+}
+
+void livoxPointCloudCallback(
+    const uint32_t handle,
+    const uint8_t /*dev_type*/,
+    LivoxLidarEthernetPacket* data,
+    void* client_data)
+{
+    std::lock_guard<std::mutex> lock(g_livoxCallbackMutex);
+    auto* worker = static_cast<LivoxMid360Worker*>(client_data);
+    if (worker == nullptr || data == nullptr || g_activeWorker != worker) {
+        return;
+    }
+    if (handle != worker->selectedHandleForPointCloud()) {
+        return;
+    }
+
+    std::vector<float> localPoints;
+    appendPacketPoints(data, &localPoints);
+    if (localPoints.empty()) {
+        return;
+    }
+    worker->appendPointCloudPoints(std::move(localPoints));
+}
+
 bool hasUtf8Bom(const QByteArray& data)
 {
     return data.size() >= 3
@@ -361,19 +419,122 @@ void LivoxMid360Worker::finishDiscovery()
     }
 
     emit logMessage(QStringLiteral("%1 %2").arg(logPrefix(), formatOpenedDeviceLine(selectedDevice)));
-    emit logMessage(QStringLiteral("%1 Ready (no point cloud stream started)").arg(logPrefix()));
+    startPointCloudStream(selectedDevice.handle);
     emit openFinished(true, selectedDevice, {});
-    emit stateChanged(LivoxMid360RuntimeState::Ready, QStringLiteral("Device opened"));
+    emit stateChanged(LivoxMid360RuntimeState::Ready, QStringLiteral("Device opened, point cloud streaming"));
+}
+
+int LivoxMid360Worker::pointCloudFeedIntervalMs(const LivoxMid360OpenConfig& config)
+{
+    return config.pointCloudFeedIntervalMs > 0
+        ? config.pointCloudFeedIntervalMs
+        : kDefaultPointCloudFeedIntervalMs;
+}
+
+void LivoxMid360Worker::appendPointCloudPoints(std::vector<float> points)
+{
+    if (!m_pointCloudStreamActive || points.empty()) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(m_pointCloudMutex);
+    m_pointCloudBuffer.insert(
+        m_pointCloudBuffer.end(),
+        points.begin(),
+        points.end());
+}
+
+void LivoxMid360Worker::flushPointCloudBuffer()
+{
+    if (!m_pointCloudStreamActive) {
+        return;
+    }
+
+    std::vector<float> batch;
+    {
+        std::lock_guard<std::mutex> lock(m_pointCloudMutex);
+        if (m_pointCloudBuffer.empty()) {
+            return;
+        }
+        batch.swap(m_pointCloudBuffer);
+    }
+
+    emit pointCloudFrameReady(QVector<float>(batch.begin(), batch.end()));
+}
+
+void LivoxMid360Worker::startPointCloudStream(quint32 handle)
+{
+    stopPointCloudStream();
+
+    m_selectedHandle = handle;
+    m_pointCloudStreamActive = true;
+
+    {
+        std::lock_guard<std::mutex> lock(g_livoxCallbackMutex);
+        SetLivoxLidarPointCloudCallBack(livoxPointCloudCallback, this);
+    }
+
+    const livox_status enableStatus = EnableLivoxLidarPointSend(
+        handle,
+        noopLivoxAsyncControlCallback,
+        nullptr);
+    if (enableStatus != kLivoxLidarStatusSuccess) {
+        emit logMessage(
+            QStringLiteral("%1 EnableLivoxLidarPointSend returned status=%2")
+                .arg(logPrefix())
+                .arg(enableStatus));
+    }
+
+    if (m_pointCloudFlushTimer == nullptr) {
+        m_pointCloudFlushTimer = new QTimer(this);
+        connect(
+            m_pointCloudFlushTimer,
+            &QTimer::timeout,
+            this,
+            &LivoxMid360Worker::flushPointCloudBuffer);
+    }
+
+    const int intervalMs = pointCloudFeedIntervalMs(m_openConfig);
+    m_pointCloudFlushTimer->start(intervalMs);
+    emit logMessage(
+        QStringLiteral("%1 Point cloud stream started (feed interval=%2 ms)")
+            .arg(logPrefix())
+            .arg(intervalMs));
+}
+
+void LivoxMid360Worker::stopPointCloudStream()
+{
+    m_pointCloudStreamActive = false;
+    m_selectedHandle = 0;
+
+    if (m_pointCloudFlushTimer != nullptr) {
+        m_pointCloudFlushTimer->stop();
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(m_pointCloudMutex);
+        m_pointCloudBuffer.clear();
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_livoxCallbackMutex);
+        if (g_activeWorker == this) {
+            SetLivoxLidarPointCloudCallBack(nullptr, nullptr);
+        }
+    }
 }
 
 void LivoxMid360Worker::teardownSdk()
 {
+    stopPointCloudStream();
+
     {
         std::lock_guard<std::mutex> lock(g_livoxCallbackMutex);
         if (g_activeWorker == this) {
             g_activeWorker = nullptr;
         }
         SetLivoxLidarInfoChangeCallback(nullptr, nullptr);
+        SetLivoxLidarPointCloudCallBack(nullptr, nullptr);
     }
 
     if (m_sdkInitialized) {
@@ -386,7 +547,7 @@ void LivoxMid360Worker::teardownSdk()
 
 void LivoxMid360Worker::stopWorker()
 {
-    const bool wasActive = m_sdkInitialized || m_discoveryActive;
+    const bool wasActive = m_sdkInitialized || m_discoveryActive || m_pointCloudStreamActive;
     m_discoveryActive = false;
     teardownSdk();
     m_discoveredDevices.clear();
