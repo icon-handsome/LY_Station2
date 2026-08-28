@@ -92,9 +92,9 @@ void StateMachine::onModbusConnected()
         clearActiveTask();
     }
 
-    // 重连后丢弃旧命令块；首帧若 Trig 仍为 1 且空闲则补接受（见 onCommandBlockUpdated）。
+    // 重连后丢弃旧命令块；首帧若 Trig 仍为 1 则闭锁到回 0（见 onCommandBlockUpdated），不补接受。
     m_lastCommandBlock.clear();
-    m_blockTrigUntilIdleOffset = -1;
+    m_blockTrigUntilIdleMask = 0;
     g_latchedTrigRisingMask = 0;
     m_advancePathAfterTriggerRelease = false;
     m_codeReadPending = false;
@@ -291,15 +291,27 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
         }
     }
 
-    // 强制收尾后的闭锁：该 Trig 必须先回到 0 才允许再次接受。
-    // offset 必须是真实 Trig 下标（>0）；0 为保留字，避免误判「解除闭锁」。
-    if (m_blockTrigUntilIdleOffset > 0 &&
-        m_blockTrigUntilIdleOffset < values.size() &&
-        values.value(m_blockTrigUntilIdleOffset) == 0) {
-        qInfo(LOG_FLOW).noquote()
-            << QStringLiteral("Trig 已回 0，解除重复触发闭锁 offset=")
-            << m_blockTrigUntilIdleOffset;
-        m_blockTrigUntilIdleOffset = -1;
+    // 闭锁：对应 Trig 回到 0 后解除，允许后续真正的 0→1。
+    // offset 必须是真实 Trig 下标（>0）；0 为保留字，不参与掩码。
+    if (m_blockTrigUntilIdleMask != 0) {
+        for (const auto& trigger : protocol::triggerDefinitions()) {
+            if (trigger.trigOffset <= 0 || trigger.trigOffset >= 64 ||
+                trigger.trigOffset >= values.size()) {
+                continue;
+            }
+            const quint64 bit = 1ull << static_cast<unsigned>(trigger.trigOffset);
+            if ((m_blockTrigUntilIdleMask & bit) == 0) {
+                continue;
+            }
+            if (values.value(trigger.trigOffset) != 0) {
+                continue;
+            }
+            m_blockTrigUntilIdleMask &= ~bit;
+            qInfo(LOG_FLOW).noquote()
+                << QStringLiteral("Trig 已回 0，解除重复触发闭锁 ")
+                << protocol::triggerName(trigger)
+                << QStringLiteral(" offset=") << trigger.trigOffset;
+        }
     }
 
     if (m_activeTask.definition != nullptr) {
@@ -309,21 +321,23 @@ void StateMachine::handleRegistersRead(int startAddress, const QVector<quint16>&
     // 空闲时：仅在 40047 相对上次轮询变化时切路，避免覆盖 IPC 自动切路结果。
     applyPlcScanPathId(values, previousCommandBlock, true);
 
-    // 首帧（previous 为空）：重连/启动后若 Trig 仍保持 1 且空闲，补接受（勿一律当残留丢掉）。
-    // 用全 0 伪上一拍制造上升沿，复用 selectPendingTrigger / 锁存逻辑。
+    // 首帧（previous 为空）：无断点续跑——不补接受残留 Trig=1，闭锁到回 0 后再认新上升沿。
     if (previousCommandBlock.isEmpty()) {
-        QVector<quint16> syntheticPrevious(values.size(), 0);
-        if (const protocol::TriggerDefinition* heldTrigger =
-                selectPendingTrigger(values, syntheticPrevious)) {
-            qInfo(LOG_FLOW).noquote()
-                << QStringLiteral("重连/首帧补接受保持为 1 的触发 ")
-                << protocol::triggerName(*heldTrigger)
-                << QStringLiteral("（空闲且 Trig=1）");
-            if (heldTrigger->trigOffset >= 0 && heldTrigger->trigOffset < 64) {
-                g_latchedTrigRisingMask &=
-                    ~(1ull << static_cast<unsigned>(heldTrigger->trigOffset));
+        for (const auto& trigger : protocol::triggerDefinitions()) {
+            if (trigger.trigOffset <= 0 || trigger.trigOffset >= 64 ||
+                trigger.trigOffset >= values.size()) {
+                continue;
             }
-            processTrigger(*heldTrigger, values);
+            if (values.value(trigger.trigOffset) != 1) {
+                continue;
+            }
+            const quint64 bit = 1ull << static_cast<unsigned>(trigger.trigOffset);
+            m_blockTrigUntilIdleMask |= bit;
+            g_latchedTrigRisingMask &= ~bit;
+            qInfo(LOG_FLOW).noquote()
+                << QStringLiteral("启动/重连首帧忽略残留触发 ")
+                << protocol::triggerName(trigger)
+                << QStringLiteral("（Trig=1，闭锁至回 0）");
         }
         return;
     }
@@ -794,9 +808,10 @@ const protocol::TriggerDefinition* StateMachine::selectPendingTrigger(
         if (commandBlock.value(trigger.trigOffset) != 1) {
             continue;
         }
-        // 看门狗强制收尾后：同一 Trig 仍为 1 时忽略，直到其先回 0。
-        if (m_blockTrigUntilIdleOffset > 0 &&
-            trigger.trigOffset == m_blockTrigUntilIdleOffset) {
+        // 强制收尾 / 启动重连残留：同一 Trig 仍为 1 时忽略，直到其先回 0。
+        if (trigger.trigOffset > 0 && trigger.trigOffset < 64 &&
+            (m_blockTrigUntilIdleMask &
+             (1ull << static_cast<unsigned>(trigger.trigOffset))) != 0) {
             continue;
         }
 

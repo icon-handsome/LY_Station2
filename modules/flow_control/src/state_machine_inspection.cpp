@@ -1174,7 +1174,10 @@ void StateMachine::scheduleCodeReadScanFinalizeWatchdog(int trigOffset)
             << QStringLiteral("编号段扫完成已超过 ") << holdDoneMs
             << QStringLiteral("ms，PLC 仍未拉低 Trig，强制释放任务以免卡死；")
             << QStringLiteral("该 Trig 需先回 0 才可再次触发。");
-        self->m_blockTrigUntilIdleOffset = trigOffset;
+        if (trigOffset > 0 && trigOffset < 64) {
+            self->m_blockTrigUntilIdleMask |=
+                (1ull << static_cast<unsigned>(trigOffset));
+        }
         self->finalizeCompletedTaskIfTriggerReleased(self->m_lastCommandBlock, true);
     });
 }

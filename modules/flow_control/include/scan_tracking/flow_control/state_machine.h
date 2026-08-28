@@ -396,8 +396,8 @@ private:
     bool m_codeReadSoftPending = false;
     /// 编号段扫齐套后，等 PLC 拉低 Trig 再切下一路（避免过早清 Done 导致 PLC 认为无应答）。
     bool m_advancePathAfterTriggerRelease = false;
-    /// 强制收尾后，该 Trig 必须先回到 0 才允许再次接受（防止 Trig 一直为 1 时重复触发）。
-    int m_blockTrigUntilIdleOffset = -1;
+    /// Trig 闭锁掩码（bit=trigOffset）：强制收尾 / 启动重连见残留 Trig=1 时置位，须先回 0 再接受。
+    quint64 m_blockTrigUntilIdleMask = 0;
     /// 本轮段缓存已做过检测（Trig_Inspection 或切路前自动检测），避免重复跑算法。
     int m_lastInspectedPathId = -1;
     QString m_lastInspectedRunKey;
