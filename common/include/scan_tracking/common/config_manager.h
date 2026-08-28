@@ -79,6 +79,9 @@ struct VisionConfig {
     QString hikCameraCTcpListenIp;             ///< Camera C 触发用 TCP 监听 IP
     quint16 hikCameraCTcpListenPort;           ///< Camera C 触发用 TCP 端口
     QString hikCameraCFtpDirectory;            ///< Camera C FTP 落盘目录（遗留，缺省映射伸缩杆组）
+    VisionCameraEndpointConfig hikCameraCThird;
+    QString hikCameraCThirdFtpDirectory;
+    QString hikCameraCArchiveDirectory;
     VisionDeviceGroupConfig telescopicGroup;   ///< 伸缩杆组：Mech + 海康 C
     VisionDeviceGroupConfig armGroup;          ///< 机械臂组：Mech + 海康 C
     /// true：段扫/自检仍正常进入；仅不采 CXP、不因 CXP 失败阻断（CXP 另作他用时开）

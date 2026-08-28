@@ -2,6 +2,7 @@
 
 #include <QtCore/QDir>
 #include <QtCore/QFileInfo>
+#include <QtCore/QDirIterator>
 #include <QtCore/QLoggingCategory>
 
 Q_LOGGING_CATEGORY(hikFtpMonitorLog, "vision.hik_ftp_monitor")
@@ -120,11 +121,11 @@ void HikSmartCameraFtpMonitor::scanDirectory()
         return;
     }
 
-    QDir dir(m_ftpDirectory);
-    QFileInfoList fileList = dir.entryInfoList(QDir::Files | QDir::NoDotAndDotDot, QDir::Time);
-
-    for (const QFileInfo& fileInfo : fileList) {
-        QString filePath = fileInfo.absoluteFilePath();
+    QDirIterator it(m_ftpDirectory, QDir::Files | QDir::NoDotAndDotDot,
+                    QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        const QString filePath = it.next();
+        const QFileInfo fileInfo(filePath);
         QString fileName = fileInfo.fileName();
 
         // 跳过已处理的文件

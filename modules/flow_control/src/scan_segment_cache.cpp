@@ -397,7 +397,15 @@ bool persistScanSegmentBundle(
             if (QFile::exists(destPath)) {
                 QFile::remove(destPath);
             }
-            if (!QFile::copy(bundle.hikCameraCImagePath, destPath)) {
+            bool moved = QFile::rename(bundle.hikCameraCImagePath, destPath);
+            if (!moved) {
+                // FTP 目录和 output 目录可能位于不同磁盘，rename 失败时用复制后删除实现移动。
+                moved = QFile::copy(bundle.hikCameraCImagePath, destPath);
+                if (moved) {
+                    moved = QFile::remove(bundle.hikCameraCImagePath);
+                }
+            }
+            if (!moved) {
                 recordFailure(QStringLiteral("%1 段 %2 海康 C 落盘失败")
                                   .arg(deviceLabel)
                                   .arg(segmentIndex));

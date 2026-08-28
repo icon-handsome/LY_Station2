@@ -555,6 +555,15 @@ void VisionPipelineService::triggerHikCameraCConcurrent(bool triggerOnly)
         return;
     }
 
+    if (m_hikCameraCController != nullptr) {
+        m_hikCameraCController->setCaptureContext(
+            m_pending.hikCameraCIp,
+            common::ConfigManager::instance() != nullptr
+                ? common::ConfigManager::instance()->activePathId() : 0,
+            m_pending.bundle.request.segmentIndex,
+            m_pending.hikCameraCIp == m_config.telescopicGroup.hikCameraC.ipAddress.trimmed()
+                ? QStringLiteral("telescopic") : QStringLiteral("arm"));
+    }
     const bool sent =
         m_hikCameraCController != nullptr &&
         m_hikCameraCController->requestCapture(

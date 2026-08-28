@@ -899,6 +899,15 @@ void ConfigManager::load(const QString& filePath)
     m_visionConfig.hikCameraCTcpListenIp = settings.value("hikCameraCTcpListenIp", "192.168.8.13").toString();
     m_visionConfig.hikCameraCTcpListenPort = static_cast<quint16>(settings.value("hikCameraCTcpListenPort", 8999).toUInt());
     m_visionConfig.hikCameraCFtpDirectory = settings.value("hikCameraCFtpDirectory", "D:/HikCameraFTP").toString();
+    m_visionConfig.hikCameraCThird.logicalName = settings.value("hikCameraCThirdName", "hik_camera_c_third").toString();
+    m_visionConfig.hikCameraCThird.cameraKey = settings.value("hikCameraCThirdIp", "192.168.10.10").toString();
+    m_visionConfig.hikCameraCThird.ipAddress = settings.value("hikCameraCThirdIp", "192.168.10.10").toString();
+    m_visionConfig.hikCameraCThird.serialNumber = settings.value("hikCameraCThirdSerial", "").toString();
+    m_visionConfig.hikCameraCThird.accessMode = settings.value("hikCameraCThirdAccessMode", "monitor").toString();
+    m_visionConfig.hikCameraCThirdFtpDirectory = settings.value(
+        "hikCameraCThirdFtpDirectory", "D:/HikCameraFTP/third").toString();
+    m_visionConfig.hikCameraCArchiveDirectory = settings.value(
+        "hikCameraCArchiveDirectory", "D:/HikCameraFTP/archive").toString();
     m_visionConfig.hikCxpEnabled = settings.value("hikCxpEnabled", false).toBool();
     m_visionConfig.hikCxpCaptureTimeoutMs = settings.value("hikCxpCaptureTimeoutMs", 5000).toInt();
     m_visionConfig.hikCxpExposureTimeUs =

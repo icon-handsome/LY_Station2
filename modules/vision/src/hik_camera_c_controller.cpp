@@ -5,6 +5,7 @@
 #include <QtCore/QFile>
 #include <QtCore/QLoggingCategory>
 #include <QtCore/QThread>
+#include <QtCore/QFileInfo>
 #include <QtCore/QTimer>
 
 #include "scan_tracking/vision/hik_smart_camera_tcp_server.h"
@@ -66,6 +67,10 @@ void HikCameraCController::start(const scan_tracking::common::VisionConfig& conf
     };
     appendGroup(config.telescopicGroup);
     appendGroup(config.armGroup);
+    if (!config.hikCameraCThird.ipAddress.trimmed().isEmpty() &&
+        !m_configuredCameraIps.contains(config.hikCameraCThird.ipAddress.trimmed())) {
+        m_configuredCameraIps.append(config.hikCameraCThird.ipAddress.trimmed());
+    }
     if (m_configuredCameraIps.isEmpty()) {
         const QString legacyIp = config.hikCameraC.ipAddress.trimmed();
         if (!legacyIp.isEmpty()) {
@@ -180,7 +185,8 @@ void HikCameraCController::initializeFtpMonitors()
         return;
     }
 
-    const auto addBinding = [this](const scan_tracking::common::VisionDeviceGroupConfig& group) {
+    const auto addBinding = [this](const scan_tracking::common::VisionDeviceGroupConfig& group,
+                                   const QString& deviceTag) {
         const QString ip = group.hikCameraC.ipAddress.trimmed();
         const QString dir = group.hikCameraCFtpDirectory.trimmed();
         if (ip.isEmpty() || dir.isEmpty()) {
@@ -195,6 +201,7 @@ void HikCameraCController::initializeFtpMonitors()
         FtpBinding binding;
         binding.cameraIp = ip;
         binding.ftpDirectory = dir;
+        binding.deviceTag = deviceTag;
         binding.monitor = new HikSmartCameraFtpMonitor(this);
 
         connect(binding.monitor, &HikSmartCameraFtpMonitor::monitorStarted,
@@ -221,8 +228,16 @@ void HikCameraCController::initializeFtpMonitors()
         m_ftpBindings.append(binding);
     };
 
-    addBinding(m_config.telescopicGroup);
-    addBinding(m_config.armGroup);
+    addBinding(m_config.telescopicGroup, QStringLiteral("telescopic"));
+    addBinding(m_config.armGroup, QStringLiteral("arm"));
+
+    if (!m_config.hikCameraCThird.ipAddress.trimmed().isEmpty() &&
+        !m_config.hikCameraCThirdFtpDirectory.trimmed().isEmpty()) {
+        scan_tracking::common::VisionDeviceGroupConfig third;
+        third.hikCameraC = m_config.hikCameraCThird;
+        third.hikCameraCFtpDirectory = m_config.hikCameraCThirdFtpDirectory;
+        addBinding(third, QStringLiteral("third"));
+    }
 
     if (m_ftpBindings.isEmpty()) {
         const QString legacyDir = m_config.hikCameraCFtpDirectory.trimmed();
@@ -230,7 +245,7 @@ void HikCameraCController::initializeFtpMonitors()
             scan_tracking::common::VisionDeviceGroupConfig legacyGroup;
             legacyGroup.hikCameraC.ipAddress = m_primaryCameraIp;
             legacyGroup.hikCameraCFtpDirectory = legacyDir;
-            addBinding(legacyGroup);
+            addBinding(legacyGroup, QStringLiteral("legacy"));
         }
     }
 }
@@ -320,6 +335,16 @@ bool HikCameraCController::requestCapture(CaptureType type, const QString& camer
         << QStringLiteral(" 类型：") << getCaptureTypeString(type);
 
     return m_tcpServer->sendStartCaptureToCamera(normalizedIp);
+}
+
+void HikCameraCController::setCaptureContext(const QString& cameraIp, int pathId, int pointIndex,
+                                              const QString& deviceTag)
+{
+    CaptureContext context;
+    context.pathId = pathId;
+    context.pointIndex = pointIndex;
+    context.deviceTag = deviceTag;
+    m_captureContextByIp.insert(cameraIp.trimmed(), context);
 }
 
 void HikCameraCController::enableTestMode(bool enable, int intervalMs)
