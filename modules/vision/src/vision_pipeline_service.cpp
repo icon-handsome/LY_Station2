@@ -1,6 +1,7 @@
 #include "scan_tracking/vision/vision_pipeline_service.h"
 
 #include <array>
+#include <algorithm>
 #include <exception>
 #include <new>
 #include <thread>
@@ -438,9 +439,8 @@ quint64 VisionPipelineService::requestCaptureBundle(
     request.mechEyeCameraKey = deviceGroup.mechEye.cameraKey;
     request.mechEyeTimeoutMs =
         m_config.mechCaptureTimeoutMs > 0 ? m_config.mechCaptureTimeoutMs : 5000;
-    if (useHikCameraC) {
-        request.hikCameraCIp = deviceGroup.hikCameraC.ipAddress;
-    }
+    // 海康 C 仅作后台触发/落盘，不参与本次组合采集完成条件；
+    // 保留 pending.hikCameraCIp 供触发使用，bundle 中不记录参与通道。
     // 仅真实采图时写入 CXP key；旁路时不写入，避免 cxpParticipated() 把空结果判成失败。
     if (useCxp) {
         request.hikCameraAKey = m_config.hikCxpCameraA.cameraKey;
@@ -453,8 +453,11 @@ quint64 VisionPipelineService::requestCaptureBundle(
     pending.active = true;
     pending.useCxp = useCxp;
     pending.useHikCameraC = useHikCameraC;
-    pending.hikCTriggerOnly = useHikCameraC;
+    // 海康 C 的 start 只是触发相机，真实图像通过 FTP imageReceived 返回；
+    // 必须等待该事件，才能由 ScanSegmentCache 将源文件移动到 run 点位目录。
+    pending.hikCTriggerOnly = false;
     pending.hikCameraCIp = useHikCameraC ? deviceGroup.hikCameraC.ipAddress.trimmed() : QString();
+    pending.runCaptureRoot = options.runCaptureRoot.trimmed();
     pending.activeMechService = mechService;
     pending.bundle.request = request;
     // 未参与的通道视为已完成，避免 finishBundleIfReady 死等。
@@ -468,9 +471,8 @@ quint64 VisionPipelineService::requestCaptureBundle(
         pending.bundle.lbPoseResult.message =
             QStringLiteral("hikCxpBypassOk=true：本段不采 CXP，跳过 LB。");
     }
-    if (!useHikCameraC) {
-        pending.hikCDone = true;
-    }
+    // 海康 C 结果由 FTP 监控器独立后台保存，不阻塞组合采集。
+    pending.hikCDone = true;
 
     pending.mechRequestId = mechService->requestCapture(
         request.mechEyeCameraKey,
@@ -551,7 +553,7 @@ void VisionPipelineService::startPendingHikCapture()
 void VisionPipelineService::triggerHikCameraCConcurrent(bool triggerOnly)
 {
     Q_UNUSED(triggerOnly);
-    if (!m_pending.active || !m_pending.useHikCameraC || m_pending.hikCDone) {
+    if (!m_pending.active || !m_pending.useHikCameraC) {
         return;
     }
 
@@ -562,7 +564,8 @@ void VisionPipelineService::triggerHikCameraCConcurrent(bool triggerOnly)
                 ? common::ConfigManager::instance()->activePathId() : 0,
             m_pending.bundle.request.segmentIndex,
             m_pending.hikCameraCIp == m_config.telescopicGroup.hikCameraC.ipAddress.trimmed()
-                ? QStringLiteral("telescopic") : QStringLiteral("arm"));
+                ? QStringLiteral("telescopic") : QStringLiteral("arm"),
+            m_pending.runCaptureRoot);
     }
     const bool sent =
         m_hikCameraCController != nullptr &&
@@ -570,6 +573,9 @@ void VisionPipelineService::triggerHikCameraCConcurrent(bool triggerOnly)
             CaptureType::SurfaceDefect,
             m_pending.hikCameraCIp);
 
+    // start 发送成功只代表相机已被触发，真实图像稍后由 FTP imageReceived 返回。
+    // 保持 hikCDone=false，让流水线继续等待 FTP 文件；只有触发失败才结束本通道。
+    // start 发送结果不影响 PLC 段扫；FTP 图像由 HikCameraCController 后台接收落盘。
     m_pending.hikCDone = true;
     m_pending.bundle.hikCameraCTriggerOk = sent;
     m_pending.bundle.hikCameraCImagePath.clear();
@@ -594,11 +600,32 @@ void VisionPipelineService::triggerHikCameraCConcurrent(bool triggerOnly)
         << QStringLiteral(" start 已发送 requestId=")
         << m_pending.bundle.request.requestId
         << QStringLiteral(" IP=") << m_pending.hikCameraCIp;
+
+    // start 仅表示触发成功；相机未回 FTP 时必须有上限，避免流水线永久卡在等待状态。
+    const quint64 requestId = m_pending.bundle.request.requestId;
+    // FTP 监控器至少需要一次 500ms 扫描周期和 1000ms 文件稳定判定；
+    // 低于该窗口会把正常上传误判为超时。
+    constexpr int kMinHikCameraCImageTimeoutMs = 5000;
+    const int timeoutMs = std::max(
+        kMinHikCameraCImageTimeoutMs,
+        m_config.hikCaptureTimeoutMs > 0 ? m_config.hikCaptureTimeoutMs : 0);
+    QPointer<VisionPipelineService> self(this);
+    QTimer::singleShot(timeoutMs, this, [self, requestId]() {
+        if (self == nullptr || !self->m_pending.active ||
+            self->m_pending.bundle.request.requestId != requestId ||
+            self->m_pending.hikCDone) {
+            return;
+        }
+        qWarning(LOG_VISION_PIPELINE).noquote()
+            << QStringLiteral("[VisionPipeline] 海康 C 图像回传超时，结束当前组合采集 requestId=")
+            << requestId;
+        self->onHikCameraCCaptureTimeout();
+    });
 }
 
 void VisionPipelineService::startPendingHikCameraCCapture()
 {
-    if (!m_pending.active || !m_pending.useHikCameraC || m_pending.hikCDone) {
+    if (!m_pending.active || !m_pending.useHikCameraC) {
         return;
     }
 
@@ -639,6 +666,8 @@ void VisionPipelineService::onHikCameraCCaptureTimeout()
     }
 
     m_pending.hikCDone = true;
+    // start ACK 不是图像采集成功；超时时清除触发成功标记，让该段按不完整采集处理。
+    m_pending.bundle.hikCameraCTriggerOk = false;
     m_pending.bundle.hikCameraCImagePath.clear();
     finishBundleIfReady();
 }

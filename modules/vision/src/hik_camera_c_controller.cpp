@@ -10,6 +10,7 @@
 
 #include "scan_tracking/vision/hik_smart_camera_tcp_server.h"
 #include "scan_tracking/vision/hik_smart_camera_ftp_monitor.h"
+#include "scan_tracking/vision/hik_mono_io.h"
 
 Q_LOGGING_CATEGORY(hikCControllerLog, "vision.hik_camera_c_controller")
 
@@ -334,17 +335,41 @@ bool HikCameraCController::requestCapture(CaptureType type, const QString& camer
         << label << normalizedIp
         << QStringLiteral(" 类型：") << getCaptureTypeString(type);
 
+    const FtpBinding* binding = nullptr;
+    for (const FtpBinding& candidate : m_ftpBindings) {
+        if (candidate.cameraIp == normalizedIp) {
+            binding = &candidate;
+            break;
+        }
+    }
+    qInfo(hikCControllerLog).noquote()
+        << QStringLiteral("[HikCameraC][Capture] 准备发送 start ip=") << normalizedIp
+        << QStringLiteral(" ftpDir=") << (binding != nullptr ? binding->ftpDirectory : QStringLiteral("<未绑定>"))
+        << QStringLiteral(" contextPath/point=")
+        << m_captureContextByIp.value(normalizedIp).pathId << QLatin1Char('/')
+        << m_captureContextByIp.value(normalizedIp).pointIndex;
+
     return m_tcpServer->sendStartCaptureToCamera(normalizedIp);
 }
 
-void HikCameraCController::setCaptureContext(const QString& cameraIp, int pathId, int pointIndex,
-                                              const QString& deviceTag)
+void HikCameraCController::setCaptureContext(
+    const QString& cameraIp,
+    int pathId,
+    int pointIndex,
+    const QString& deviceTag,
+    const QString& runRoot)
 {
     CaptureContext context;
     context.pathId = pathId;
     context.pointIndex = pointIndex;
     context.deviceTag = deviceTag;
+    context.runRoot = runRoot.trimmed();
     m_captureContextByIp.insert(cameraIp.trimmed(), context);
+    qInfo(hikCControllerLog).noquote()
+        << QStringLiteral("[HikCameraC][Context] ip=") << cameraIp.trimmed()
+        << QStringLiteral(" pathId=") << pathId << QStringLiteral(" point=") << pointIndex
+        << QStringLiteral(" device=") << deviceTag
+        << QStringLiteral(" runRoot=") << context.runRoot;
 }
 
 void HikCameraCController::enableTestMode(bool enable, int intervalMs)
@@ -698,7 +723,9 @@ void HikCameraCController::onFtpMonitorStopped()
 
 void HikCameraCController::onFtpNewImageDetected(ImageFileInfo imageInfo)
 {
-    Q_UNUSED(imageInfo);
+    qInfo(hikCControllerLog).noquote()
+        << QStringLiteral("[HikCameraC][FTP] 发现新图片 file=") << imageInfo.filePath
+        << QStringLiteral(" type=") << getCaptureTypeString(imageInfo.captureType);
 }
 
 void HikCameraCController::onFtpImageReady(ImageFileInfo imageInfo)
@@ -708,7 +735,55 @@ void HikCameraCController::onFtpImageReady(ImageFileInfo imageInfo)
         const_cast<HikSmartCameraFtpMonitor*>(senderMonitor));
     const QString cameraIp = binding != nullptr ? binding->cameraIp : m_primaryCameraIp;
 
+    qInfo(hikCControllerLog).noquote()
+        << QStringLiteral("[HikCameraC][FTP] 图片稳定可读 file=") << imageInfo.filePath
+        << QStringLiteral(" size=") << imageInfo.fileSize
+        << QStringLiteral(" cameraIp=") << cameraIp
+        << QStringLiteral(" binding=") << (binding != nullptr ? binding->deviceTag : QStringLiteral("unknown"));
+
     emit imageReceived(imageInfo.captureType, cameraIp, imageInfo.filePath, imageInfo.fileSize);
+    qInfo(hikCControllerLog).noquote()
+        << QStringLiteral("[HikCameraC][FTP] 已发出 imageReceived cameraIp=") << cameraIp;
+
+    // 异步后台归档：与 Mech/CXP 同一 run 点位目录
+    // <runRoot>/path_{id}/{arm|telescopic}/{point}/Path{id}_{Arm|Telescopic}_hikC_{point}.bmp
+    const CaptureContext context = m_captureContextByIp.value(cameraIp.trimmed());
+    if (context.runRoot.isEmpty() || context.pathId <= 0 || context.pointIndex <= 0) {
+        qWarning(hikCControllerLog).noquote()
+            << QStringLiteral("[HikCameraC][FTP] 无有效 run/path/point 上下文，未归档 cameraIp=")
+            << cameraIp
+            << QStringLiteral(" runRoot=") << context.runRoot
+            << QStringLiteral(" pathId=") << context.pathId
+            << QStringLiteral(" point=") << context.pointIndex;
+        return;
+    }
+
+    const QString deviceTag =
+        context.deviceTag.isEmpty() ? QStringLiteral("arm") : context.deviceTag;
+    const QString destPath = buildSegmentHikMonoPath(
+        context.runRoot, context.pathId, deviceTag, context.pointIndex, QStringLiteral("hikC"));
+    if (destPath.isEmpty()) {
+        qWarning(hikCControllerLog).noquote()
+            << QStringLiteral("[HikCameraC][FTP] 点位目录创建失败 runRoot=") << context.runRoot
+            << QStringLiteral(" pathId=") << context.pathId
+            << QStringLiteral(" device=") << deviceTag
+            << QStringLiteral(" point=") << context.pointIndex;
+        return;
+    }
+
+    if (QFile::exists(destPath)) {
+        QFile::remove(destPath);
+    }
+    if (QFile::copy(imageInfo.filePath, destPath)) {
+        qInfo(hikCControllerLog).noquote()
+            << QStringLiteral("[HikCameraC][FTP] 后台归档成功 dest=") << destPath
+            << QStringLiteral(" pathId=") << context.pathId
+            << QStringLiteral(" point=") << context.pointIndex;
+    } else {
+        qWarning(hikCControllerLog).noquote()
+            << QStringLiteral("[HikCameraC][FTP] 后台归档失败 source=") << imageInfo.filePath
+            << QStringLiteral(" dest=") << destPath;
+    }
 }
 
 void HikCameraCController::onFtpError(QString errorMessage)

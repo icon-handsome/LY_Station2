@@ -56,7 +56,13 @@ public:
 
     /* 向已连接的智能相机发送拍照指令（TCP start），类型决定后续 FTP 文件名解析 */
     bool requestCapture(CaptureType type, const QString& cameraIp);
-    void setCaptureContext(const QString& cameraIp, int pathId, int pointIndex, const QString& deviceTag);
+    /// FTP 落盘上下文：归档到 <runRoot>/path_{id}/{arm|telescopic}/{point}/，与 Mech 等同目录。
+    void setCaptureContext(
+        const QString& cameraIp,
+        int pathId,
+        int pointIndex,
+        const QString& deviceTag,
+        const QString& runRoot = QString());
     bool requestCapture(CaptureType type = CaptureType::SurfaceDefect);
 
     /// 最近一次有效 OCR 文本（不含 hello/heartbeat）。
@@ -129,7 +135,12 @@ private:
     quint16 m_tcpListenPort = 0;
     QHash<QString, CaptureType> m_pendingCaptureTypeByIp;
     QHash<QString, int> m_captureCounterByIp;
-    struct CaptureContext { int pathId = 0; int pointIndex = 0; QString deviceTag; };
+    struct CaptureContext {
+        int pathId = 0;
+        int pointIndex = 0;
+        QString deviceTag;
+        QString runRoot;  ///< 与 ScanSegmentCache 共用的 run_* 根目录
+    };
     QHash<QString, CaptureContext> m_captureContextByIp;
 
     QString m_lastOcrText;

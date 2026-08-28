@@ -337,6 +337,17 @@ void StateMachine::resetScanSegmentCache()
     qInfo(LOG_FLOW).noquote() << QStringLiteral("扫描段缓存已清空（含运行实例目录绑定）。");
 }
 
+QString StateMachine::ensureScanRunCaptureRoot(quint32 taskId)
+{
+    QString runRoot;
+    if (!m_scanSegmentCache.ensureRunRoot(taskId, &runRoot) || runRoot.trimmed().isEmpty()) {
+        qWarning(LOG_FLOW).noquote()
+            << QStringLiteral("ensureScanRunCaptureRoot 失败 taskId=") << taskId;
+        return QString();
+    }
+    return runRoot;
+}
+
 void StateMachine::scheduleScanSegmentPersist(
     common::ScanDeviceKind device,
     int segmentIndex,

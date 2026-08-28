@@ -96,6 +96,15 @@ void executeConfiguredScanCapture(TaskHandlerContext& ctx, const char* triggerLa
     options.useMechEye = captureCfg.mechEye3d;
     options.useHikCxp = captureCfg.hikCxp;
     options.useHikSmartC = captureCfg.hikSmartC;
+    if (options.useHikSmartC) {
+        // 提前创建/绑定 run_*，供海康 C FTP 异步归档到与 Mech 相同的点位目录。
+        options.runCaptureRoot = ctx.host.ensureScanRunCaptureRoot(taskId);
+        if (options.runCaptureRoot.isEmpty()) {
+            qWarning(LOG_FLOW).noquote()
+                << QString::fromUtf8(triggerLabel)
+                << QStringLiteral("：无法创建 run 落盘目录，海康 C 图将无法归档到点位目录。");
+        }
+    }
 
     const auto mechCaptureMode = mech_eye::CaptureMode::Capture2DAnd3D;
 

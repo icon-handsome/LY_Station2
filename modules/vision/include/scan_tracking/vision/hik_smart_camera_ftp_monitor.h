@@ -81,6 +81,7 @@ private:
     
     // 文件跟踪
     QSet<QString> m_processedFiles;       // 已处理的文件
+    QMap<QString, QString> m_processedFileSignatures; // 路径对应的大小/修改时间，支持同名覆盖
     QMap<QString, ImageFileInfo> m_pendingFiles;  // 待处理的文件
     
     // 统计

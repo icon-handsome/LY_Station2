@@ -168,6 +168,7 @@ public:
     void clearScanSegmentCacheForPathSwitch();
     void resetSafetyInterlockState() override;
     void executeResultResetTask() override;
+    QString ensureScanRunCaptureRoot(quint32 taskId) override;
     void maybeAdvancePathOnNewCycleStart(int localIndex) override;
 
     void notifyLoadGraspFinished(quint16 resultCode, const PoseSourceResult& pose) override;

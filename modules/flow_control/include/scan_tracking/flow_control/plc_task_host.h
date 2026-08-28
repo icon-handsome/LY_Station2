@@ -92,6 +92,9 @@ public:
     /// 与工位1同信号；本工位无断点续跑时也以此为唯一安全开新件入口。
     virtual void executeResultResetTask() = 0;
 
+    /// 确保本任务的 output/run_* 根目录已创建（与 Mech 落盘共用）；失败返回空。
+    virtual QString ensureScanRunCaptureRoot(quint32 taskId) = 0;
+
     /// 当前路径扫描已齐套且 PLC 再次下发本地段号 1 时：清缓存并切到下一路（不依赖 Inspection/ResultReset）。
     virtual void maybeAdvancePathOnNewCycleStart(int localIndex) = 0;
 

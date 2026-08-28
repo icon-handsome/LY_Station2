@@ -49,6 +49,8 @@ public:
         bool useMechEye = true;    ///< 本轮仍强制需要 Mech 服务；预留按路径关闭
         bool useHikCxp = true;     ///< 是否采 CXP 双目（伸缩杆侧会被忽略）
         bool useHikSmartC = true;  ///< 是否触发海康智能相机 C
+        /// 与 ScanSegmentCache 共用的 run_* 根；海康 C FTP 异步归档到此目录下的点位文件夹。
+        QString runCaptureRoot;
     };
 
     quint64 requestCaptureBundle(
@@ -102,6 +104,7 @@ private:
         quint64 hikARequestId = 0;
         quint64 hikBRequestId = 0;
         QString hikCameraCIp;
+        QString runCaptureRoot;
         scan_tracking::mech_eye::MechEyeService* activeMechService = nullptr;
         scan_tracking::vision::MultiCameraCaptureBundle bundle;
     };

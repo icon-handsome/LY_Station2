@@ -51,6 +51,10 @@ bool HikSmartCameraFtpMonitor::start(const QString& ftpDirectory)
     }
 
     m_ftpDirectory = dir.absolutePath();
+    qInfo(hikFtpMonitorLog).noquote()
+        << QStringLiteral("[FTP] 开始监控目录=") << m_ftpDirectory
+        << QStringLiteral(" checkIntervalMs=") << m_fileCheckIntervalMs
+        << QStringLiteral(" stableMs=") << m_fileStableTimeMs;
     
     // 添加目录到监控
     if (!m_watcher->addPath(m_ftpDirectory)) {
@@ -62,6 +66,7 @@ bool HikSmartCameraFtpMonitor::start(const QString& ftpDirectory)
     m_monitoring = true;
     m_totalFilesDetected = 0;
     m_processedFiles.clear();
+    m_processedFileSignatures.clear();
     m_pendingFiles.clear();
 
     // 启动定时检查
@@ -70,13 +75,18 @@ bool HikSmartCameraFtpMonitor::start(const QString& ftpDirectory)
     // 把启动前已存在的文件全部标记为已处理，只监控后续新增文件
     // 避免历史文件触发大量 imageReady 信号，也防止启动时的信号风暴
     {
-        QDir dir(m_ftpDirectory);
-        const QFileInfoList existingFiles = dir.entryInfoList(
-            QDir::Files | QDir::NoDotAndDotDot, QDir::Time);
-        for (const QFileInfo& fi : existingFiles) {
-            if (isImageFile(fi.fileName())) {
-                m_processedFiles.insert(fi.absoluteFilePath());
+        // FTP 相机按日期/批次创建子目录；必须递归初始化，否则重启后会把全部历史图片重新入队。
+        QDirIterator it(m_ftpDirectory, QDir::Files | QDir::NoDotAndDotDot,
+                        QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            const QFileInfo fi(it.next());
+            if (!isImageFile(fi.fileName())) {
+                continue;
             }
+            m_processedFiles.insert(fi.absoluteFilePath());
+            m_processedFileSignatures.insert(
+                fi.absoluteFilePath(),
+                QStringLiteral("%1:%2").arg(fi.size()).arg(fi.lastModified().toMSecsSinceEpoch()));
         }
         qInfo(hikFtpMonitorLog) << "启动时跳过已有图片文件：" << m_processedFiles.size() << "个";
     }
@@ -112,6 +122,9 @@ void HikSmartCameraFtpMonitor::onDirectoryChanged(const QString& path)
 
 void HikSmartCameraFtpMonitor::onFileCheckTimer()
 {
+    // QFileSystemWatcher 对同名覆盖/仅修改时间的上传不一定发 directoryChanged；
+    // 周期扫描确保固定文件名的新帧也能被发现。
+    scanDirectory();
     checkPendingFiles();
 }
 
@@ -130,7 +143,15 @@ void HikSmartCameraFtpMonitor::scanDirectory()
 
         // 跳过已处理的文件
         if (m_processedFiles.contains(filePath)) {
-            continue;
+            const QString signature = QStringLiteral("%1:%2")
+                                           .arg(fileInfo.size())
+                                           .arg(fileInfo.lastModified().toMSecsSinceEpoch());
+            if (m_processedFileSignatures.value(filePath) == signature) {
+                continue;
+            }
+            // 相机常用固定文件名覆盖上传；大小或修改时间变化表示新一帧。
+            m_processedFiles.remove(filePath);
+            m_pendingFiles.remove(filePath);
         }
 
         // 跳过非图像文件
@@ -170,6 +191,11 @@ void HikSmartCameraFtpMonitor::processNewFile(const QString& filePath)
     m_pendingFiles[filePath] = imageInfo;
     m_totalFilesDetected++;
 
+    qInfo(hikFtpMonitorLog).noquote()
+        << QStringLiteral("[FTP] 新文件入队 file=") << filePath
+        << QStringLiteral(" size=") << fileInfo.size()
+        << QStringLiteral(" type=") << static_cast<int>(captureType);
+
     emit newImageDetected(imageInfo);
 }
 
@@ -208,10 +234,20 @@ void HikSmartCameraFtpMonitor::checkPendingFiles()
                 // 文件传输完成
                 imageInfo.isComplete = true;
                 imageInfo.fileSize = currentSize;
+
+                qInfo(hikFtpMonitorLog).noquote()
+                    << QStringLiteral("[FTP] 文件稳定完成 file=") << filePath
+                    << QStringLiteral(" size=") << currentSize
+                    << QStringLiteral(" elapsedMs=")
+                    << imageInfo.detectedTime.msecsTo(QDateTime::currentDateTime());
                 
                 emit imageReady(imageInfo);
                 completedFiles.append(filePath);
                 m_processedFiles.insert(filePath);
+                m_processedFileSignatures.insert(
+                    filePath,
+                    QStringLiteral("%1:%2").arg(currentSize)
+                        .arg(QFileInfo(filePath).lastModified().toMSecsSinceEpoch()));
             }
         } else {
             // 文件大小变化，重新计时

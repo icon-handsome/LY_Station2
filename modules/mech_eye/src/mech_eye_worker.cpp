@@ -1040,6 +1040,14 @@ void MechEyeWorker::printCameraParametersUnguarded()
     mmind::eye::Range<int> depthRange;
     userSet.getRangeValue("DepthRange", depthRange);
 
+    // 条纹对比度阈值及边缘伪点去除开关
+    int fringeContrastThreshold = 0;
+    const auto fringeContrastStatus =
+        userSet.getIntValue("FringeContrastThreshold", fringeContrastThreshold);
+    bool edgeArtifactRemoval = false;
+    const auto edgeArtifactStatus =
+        userSet.getBoolValue("EdgeArtifactRemoval", edgeArtifactRemoval);
+
     // 点云处理参数
     std::string surfaceSmoothing;
     userSet.getEnumValue("PointCloudSurfaceSmoothing", surfaceSmoothing);
@@ -1063,6 +1071,15 @@ void MechEyeWorker::printCameraParametersUnguarded()
         << "  2D 曝光时间:" << scan2DExposureTime << "ms\n"
         << "  3D 增益:" << scan3DGain << "\n"
         << "  3D 曝光序列数量:" << scan3DExposureList.size() << "\n"
+        << "  条纹对比度阈值:"
+        << (fringeContrastStatus.isOK() ? QString::number(fringeContrastThreshold)
+                                        : QStringLiteral("读取失败"))
+        << "\n"
+        << "  边缘伪点去除:"
+        << (edgeArtifactStatus.isOK()
+                ? (edgeArtifactRemoval ? QStringLiteral("开启") : QStringLiteral("关闭"))
+                : QStringLiteral("读取失败"))
+        << "\n"
         << "  深度范围:" << depthRange.min << " - " << depthRange.max << " mm\n"
         << "  表面平滑:" << QString::fromStdString(surfaceSmoothing) << "\n"
         << "  噪声去除:" << QString::fromStdString(noiseRemoval) << "\n"
