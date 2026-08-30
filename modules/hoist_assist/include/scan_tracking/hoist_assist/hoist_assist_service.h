@@ -25,6 +25,9 @@ public:
     // strength, timeout, or other transport errors.
     void updateTfDistance(TfSensorId sensor, int distanceCm, bool valid);
 
+    /// 按固定周期重新判断当前缓存的 TF、碰撞和海康结果。
+    void evaluate();
+
     // The first implementation intentionally treats every non-None alert as
     // unsafe. Detailed stop/alarm policy will be added with PLC integration.
     void updateCollisionResult(

@@ -886,6 +886,45 @@ void ConsoleRuntime::initModules()
         << QStringLiteral(" 机械臂=")
         << visionConfig.armGroup.hikCameraC.ipAddress;
 
+    if (hoistAssistService_ && !visionConfig.hikCameraCThird.ipAddress.trimmed().isEmpty()) {
+        const QString thirdCameraIp = visionConfig.hikCameraCThird.ipAddress.trimmed();
+        QObject::connect(
+            hikCameraCController_.get(),
+            &scan_tracking::vision::HikCameraCController::inspectionResultReceived,
+            this,
+            [this, thirdCameraIp](
+                const scan_tracking::vision::HikCameraCInspectionResult& result) {
+                if (result.cameraIp == thirdCameraIp && hoistAssistService_) {
+                    hoistAssistService_->updateHikCameraResult(result.passed, true);
+                }
+            },
+            Qt::QueuedConnection);
+
+        hoistAssistCycleTimer_ = std::make_unique<QTimer>(this);
+        hoistAssistCycleTimer_->setInterval(500);
+        QObject::connect(
+            hoistAssistCycleTimer_.get(),
+            &QTimer::timeout,
+            this,
+            [this, thirdCameraIp]() {
+                if (!hoistAssistService_ || !hikCameraCController_) {
+                    return;
+                }
+                // 焊缝 ROI 相机与 TF 均按 500ms 节拍采样/判断，避免高频业务判定。
+                hoistAssistService_->updateHikCameraResult(false, false);
+                if (hikCameraCController_->isCameraConnected(thirdCameraIp)) {
+                    hikCameraCController_->requestCapture(
+                        scan_tracking::vision::CaptureType::WeldDefect,
+                        thirdCameraIp);
+                }
+                hoistAssistService_->evaluate();
+            });
+        hoistAssistCycleTimer_->start();
+        qInfo(appLog) << QStringLiteral(
+            "[HoistAssist] third Hik C periodic capture/evaluation started: 500ms, ip=")
+                      << thirdCameraIp;
+    }
+
 
     // 统一视觉编排层负责把“1 份点云 + 2 份矩阵”收口为一个算法输入包。
     visionPipelineService_ = std::make_unique<scan_tracking::vision::VisionPipelineService>(
@@ -992,6 +1031,10 @@ void ConsoleRuntime::printShutdownStatus()
 
     // 关闭顺序按依赖逆序执行，避免退出过程中还有异步请求落到已析构对象上。
     // HmiTcpServer 必须最先停止：它持有所有其他服务的裸指针。
+    if (hoistAssistCycleTimer_) {
+        hoistAssistCycleTimer_->stop();
+        hoistAssistCycleTimer_.reset();
+    }
     if (hmiTcpServer_) {
         hmiTcpServer_->stop();
         hmiTcpServer_.reset();

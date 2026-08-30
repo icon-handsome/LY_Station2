@@ -34,6 +34,11 @@ void HoistAssistService::start()
     recompute();
 }
 
+void HoistAssistService::evaluate()
+{
+    recompute();
+}
+
 void HoistAssistService::stop()
 {
     if (!m_running && m_state == HoistAssistState::Stopped) {
@@ -64,7 +69,6 @@ void HoistAssistService::updateTfDistance(TfSensorId sensor, int distanceCm, boo
     } else {
         m_result.tf2 = sample;
     }
-    recompute();
 }
 
 void HoistAssistService::updateCollisionResult(
@@ -74,14 +78,12 @@ void HoistAssistService::updateCollisionResult(
     m_result.collisionResultReceived = valid;
     m_result.collisionLevel = level;
     m_result.collisionSafe = valid && level == collision_monitor::CollisionAlertLevel::None;
-    recompute();
 }
 
 void HoistAssistService::updateHikCameraResult(bool ok, bool valid)
 {
     m_result.hikResultReceived = valid;
     m_result.hikPassed = valid && ok;
-    recompute();
 }
 
 void HoistAssistService::recompute()

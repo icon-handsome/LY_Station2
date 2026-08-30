@@ -79,6 +79,8 @@ signals:
     void imageReceived(CaptureType type, QString cameraIp, QString filePath, qint64 fileSize);
     /// 智能相机 TCP 回包解析出的编号/OCR 文本（已去掉 X/PX 前缀与末尾分号）。
     void ocrTextReceived(QString cameraIp, QString text);
+    /// 智能相机 C 焊缝/ROI 模型结果，例如 fengxi;1; 或 null;0;。
+    void inspectionResultReceived(scan_tracking::vision::HikCameraCInspectionResult result);
 
 private slots:
     void onTcpServerStarted(QString listenIp, quint16 port);
@@ -117,6 +119,7 @@ private:
     bool isConfiguredCameraIp(const QString& cameraIp) const;
     QString groupLabelForCamera(const QString& cameraIp) const;
     QString formatConfiguredCameraList() const;
+    bool parseInspectionResult(const QString& message, QString* resultName, int* resultCode) const;
     void reportConfiguredCameraConnections() const;
     void scheduleStartupConnectionReport();
     void updateReadyStateFromConnections();

@@ -26,6 +26,8 @@ void HikCameraCController::registerMetaTypes()
     qRegisterMetaType<scan_tracking::vision::HikCameraCState>("scan_tracking::vision::HikCameraCState");
     qRegisterMetaType<scan_tracking::vision::CaptureType>("scan_tracking::vision::CaptureType");
     qRegisterMetaType<scan_tracking::vision::ImageFileInfo>("scan_tracking::vision::ImageFileInfo");
+    qRegisterMetaType<scan_tracking::vision::HikCameraCInspectionResult>(
+        "scan_tracking::vision::HikCameraCInspectionResult");
     registered = true;
 }
 
@@ -614,6 +616,27 @@ void HikCameraCController::onTcpHeartbeatReceived(QString cameraIp)
 
 void HikCameraCController::onTcpCommandReceived(QString cameraIp, QString command)
 {
+    QString resultName;
+    int resultCode = 0;
+    if (parseInspectionResult(command, &resultName, &resultCode)) {
+        HikCameraCInspectionResult result;
+        result.cameraIp = cameraIp.trimmed();
+        result.resultName = resultName;
+        result.resultCode = resultCode;
+        result.passed = resultCode != 0;
+        result.rawMessage = command.trimmed();
+        result.timestampMs = QDateTime::currentMSecsSinceEpoch();
+
+        qInfo(hikCControllerLog).noquote()
+            << QStringLiteral("[HikCameraC][Inspection] ip=") << result.cameraIp
+            << QStringLiteral(" name=") << result.resultName
+            << QStringLiteral(" code=") << result.resultCode
+            << QStringLiteral(" passed=") << result.passed
+            << QStringLiteral(" raw=") << result.rawMessage;
+        emit inspectionResultReceived(result);
+        return;
+    }
+
     QString ocrText = command.trimmed();
     if (ocrText.endsWith(QLatin1Char(';'))) {
         ocrText.chop(1);
@@ -664,6 +687,41 @@ void HikCameraCController::onTcpCommandReceived(QString cameraIp, QString comman
         qDebug(hikCControllerLog).noquote()
             << QStringLiteral("[HikCameraC][TCP] %1: %2").arg(cameraIp, ocrText);
     }
+}
+
+bool HikCameraCController::parseInspectionResult(
+    const QString& message,
+    QString* resultName,
+    int* resultCode) const
+{
+    if (resultName == nullptr || resultCode == nullptr) {
+        return false;
+    }
+
+    QString normalized = message.trimmed();
+    if (normalized.endsWith(QLatin1Char(';'))) {
+        normalized.chop(1);
+    }
+    const QStringList fields = normalized.split(QLatin1Char(';'), Qt::KeepEmptyParts);
+    if (fields.size() != 2 || fields[0].trimmed().isEmpty()) {
+        return false;
+    }
+
+    bool ok = false;
+    const int code = fields[1].trimmed().toInt(&ok);
+    if (!ok) {
+        return false;
+    }
+
+    const QString name = fields[0].trimmed();
+    if (name.compare(QStringLiteral("hello"), Qt::CaseInsensitive) == 0 ||
+        name.compare(QStringLiteral("heartbeat"), Qt::CaseInsensitive) == 0) {
+        return false;
+    }
+
+    *resultName = name;
+    *resultCode = code;
+    return true;
 }
 
 void HikCameraCController::onTcpImageDataReceived(QString cameraIp, QByteArray imageData)

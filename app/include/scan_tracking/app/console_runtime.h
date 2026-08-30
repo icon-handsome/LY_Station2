@@ -3,6 +3,7 @@
 // ConsoleRuntime 是控制台版扫描跟踪应用的生命周期管理器。
 
 #include <QtCore/QCoreApplication>
+#include <QtCore/QTimer>
 
 #include <atomic>
 #include <memory>
@@ -63,6 +64,7 @@ private:
     std::unique_ptr<scan_tracking::livox_mid360::LivoxMid360Service> livoxMid360Service_;
     std::unique_ptr<scan_tracking::collision_monitor::CollisionMonitorPipeline> collisionMonitorPipeline_;
     std::unique_ptr<scan_tracking::hoist_assist::HoistAssistService> hoistAssistService_;
+    std::unique_ptr<QTimer> hoistAssistCycleTimer_;
     /// 最多两路 TF（TF1/TF2），各占独立 COM。
     std::vector<std::unique_ptr<scan_tracking::tfmini_plus::TfminiPlusService>> tfminiPlusServices_;
     std::unique_ptr<scan_tracking::vision::HikCxpCameraService> hikCxpCameraAService_;

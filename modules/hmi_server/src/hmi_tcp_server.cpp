@@ -253,6 +253,20 @@ void HmiTcpServer::setHikCameraServices(vision::HikCxpCameraService* hikA, visio
 
 void HmiTcpServer::setHikCameraCController(vision::HikCameraCController* controller) {
     m_hikCameraCController = controller;
+    if (m_hikCameraCController != nullptr) {
+        connect(
+            m_hikCameraCController,
+            &vision::HikCameraCController::inspectionResultReceived,
+            this,
+            [this](const vision::HikCameraCInspectionResult& result) {
+                qInfo(LOG_HMI_SERVER).noquote()
+                    << QStringLiteral("[HikCameraC][焊缝ROI] 结果已提取：")
+                    << result.cameraIp << result.resultName << result.resultCode
+                    << (result.passed ? QStringLiteral("PASS") : QStringLiteral("FAIL"));
+                // TODO: 将焊缝 ROI 结果封装后通过 Qt 显控协议返回。
+            },
+            Qt::QueuedConnection);
+    }
 }
 
 void HmiTcpServer::onNewConnection()

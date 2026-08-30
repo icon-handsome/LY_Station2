@@ -122,6 +122,16 @@ enum class CaptureType {
     NumberRecognition = 2,
 };
 
+/// 海康智能相机 C 焊缝/ROI 模型通过 TCP 返回的结构化结果。
+struct HikCameraCInspectionResult {
+    QString cameraIp;
+    QString resultName;
+    int resultCode = 0;
+    bool passed = false;
+    QString rawMessage;
+    qint64 timestampMs = 0;
+};
+
 /// LB（机械臂扫描段）位姿检测结果，由 runLbPoseDetection 填充
 struct LbPoseResult {
     bool invoked = false;       ///< 是否已调用 LB 算法（未调用时 success 无意义）
@@ -257,3 +267,4 @@ Q_DECLARE_METATYPE(scan_tracking::vision::HikPoseCaptureResult)
 Q_DECLARE_METATYPE(scan_tracking::vision::MultiCameraCaptureRequest)
 Q_DECLARE_METATYPE(scan_tracking::vision::MultiCameraCaptureBundle)
 Q_DECLARE_METATYPE(scan_tracking::vision::CaptureType)
+Q_DECLARE_METATYPE(scan_tracking::vision::HikCameraCInspectionResult)
