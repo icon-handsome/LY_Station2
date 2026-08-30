@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QtCore/QByteArray>
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QObject>
 #include <QtCore/QString>
 
@@ -46,6 +47,8 @@ private:
     QByteArray m_buffer;
     bool m_logFrames = false;
     QString m_deviceLabel;
+    QString m_portName;
+    QElapsedTimer m_logTimer;
 };
 
 }  // namespace tfmini_plus

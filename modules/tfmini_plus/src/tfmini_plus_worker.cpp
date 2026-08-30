@@ -28,6 +28,7 @@ bool hasValidChecksum(const QByteArray& frame)
 constexpr int kFrameSize = 9;
 constexpr char kFrameHeader = '\x59';
 constexpr int kMaxRxBufferBytes = 512;
+constexpr qint64 kFrameLogIntervalMs = 500;
 constexpr int kStrengthUnreliableThreshold = 100;
 constexpr int kStrengthOverexposed = 65535;
 
@@ -88,8 +89,10 @@ void TfminiPlusWorker::startWorker(const TfminiPlusOpenConfig& config)
     m_buffer.clear();
     m_logFrames = config.logFrames;
     m_deviceLabel = config.deviceLabel.trimmed();
+    m_logTimer.restart();
 
     const QString portName = config.portName.trimmed();
+    m_portName = portName;
     if (portName.isEmpty()) {
         const QString message = QStringLiteral("Serial port is empty; set tfminiPlusPort / tfminiPlusPort2 in [TfminiPlus]");
         emit logMessage(QStringLiteral("%1 %2").arg(logPrefix(), message));
@@ -205,14 +208,15 @@ void TfminiPlusWorker::parseBuffer()
             continue;
         }
 
-        if (m_logFrames) {
+        if (m_logFrames && m_logTimer.elapsed() >= kFrameLogIntervalMs) {
             qInfo(LOG_TFMINI_PLUS_FRAME).noquote()
-                << QStringLiteral("%1 dist=%2cm strength=%3 reliable=%4")
+                << QStringLiteral("%1 port=%2 dist=%3cm reliable=%4")
                        .arg(logPrefix())
+                       .arg(m_portName)
                        .arg(frame.distanceCm)
-                       .arg(frame.strength)
                        .arg(frame.isReliable ? QStringLiteral("yes")
                                              : QStringLiteral("no"));
+            m_logTimer.restart();
         }
         emit distanceUpdated(frame.distanceCm, frame.strength);
         m_buffer.remove(0, kFrameSize);

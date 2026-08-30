@@ -6,15 +6,17 @@ namespace {
 
 bool tf1Passes(const TfDistanceSample& sample)
 {
-    // 1.4 m <= distance <= 1.7 m, represented in centimetres.
-    return sample.valid && sample.distanceCm >= 140 && sample.distanceCm <= 170;
+    // TF1 (现场 COM5): 必须看到 2.35 m 以外的空间。
+    return sample.valid && sample.distanceCm > 235;
 }
 
 bool tf2Passes(const TfDistanceSample& sample)
 {
-    // The second sensor must see farther than 2.5 m.
-    return sample.valid && sample.distanceCm > 250;
+    // TF2 (现场 COM6): 对射筒体距离必须在 1.70 m 到 1.90 m 之间。
+    return sample.valid && sample.distanceCm >= 170 && sample.distanceCm <= 190;
 }
+
+constexpr qint64 kTfSampleTimeoutMs = 1500;
 
 }  // namespace
 
@@ -28,6 +30,7 @@ void HoistAssistService::start()
     if (m_running) {
         return;
     }
+    m_clock.start();
     resetInputs();
     m_running = true;
     publishState(HoistAssistState::Running, QStringLiteral("吊装辅助已启动，等待三类传感器结果"));
@@ -51,6 +54,8 @@ void HoistAssistService::stop()
 void HoistAssistService::resetInputs()
 {
     m_result = HoistAssistResult{};
+    m_tf1LastUpdateMs = -1;
+    m_tf2LastUpdateMs = -1;
     if (m_running) {
         publishState(HoistAssistState::Running, QStringLiteral("吊装辅助输入已复位，等待结果"));
         emit resultChanged(m_result);
@@ -66,8 +71,10 @@ void HoistAssistService::updateTfDistance(TfSensorId sensor, int distanceCm, boo
     sample.valid = valid;
     if (sensor == TfSensorId::Sensor1) {
         m_result.tf1 = sample;
+        m_tf1LastUpdateMs = m_clock.isValid() ? m_clock.elapsed() : -1;
     } else {
         m_result.tf2 = sample;
+        m_tf2LastUpdateMs = m_clock.isValid() ? m_clock.elapsed() : -1;
     }
 }
 
@@ -88,6 +95,18 @@ void HoistAssistService::updateHikCameraResult(bool ok, bool valid)
 
 void HoistAssistService::recompute()
 {
+    // A disconnected sensor must not remain passed forever on its last frame.
+    const qint64 nowMs = m_clock.isValid() ? m_clock.elapsed() : -1;
+    if (nowMs >= 0) {
+        if (m_result.tf1.valid
+            && (m_tf1LastUpdateMs < 0 || nowMs - m_tf1LastUpdateMs > kTfSampleTimeoutMs)) {
+            m_result.tf1.valid = false;
+        }
+        if (m_result.tf2.valid
+            && (m_tf2LastUpdateMs < 0 || nowMs - m_tf2LastUpdateMs > kTfSampleTimeoutMs)) {
+            m_result.tf2.valid = false;
+        }
+    }
     m_result.tfPassed = tf1Passes(m_result.tf1) && tf2Passes(m_result.tf2);
     m_result.allChecksPassed = m_result.tfPassed && m_result.collisionSafe && m_result.hikPassed;
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QObject>
 
 #include "scan_tracking/collision_monitor/collision_monitor_types.h"
@@ -49,6 +50,9 @@ private:
     bool m_running = false;
     HoistAssistState m_state = HoistAssistState::Idle;
     HoistAssistResult m_result;
+    QElapsedTimer m_clock;
+    qint64 m_tf1LastUpdateMs = -1;
+    qint64 m_tf2LastUpdateMs = -1;
 };
 
 }  // namespace scan_tracking::hoist_assist
