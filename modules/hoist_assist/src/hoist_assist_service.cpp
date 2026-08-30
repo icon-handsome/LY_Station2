@@ -6,16 +6,17 @@ namespace {
 
 bool tf1Passes(const TfDistanceSample& sample)
 {
-    // TF1 (现场 COM5): 必须看到 2.35 m 以外的空间。
+    // TF1（现场 COM5）：必须看到 2.35 m 以外的空间。
     return sample.valid && sample.distanceCm > 235;
 }
 
 bool tf2Passes(const TfDistanceSample& sample)
 {
-    // TF2 (现场 COM6): 对射筒体距离必须在 1.70 m 到 1.90 m 之间。
+    // TF2（现场 COM6）：对射筒体距离必须在 1.70 m 到 1.90 m 之间。
     return sample.valid && sample.distanceCm >= 170 && sample.distanceCm <= 190;
 }
 
+// TF 采样超时阈值：超时后将该路 valid 置为 false，避免断线仍沿用旧帧通过检查
 constexpr qint64 kTfSampleTimeoutMs = 1500;
 
 }  // namespace
@@ -95,7 +96,7 @@ void HoistAssistService::updateHikCameraResult(bool ok, bool valid)
 
 void HoistAssistService::recompute()
 {
-    // A disconnected sensor must not remain passed forever on its last frame.
+    // 传感器断线后不得继续用上一帧数据保持通过状态
     const qint64 nowMs = m_clock.isValid() ? m_clock.elapsed() : -1;
     if (nowMs >= 0) {
         if (m_result.tf1.valid
@@ -115,6 +116,7 @@ void HoistAssistService::recompute()
         return;
     }
 
+    // 判定优先级：碰撞未通过 → 海康未通过 → 全部通过 → 仍在等待
     if (m_result.collisionResultReceived && !m_result.collisionSafe) {
         m_result.message = QStringLiteral("Mid360 碰撞检测未通过");
         publishState(HoistAssistState::Unsafe, m_result.message);
@@ -135,8 +137,10 @@ void HoistAssistService::recompute()
 void HoistAssistService::publishState(HoistAssistState state, const QString& message)
 {
     const bool changed = m_state != state;
+    const bool messageChanged = m_lastStateMessage != message;
     m_state = state;
-    if (changed || !message.isEmpty()) {
+    if (changed || messageChanged) {
+        m_lastStateMessage = message;
         emit stateChanged(m_state, message);
     }
 }
