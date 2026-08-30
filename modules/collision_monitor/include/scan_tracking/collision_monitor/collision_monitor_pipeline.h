@@ -36,6 +36,10 @@ public slots:
     // 输入为交错排列的 x、y、z 坐标（单位：米）；首帧设背景，后续帧执行检测
     void onPointCloudFrame(QVector<float> xyz);
 
+signals:
+    void collisionResultReady(
+        scan_tracking::collision_monitor::CollisionDetectResult result);
+
 private:
     // 将告警等级枚举转为日志用字符串
     static QString alertLevelName(CollisionAlertLevel level);

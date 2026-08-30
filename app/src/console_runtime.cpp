@@ -2,6 +2,7 @@
 #include "scan_tracking/livox_mid360/livox_mid360_service.h"
 #include "scan_tracking/collision_monitor/collision_monitor_pipeline.h"
 #include "scan_tracking/tfmini_plus/tfmini_plus_service.h"
+#include "scan_tracking/hoist_assist/hoist_assist_service.h"
 #include "scan_tracking/app/console_runtime.h"
 
 #ifdef _WIN32
@@ -42,6 +43,7 @@
 #include "scan_tracking/vision/hik_camera_c_controller.h"
 #include "scan_tracking/vision/vision_types.h"
 #include "scan_tracking/hmi_server/hmi_tcp_server.h"
+#include "scan_tracking/hoist_assist/hoist_assist_types.h"
 
 Q_LOGGING_CATEGORY(appLog, "app")
 
@@ -247,6 +249,10 @@ void ConsoleRuntime::runDeferredStartupTasks()
             : service->deviceLabel().trimmed();
         qInfo(appLog).noquote()
             << QStringLiteral("[%1] service started.").arg(label);
+    }
+    if (hoistAssistService_) {
+        hoistAssistService_->start();
+        qInfo(appLog) << QStringLiteral("[HoistAssist] service started.");
     }
 
     // 给后台异步 Open 一点时间，再串行预热 A/B，避免 path3 首点才第一次连 CXP。
@@ -751,6 +757,51 @@ void ConsoleRuntime::initModules()
         }
     }
 
+    const bool hoistAssistEnabled =
+        configManager == nullptr || configManager->stationProfile().enableHoistAssist;
+    if (hoistAssistEnabled) {
+        hoistAssistService_ =
+            std::make_unique<scan_tracking::hoist_assist::HoistAssistService>();
+    } else {
+        qInfo(appLog) << QStringLiteral("[HoistAssist] disabled by station profile.");
+    }
+    if (hoistAssistService_) {
+    QObject::connect(
+        hoistAssistService_.get(),
+        &scan_tracking::hoist_assist::HoistAssistService::stateChanged,
+        this,
+        [](scan_tracking::hoist_assist::HoistAssistState state, const QString& message) {
+            qInfo(appLog).noquote()
+                << QStringLiteral("[HoistAssist] state=") << static_cast<int>(state) << message;
+        });
+    for (int index = 0; hoistAssistService_ && index < static_cast<int>(tfminiPlusServices_.size()) && index < 2; ++index) {
+        QObject::connect(
+            tfminiPlusServices_[index].get(),
+            &scan_tracking::tfmini_plus::TfminiPlusService::distanceUpdated,
+            this,
+            [this, index](int distanceCm, int strength) {
+                if (hoistAssistService_) {
+                    hoistAssistService_->updateTfDistance(
+                        index == 0 ? scan_tracking::hoist_assist::TfSensorId::Sensor1
+                                   : scan_tracking::hoist_assist::TfSensorId::Sensor2,
+                        distanceCm,
+                        strength >= 100 && strength != 65535);
+                }
+            });
+    }
+    if (hoistAssistService_ && collisionMonitorPipeline_) {
+        QObject::connect(
+            collisionMonitorPipeline_.get(),
+            &scan_tracking::collision_monitor::CollisionMonitorPipeline::collisionResultReady,
+            this,
+            [this](scan_tracking::collision_monitor::CollisionDetectResult result) {
+                if (hoistAssistService_) {
+                    hoistAssistService_->updateCollisionResult(result.confirmedLevel, result.valid);
+                }
+            });
+    }
+    }
+
     const auto visionConfig = configManager != nullptr
         ? configManager->visionConfig()
         : scan_tracking::common::VisionConfig{};
@@ -981,6 +1032,10 @@ void ConsoleRuntime::printShutdownStatus()
     if (collisionMonitorPipeline_) {
         collisionMonitorPipeline_->stop();
         collisionMonitorPipeline_.reset();
+    }
+    if (hoistAssistService_) {
+        hoistAssistService_->stop();
+        hoistAssistService_.reset();
     }
     if (livoxMid360Service_) {
         livoxMid360Service_->stop();

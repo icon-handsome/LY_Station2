@@ -15,6 +15,7 @@ target_include_directories(scan_tracking
         ${CMAKE_SOURCE_DIR}/modules/livox_mid360/include
         ${CMAKE_SOURCE_DIR}/modules/collision_monitor/include
         ${CMAKE_SOURCE_DIR}/modules/tfmini_plus/include
+        ${CMAKE_SOURCE_DIR}/modules/hoist_assist/include
         ${CMAKE_SOURCE_DIR}/modules/vision/include
         ${CMAKE_SOURCE_DIR}/modules/modbus/include
         ${CMAKE_SOURCE_DIR}/modules/flow_control/include
@@ -32,6 +33,7 @@ target_link_libraries(scan_tracking
         scan_tracking_livox_mid360
         scan_tracking_collision_monitor
         scan_tracking_tfmini_plus
+        scan_tracking_hoist_assist
         scan_tracking_vision
         scan_tracking_thickness_measure_v2
         scan_tracking_inner_surface_measure

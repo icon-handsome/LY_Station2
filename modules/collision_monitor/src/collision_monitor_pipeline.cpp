@@ -120,6 +120,8 @@ void CollisionMonitorPipeline::onPointCloudFrame(QVector<float> xyz)
         return;
     }
 
+    emit collisionResultReady(result);
+
     const QString line = QStringLiteral(
                              "[CollisionMonitor] confirmed=%1 instant=%2 min_dist_m=%3 "
                              "moving_pts=%4 nearest=%5")

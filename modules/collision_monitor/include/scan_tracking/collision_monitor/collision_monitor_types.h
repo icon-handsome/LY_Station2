@@ -4,6 +4,7 @@
 
 #include <QtCore/QString>
 #include <QtCore/QVector>
+#include <QtCore/QMetaType>
 
 namespace scan_tracking::collision_monitor {
 
@@ -48,3 +49,5 @@ struct CollisionMonitorError {
 };
 
 }  // namespace scan_tracking::collision_monitor
+
+Q_DECLARE_METATYPE(scan_tracking::collision_monitor::CollisionDetectResult)
