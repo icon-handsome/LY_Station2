@@ -129,7 +129,8 @@ void livoxPointCloudCallback(
 {
     std::lock_guard<std::mutex> lock(g_livoxCallbackMutex);
     auto* worker = static_cast<LivoxMid360Worker*>(client_data);
-    if (worker == nullptr || data == nullptr || g_activeWorker != worker) {
+    if (worker == nullptr || data == nullptr || g_activeWorker != worker ||
+        !worker->pointCloudStreamActive()) {
         return;
     }
     if (handle != worker->selectedHandleForPointCloud()) {
@@ -504,16 +505,11 @@ void LivoxMid360Worker::startPointCloudStream(quint32 handle)
 
 void LivoxMid360Worker::stopPointCloudStream()
 {
-    m_pointCloudStreamActive = false;
-    m_selectedHandle = 0;
+    m_pointCloudStreamActive.store(false, std::memory_order_release);
+    m_selectedHandle.store(0, std::memory_order_release);
 
     if (m_pointCloudFlushTimer != nullptr) {
         m_pointCloudFlushTimer->stop();
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(m_pointCloudMutex);
-        m_pointCloudBuffer.clear();
     }
 
     {
@@ -521,6 +517,11 @@ void LivoxMid360Worker::stopPointCloudStream()
         if (g_activeWorker == this) {
             SetLivoxLidarPointCloudCallBack(nullptr, nullptr);
         }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(m_pointCloudMutex);
+        m_pointCloudBuffer.clear();
     }
 }
 

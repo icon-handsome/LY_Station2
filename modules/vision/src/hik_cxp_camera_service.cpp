@@ -336,10 +336,6 @@ void HikCxpCameraService::stop()
     m_started = false;
     m_acceptAsyncResults->store(false, std::memory_order_release);
 
-    if (m_impl != nullptr && m_impl->handle != nullptr) {
-        MV_CC_StopGrabbing(m_impl->handle);
-    }
-
     joinWorkerThreads();
     m_connectInFlight.store(false, std::memory_order_release);
     m_captureInFlight.store(false, std::memory_order_release);
@@ -393,6 +389,9 @@ bool HikCxpCameraService::captureMonoFrame(
     QString* errorMessage,
     HikMonoFrame* outFrame)
 {
+    // Serialize the full SDK operation with connect/close. stop() joins
+    // workers before destroying the handle.
+    std::lock_guard<std::mutex> lifecycleLock(m_deviceLifecycleMutex);
     void* handle = nullptr;
     {
         QMutexLocker locker(&m_impl->mutex);
@@ -460,6 +459,7 @@ bool HikCxpCameraService::captureMonoFrame(
     if (!m_started) {
         if (getBufferResult == MV_OK && frameOut.pBufAddr != nullptr) {
             MV_CC_FreeImageBuffer(handle, &frameOut);
+            frameOut.pBufAddr = nullptr;
         }
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("CXP 相机服务正在停止，采图被中断");
@@ -489,6 +489,7 @@ bool HikCxpCameraService::captureMonoFrame(
             frame.pixelFormat = QStringLiteral("Mono8");
 
             MV_CC_FreeImageBuffer(handle, &frameOut);
+            frameOut.pBufAddr = nullptr;
 
             if (frame.isValid()) {
                 if (outFrame != nullptr) {
@@ -509,7 +510,9 @@ bool HikCxpCameraService::captureMonoFrame(
                 return true;
             }
         }
-        MV_CC_FreeImageBuffer(handle, &frameOut);
+        if (frameOut.pBufAddr != nullptr) {
+            MV_CC_FreeImageBuffer(handle, &frameOut);
+        }
     }
 
     thread_local std::vector<unsigned char> fallbackBuffer;

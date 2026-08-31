@@ -145,14 +145,7 @@ void HikCameraService::stop()
     m_started = false;
     m_acceptAsyncResults->store(false, std::memory_order_release);
 
-    // 先停采集以打断 GetImageBuffer/GetOneFrameTimeout，再 join（勿在主线程 sleep 等 Queued 回调）。
-    if (m_impl != nullptr && m_impl->handle != nullptr) {
-        const int stopResult = MV_CC_StopGrabbing(m_impl->handle);
-        if (stopResult != MV_OK) {
-            qWarning() << QStringLiteral("StopGrabbing 失败，错误码=0x") << QString::number(stopResult, 16);
-        }
-    }
-
+    // Join capture/connect workers before closing the device handle.
     joinWorkerThreads();
     m_connectInFlight.store(false, std::memory_order_release);
     m_captureInFlight.store(false, std::memory_order_release);
@@ -202,6 +195,9 @@ QString HikCameraService::resolveCameraKey(const QString& preferredCameraKey) co
 
 bool HikCameraService::captureMonoFrame(int timeoutMs, const QString& cameraKey, QString* errorMessage, HikMonoFrame* outFrame)
 {
+    // Serialize the full SDK operation with connect/close. stop() joins
+    // workers before destroying the handle.
+    std::lock_guard<std::mutex> lifecycleLock(m_deviceLifecycleMutex);
     // 先获取 handle 的副本，避免在长时间等待期间持有锁
     void* handle = nullptr;
     {
@@ -259,8 +255,6 @@ bool HikCameraService::captureMonoFrame(int timeoutMs, const QString& cameraKey,
         << QDateTime::currentMSecsSinceEpoch();
 
     // 尝试使用 GetImageBuffer（推荐用于连续采集）
-    // 注意：这里不持有锁，所以 handle 可能在等待期间被销毁
-    // 但 StopGrabbing 应该会中断这个调用
     MV_FRAME_OUT pFrameInfo = {0};
     int getBufferResult = MV_CC_GetImageBuffer(handle, &pFrameInfo, actualWaitMs);
     
@@ -302,6 +296,7 @@ bool HikCameraService::captureMonoFrame(int timeoutMs, const QString& cameraKey,
             
             // 释放图像缓冲区
             MV_CC_FreeImageBuffer(handle, &pFrameInfo);
+            pFrameInfo.pBufAddr = nullptr;
             
             if (frame.isValid()) {
                 // 更新状态时需要加锁
@@ -321,7 +316,9 @@ bool HikCameraService::captureMonoFrame(int timeoutMs, const QString& cameraKey,
             }
         }
         
-        MV_CC_FreeImageBuffer(handle, &pFrameInfo);
+        if (pFrameInfo.pBufAddr != nullptr) {
+            MV_CC_FreeImageBuffer(handle, &pFrameInfo);
+        }
     }
     
     qWarning() << QStringLiteral("[采图] 取图缓冲(GetImageBuffer)失败，尝试 GetOneFrameTimeout，错误码=0x") << QString::number(getBufferResult, 16);
@@ -764,6 +761,7 @@ bool HikCameraService::openMatchedDevice(const QString& preferredCameraKey, QStr
 
 HikCameraParams HikCameraService::readParams(QString* errorMessage)
 {
+    std::lock_guard<std::mutex> lifecycleLock(m_deviceLifecycleMutex);
     HikCameraParams p;
 
     void* handle = nullptr;
@@ -890,6 +888,7 @@ HikCameraParams HikCameraService::readParams(QString* errorMessage)
 
 bool HikCameraService::writeParams(const HikCameraParams& params, QString* errorMessage)
 {
+    std::lock_guard<std::mutex> lifecycleLock(m_deviceLifecycleMutex);
     void* handle = nullptr;
     {
         QMutexLocker locker(&m_impl->mutex);

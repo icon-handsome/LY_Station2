@@ -78,7 +78,7 @@ private:
     float m_exposureTimeUs = 50000.0f;
     float m_gain = 0.0f;
     quint64 m_nextRequestId = 1;
-    bool m_started = false;
+    std::atomic_bool m_started{false};
     std::atomic_bool m_connectInFlight = false;
     std::atomic_bool m_captureInFlight = false;
     // 工作线程拷贝 shared_ptr；stop 置 false 后禁止回投主线程，避免悬空 this。
