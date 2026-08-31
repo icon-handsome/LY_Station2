@@ -100,6 +100,18 @@ void HikSmartCameraSession::drainReceiveBuffer()
             continue;
         }
 
+        // 焊缝/ROI 结果格式为 name;code;，优先等待并一次取完整两字段。
+        const int firstSemicolon = m_receiveBuffer.indexOf(';');
+        if (firstSemicolon >= 0) {
+            const int secondSemicolon = m_receiveBuffer.indexOf(';', firstSemicolon + 1);
+            if (secondSemicolon >= 0) {
+                const QByteArray result = m_receiveBuffer.left(secondSemicolon + 1);
+                m_receiveBuffer.remove(0, secondSemicolon + 1);
+                processReceivedData(result);
+                continue;
+            }
+        }
+
         // OCR 回包形如 X2025-1297; / PX2025-1297;（分号结尾，无换行）
         if (m_receiveBuffer.contains(';')) {
             const int index = m_receiveBuffer.indexOf(';');

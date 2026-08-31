@@ -670,6 +670,7 @@ void ConfigManager::writeDefaults(QSettings& settings)
     settings.setValue("scanPathsConfigPath", QStringLiteral("config/scan_paths/station2_placeholder.json"));
     settings.setValue("defaultWorkMode", QStringLiteral("MODE_CYLINDER_SEMI"));
     settings.setValue("profileIni", QStringLiteral("config/station_profiles/station2_cylinder_semi.ini"));
+    settings.setValue("enableHoistAssist", false);
     settings.endGroup();
 
     settings.beginGroup("Vision");
@@ -786,8 +787,8 @@ void ConfigManager::writeDefaults(QSettings& settings)
  *
  * 合并优先级（Stage 1）：
  * 1. config.ini [Station] 作为基础
- * 2. profileIni 指向的外部 INI 中 [Station] 同名字段覆盖基础值
- * 3. 结果写入 m_stationProfile，本阶段为只读配置
+ * 2. profileIni 指向的外部 INI 中 [Station] 字段覆盖基础值
+ * 3. config.ini [Station] enableHoistAssist 作为全局总开关，最终覆盖 profile 值
  */
 void ConfigManager::loadStationProfile(QSettings& settings, const QString& configFilePath)
 {
@@ -811,6 +812,14 @@ void ConfigManager::loadStationProfile(QSettings& settings, const QString& confi
             << QStringLiteral("[Station] profileIni 不存在，忽略：")
             << resolvedProfileIni;
     }
+
+    // 吊装辅助是整机级功能，只允许在根 config.ini 中维护，避免随站型 profile 漂移。
+    settings.beginGroup(QStringLiteral("Station"));
+    if (settings.contains(QStringLiteral("enableHoistAssist"))) {
+        profile.enableHoistAssist =
+            settings.value(QStringLiteral("enableHoistAssist"), profile.enableHoistAssist).toBool();
+    }
+    settings.endGroup();
 
     m_stationProfile = profile;
     qInfo(LOG_CONFIG).noquote()

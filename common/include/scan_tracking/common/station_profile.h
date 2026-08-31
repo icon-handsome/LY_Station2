@@ -26,7 +26,8 @@ struct StationProfile {
     bool enableUnloadCalc = false;
     bool enablePoseCheck = false;
     bool enableTelescopicScan = true;
-    bool enableHoistAssist = true;
+    // 吊装辅助（TF/碰撞/第三路海康 C）必须显式开启，普通扫描默认关闭。
+    bool enableHoistAssist = false;
     bool enableCollisionMonitor = true;
 };
 
