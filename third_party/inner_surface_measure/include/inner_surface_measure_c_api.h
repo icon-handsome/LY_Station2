@@ -108,6 +108,20 @@ INNER_SURFACE_MEASURE_API ism_status ism_measure_two_frames_average(
     char* message,
     size_t message_capacity);
 
+/* Same as ism_measure_two_frames_average, but uses measured_length_mm when > 0. */
+INNER_SURFACE_MEASURE_API ism_status ism_measure_two_frames_average_with_length(
+    ism_context* ctx,
+    const float* frame1_xyz,
+    size_t frame1_count,
+    const float* frame2_xyz,
+    size_t frame2_count,
+    double measured_length_mm,
+    ism_average_result* out_average,
+    ism_frame_result* out_frame1,
+    ism_frame_result* out_frame2,
+    char* message,
+    size_t message_capacity);
+
 INNER_SURFACE_MEASURE_API void ism_destroy(ism_context* ctx);
 
 INNER_SURFACE_MEASURE_API const char* ism_status_string(ism_status status);

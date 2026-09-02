@@ -375,11 +375,11 @@ int main(int argc, char* argv[])
     {
         const QString thicknessIni =
             QDir(QCoreApplication::applicationDirPath())
-                .filePath(QStringLiteral("config/thickness_measure_v2/thickness_measurement.ini"));
+                .filePath(QStringLiteral("config/thickness_measure_v3/thickness_measurement.ini"));
         const QString outerTemplatePath =
             QDir(QCoreApplication::applicationDirPath())
                 .filePath(QStringLiteral(
-                    "config/thickness_measure_v2/Data/0_template_outer_sample.pcd"));
+                    "config/thickness_measure_v3/Data/Template_Path4_Arm_cloud_stitched_1_sample.pcd"));
         std::printf("thickness ini: %s\n", qPrintable(thicknessIni));
         std::printf("outer template: %s exists=%d\n",
                     qPrintable(outerTemplatePath),

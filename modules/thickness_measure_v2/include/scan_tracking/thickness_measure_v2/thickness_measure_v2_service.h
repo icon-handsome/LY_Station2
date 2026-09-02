@@ -18,7 +18,7 @@ public:
     ThicknessMeasureV2Service(const ThicknessMeasureV2Service&) = delete;
     ThicknessMeasureV2Service& operator=(const ThicknessMeasureV2Service&) = delete;
 
-    /// Default: <applicationDir>/config/thickness_measure_v2/thickness_measurement.ini
+    /// Default: <applicationDir>/config/thickness_measure_v3/thickness_measurement.ini
     static QString defaultConfigPath();
 
     bool isReady() const;

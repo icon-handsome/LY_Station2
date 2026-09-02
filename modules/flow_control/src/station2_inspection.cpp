@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <future>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <utility>
@@ -38,6 +39,42 @@ constexpr quint16 kNgReasonAlgorithmFailed = 1u << 3;
 constexpr quint16 kNgReasonAlgorithmUnsupported = 1u << 4;
 
 constexpr double kPi = 3.14159265358979323846;
+
+// 同一 taskId 内，length_volume 路径产出的实测长度供内表面容积计算复用。
+std::mutex& measuredLengthCacheMutex()
+{
+    static std::mutex mutex;
+    return mutex;
+}
+
+std::map<quint32, double>& measuredLengthCache()
+{
+    static std::map<quint32, double> cache;
+    return cache;
+}
+
+void rememberMeasuredLength(quint32 taskId, double lengthMm)
+{
+    if (taskId == 0 || lengthMm <= 0.0) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(measuredLengthCacheMutex());
+    measuredLengthCache()[taskId] = lengthMm;
+    // 防止长期运行时任务结果无限增长；保留最近的有限窗口。
+    while (measuredLengthCache().size() > 64) {
+        measuredLengthCache().erase(measuredLengthCache().begin());
+    }
+}
+
+double measuredLengthForTask(quint32 taskId)
+{
+    if (taskId == 0) {
+        return 0.0;
+    }
+    std::lock_guard<std::mutex> lock(measuredLengthCacheMutex());
+    const auto it = measuredLengthCache().find(taskId);
+    return it == measuredLengthCache().end() ? 0.0 : it->second;
+}
 
 void fillPathMeta(InspectionResult* result, const InspectionQuota& quota)
 {
@@ -759,8 +796,8 @@ bool ensureThicknessMeasureReady(QString* errorMessage)
     if (!service.initializeFromIni(QString(), &error)) {
         if (errorMessage != nullptr) {
             *errorMessage = error.message + QStringLiteral(
-                "（请确认 config/thickness_measure_v2/thickness_measurement.ini、"
-                "外模板 PCD 与 models/thickness_measure_v2/*.onnx 可用）");
+                "（请确认 config/thickness_measure_v3/thickness_measurement.ini、"
+                "外模板 PCD 与 models/thickness_measure_v3/*.onnx 可用）");
         }
         return false;
     }
@@ -915,6 +952,8 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
             << "success=" << average.successCount << "/" << average.pairCount;
     }
 
+    const double measuredLengthMm = measuredLengthForTask(taskId);
+
     // --- 内表面：严格对照源码（exactly 2 帧 → ism_measure_two_frames_average）---
     if (hasInnerEnds) {
         QString initError;
@@ -937,7 +976,18 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
         scan_tracking::inner_surface_measure::InnerSurfaceFrameMeasurement frame1;
         scan_tracking::inner_surface_measure::InnerSurfaceFrameMeasurement frame2;
         scan_tracking::inner_surface_measure::InnerSurfaceMeasureError error;
-        if (!sharedInnerSurfaceMeasureService().measureTwoFramesAverage(
+        const bool innerMeasureOk = measuredLengthMm > 0.0
+            ? sharedInnerSurfaceMeasureService().measureTwoFramesAverageWithLength(
+                innerFrame1->xyz.data(),
+                static_cast<size_t>(innerFrame1->finiteCount),
+                innerFrame2->xyz.data(),
+                static_cast<size_t>(innerFrame2->finiteCount),
+                measuredLengthMm,
+                &avg,
+                &frame1,
+                &frame2,
+                &error)
+            : sharedInnerSurfaceMeasureService().measureTwoFramesAverage(
                 innerFrame1->xyz.data(),
                 static_cast<size_t>(innerFrame1->finiteCount),
                 innerFrame2->xyz.data(),
@@ -945,8 +995,8 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
                 &avg,
                 &frame1,
                 &frame2,
-                &error) ||
-            !avg.valid) {
+                &error);
+        if (!innerMeasureOk || !avg.valid) {
             result.resultCode = 2;
             result.ngReasonWord0 = kNgReasonAlgorithmFailed;
             result.measurement.qualityCode = 2;
@@ -967,6 +1017,7 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
         result.measurement.innerRoundness = avg.roundness;
         result.measurement.innerSurfacePairCount = 1;
         result.measurement.innerSurfaceSuccessCount = 1;
+        result.measurement.lengthMm = avg.containerLengthMm;
         if (avg.containerLengthMm > 0.0 && avg.diameterMm > 0.0) {
             result.measurement.volumeLiters = avg.volumeLiters;
             result.measurement.volumeRadiusMm = avg.diameterMm * 0.5;
@@ -979,6 +1030,7 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
             << "roundness=" << avg.roundness
             << "volumeL=" << avg.volumeLiters
             << "containerLengthMm=" << avg.containerLengthMm
+            << "lengthSource=" << (measuredLengthMm > 0.0 ? "task_length_volume" : "config_fallback")
             << "frame1.valid=" << frame1.valid
             << "frame2.valid=" << frame2.valid;
     }
@@ -993,7 +1045,7 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
         (result.measurement.innerSurfaceSuccessCount > 0 ? 2 : 0);
     result.message = QStringLiteral(
         "厚度+内表面通过：pathId=%1 (%2)；厚度=%3mm（%4/%5 对），"
-        "内径=%6mm 周长=%7mm 圆度=%8 容积=%9L（两端 %10）")
+                         "内径=%6mm 周长=%7mm 圆度=%8 容积=%9L 长度=%11mm（两端 %10，长度来源=%12）")
                          .arg(quota.pathId)
                          .arg(quota.pathName.isEmpty() ? QStringLiteral("thickness_inner_surface")
                                                       : quota.pathName)
@@ -1007,7 +1059,11 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
                          .arg(hasInnerEnds ? QStringLiteral("%1/%2")
                                                 .arg(innerFrame1->localIndex)
                                                 .arg(innerFrame2->localIndex)
-                                          : QStringLiteral("-"));
+                                          : QStringLiteral("-"))
+                         .arg(result.measurement.lengthMm, 0, 'f', 3)
+                         .arg(measuredLengthMm > 0.0
+                                  ? QStringLiteral("task_length_volume")
+                                  : QStringLiteral("config_fallback"));
     return result;
 }
 
@@ -1246,6 +1302,7 @@ InspectionResult evaluateLengthVolumeInspection(
     result.measurement.qualityCode = 1;
     result.measurement.measuredSegmentCount = segmentCount;
     result.measurement.lengthMm = measurement.lengthMm;
+    rememberMeasuredLength(taskId, measurement.lengthMm);
     result.measurement.volumeLiters = volumeLiters;
     result.measurement.volumeRadiusMm = volumeRadiusMm;
     result.measurement.fittedOuterRadiusMm = static_cast<double>(measurement.fittedRadiusMm);

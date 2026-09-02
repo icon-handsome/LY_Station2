@@ -128,6 +128,7 @@ QString formatInspectionResultTextBlock(const InspectionResult& result)
         appendKeyValue(&text, QStringLiteral("innerDiameterMm"), m.innerDiameterMm);
         appendKeyValue(&text, QStringLiteral("innerCircumferenceMm"), m.innerCircumferenceMm);
         appendKeyValue(&text, QStringLiteral("innerRoundness"), m.innerRoundness);
+        appendKeyValue(&text, QStringLiteral("lengthMm"), m.lengthMm);
         appendKeyValue(&text, QStringLiteral("volumeLiters"), m.volumeLiters);
         appendKeyValue(&text, QStringLiteral("volumeRadiusMm"), m.volumeRadiusMm);
         appendKeyValue(&text, QStringLiteral("innerSurfacePairCount"),

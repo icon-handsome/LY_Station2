@@ -9,14 +9,14 @@ if(SCAN_TRACKING_ENABLE_LB_POSE_DETECTION)
 endif()
 add_subdirectory(weld_measure)
 add_subdirectory(thickness_measure)
-# path4 已切 ThicknessMeasureV2；SDK 必须已打包。
-set(_tmv2_sdk "${CMAKE_SOURCE_DIR}/third_party/thickness_measure_v2")
-if(NOT EXISTS "${_tmv2_sdk}/include/thickness_measure_v2_c_api.h"
-   OR NOT EXISTS "${_tmv2_sdk}/lib/Release/ThicknessMeasureV2.lib"
-   OR NOT EXISTS "${_tmv2_sdk}/bin/Release/ThicknessMeasureV2.dll")
+# path4 使用 V3 DLL，但保留旧服务类名以兼容业务调用。
+set(_tmv3_sdk "${CMAKE_SOURCE_DIR}/third_party/thickness_measure_v3")
+if(NOT EXISTS "${_tmv3_sdk}/include/thickness_measure_v3_c_api.h"
+   OR NOT EXISTS "${_tmv3_sdk}/lib/Release/ThicknessMeasureV3.lib"
+   OR NOT EXISTS "${_tmv3_sdk}/bin/Release/ThicknessMeasureV3.dll")
     message(FATAL_ERROR
-        "ThicknessMeasureV2 SDK missing under third_party/thickness_measure_v2.\n"
-        "Build ThicknessMeasureV2Dll and run scripts/package_sdk_to_ipc.ps1.")
+        "ThicknessMeasureV3 SDK missing under third_party/thickness_measure_v3.\n"
+        "Build the V3 DLL and package its include/lib/bin files.")
 endif()
 add_subdirectory(thickness_measure_v2)
 add_subdirectory(inner_surface_measure)

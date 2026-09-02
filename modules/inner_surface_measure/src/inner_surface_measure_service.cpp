@@ -283,4 +283,47 @@ bool InnerSurfaceMeasureService::measureTwoFramesAverage(
     return true;
 }
 
+bool InnerSurfaceMeasureService::measureTwoFramesAverageWithLength(
+    const float* frame1Xyz,
+    size_t frame1Count,
+    const float* frame2Xyz,
+    size_t frame2Count,
+    double measuredLengthMm,
+    InnerSurfaceAverageMeasurement* outAverage,
+    InnerSurfaceFrameMeasurement* outFrame1,
+    InnerSurfaceFrameMeasurement* outFrame2,
+    InnerSurfaceMeasureError* error)
+{
+    if (outAverage == nullptr) {
+        FillError(error, ISM_ERR_INVALID_ARG, QStringLiteral("outAverage is null"));
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(m_impl->mutex);
+    if (m_impl->ctx == nullptr) {
+        FillError(error, ISM_ERR_NOT_INITIALIZED, QStringLiteral("InnerSurfaceMeasureService not initialized"));
+        return false;
+    }
+    ism_average_result average{};
+    ism_frame_result frame1{};
+    ism_frame_result frame2{};
+    char message[512] = {0};
+    const ism_status status = ism_measure_two_frames_average_with_length(
+        m_impl->ctx, frame1Xyz, frame1Count, frame2Xyz, frame2Count,
+        measuredLengthMm, &average, &frame1, &frame2, message, sizeof(message));
+    if (status != ISM_OK) {
+        FillError(error, status, message[0] != '\0' ? QString::fromUtf8(message)
+                                                   : QString::fromUtf8(ism_status_string(status)));
+        return false;
+    }
+    outAverage->diameterMm = average.diameter_mm;
+    outAverage->circumferenceMm = average.circumference_mm;
+    outAverage->roundness = average.roundness;
+    outAverage->volumeLiters = average.volume_liters;
+    outAverage->containerLengthMm = average.container_length_mm;
+    outAverage->valid = average.valid != 0;
+    if (outFrame1 != nullptr) FillFrameResult(frame1, outFrame1);
+    if (outFrame2 != nullptr) FillFrameResult(frame2, outFrame2);
+    return true;
+}
+
 }  // namespace scan_tracking::inner_surface_measure

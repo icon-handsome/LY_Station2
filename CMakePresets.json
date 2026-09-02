@@ -27,6 +27,8 @@
         "WindowsSdkDir": "C:/Program Files (x86)/Windows Kits/10/",
         "CMAKE_SYSTEM_VERSION": "10.0.26100.0",
         "CMAKE_MAKE_PROGRAM": "C:/Program Files/Microsoft Visual Studio/18/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe",
+        "CMAKE_EXE_LINKER_FLAGS": "/LIBPATH:\"C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.29.30133/lib/x64\" /LIBPATH:\"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/um/x64\" /LIBPATH:\"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/ucrt/x64\"",
+        "CMAKE_SHARED_LINKER_FLAGS": "/LIBPATH:\"C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.29.30133/lib/x64\" /LIBPATH:\"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/um/x64\" /LIBPATH:\"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/ucrt/x64\"",
         "SCAN_TRACKING_MECHEYE_SDK_DIR": "${sourceDir}/third_party/Mech-Eye SDK-2.5.4/API",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }

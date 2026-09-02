@@ -71,7 +71,7 @@ ThicknessMeasureV2Service::~ThicknessMeasureV2Service()
 QString ThicknessMeasureV2Service::defaultConfigPath()
 {
     return QDir(QCoreApplication::applicationDirPath())
-        .filePath(QStringLiteral("config/thickness_measure_v2/thickness_measurement.ini"));
+        .filePath(QStringLiteral("config/thickness_measure_v3/thickness_measurement.ini"));
 }
 
 bool ThicknessMeasureV2Service::isReady() const

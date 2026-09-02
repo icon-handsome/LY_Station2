@@ -1,4 +1,4 @@
-scan_tracking_require_thickness_measure_v2_sdk()
+scan_tracking_require_thickness_measure_v3_sdk()
 
 add_library(scan_tracking_thickness_measure_v2 STATIC
     src/thickness_measure_v2_service.cpp
@@ -19,7 +19,7 @@ target_link_libraries(scan_tracking_thickness_measure_v2
     PUBLIC
         Qt5::Core
     PRIVATE
-        ThicknessMeasureV2Sdk::Api
+        ThicknessMeasureV3Sdk::Api
 )
 
 target_compile_features(scan_tracking_thickness_measure_v2 PUBLIC cxx_std_17)
@@ -39,4 +39,4 @@ set_target_properties(scan_tracking_thickness_measure_v2_smoke PROPERTIES
     FOLDER "tests"
 )
 
-scan_tracking_deploy_thickness_measure_v2_runtime(scan_tracking_thickness_measure_v2_smoke)
+scan_tracking_deploy_thickness_measure_v3_runtime(scan_tracking_thickness_measure_v2_smoke)

@@ -51,6 +51,18 @@ public:
         InnerSurfaceFrameMeasurement* outFrame2 = nullptr,
         InnerSurfaceMeasureError* error = nullptr);
 
+    /// Uses measuredLengthMm for volume when it is positive; otherwise config fallback is used.
+    bool measureTwoFramesAverageWithLength(
+        const float* frame1Xyz,
+        size_t frame1Count,
+        const float* frame2Xyz,
+        size_t frame2Count,
+        double measuredLengthMm,
+        InnerSurfaceAverageMeasurement* outAverage,
+        InnerSurfaceFrameMeasurement* outFrame1 = nullptr,
+        InnerSurfaceFrameMeasurement* outFrame2 = nullptr,
+        InnerSurfaceMeasureError* error = nullptr);
+
 private:
     struct Impl;
     Impl* m_impl = nullptr;
