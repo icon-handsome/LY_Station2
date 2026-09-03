@@ -110,3 +110,8 @@ target_link_libraries(scan_tracking_path4_offline
 set_target_properties(scan_tracking_path4_offline PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/app"
 )
+
+# path4 offline uses ThicknessMeasureV2Service → out-of-process V3 worker.
+if(TARGET thickness_measure_v3_worker)
+    scan_tracking_deploy_thickness_measure_v3_worker(scan_tracking_path4_offline)
+endif()

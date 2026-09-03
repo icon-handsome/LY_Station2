@@ -25,6 +25,9 @@ function(scan_tracking_require_thickness_measure_v3_sdk)
     set_target_properties(ThicknessMeasureV3Sdk::Api PROPERTIES IMPORTED_IMPLIB_RELEASE "${rlib}" IMPORTED_IMPLIB_DEBUG "${dlib}" IMPORTED_LOCATION_RELEASE "${rdll}" IMPORTED_LOCATION_DEBUG "${ddll}" INTERFACE_INCLUDE_DIRECTORIES "${inc}")
     set_property(GLOBAL PROPERTY SCAN_TRACKING_THICKNESS_MEASURE_V3_SDK_DIR "${d}")
 endfunction()
+# Copy ThicknessMeasureV3.dll / onnxruntime / config / models beside a target.
+# Prefer attaching this to thickness-measure-v3-worker and any host that needs the
+# same layout; scan-tracking itself no longer loads the DLL in-process.
 function(scan_tracking_deploy_thickness_measure_v3_runtime target)
     scan_tracking_require_thickness_measure_v3_sdk()
     get_property(d GLOBAL PROPERTY SCAN_TRACKING_THICKNESS_MEASURE_V3_SDK_DIR)

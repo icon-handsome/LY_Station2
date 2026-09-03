@@ -899,7 +899,8 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
         << QStringLiteral(" 内表面=")
         << (hasInnerEnds ? innerEndsDetail : QStringLiteral("无两端帧"));
 
-    // --- 厚度 V2：tmv2_create_from_ini + tmv2_measure_pairs_average（ONNX 截面/回退特征点）---
+    // --- 厚度 V3：out-of-process worker 加载 ThicknessMeasureV3.dll ---
+    // 主进程只组包/收结果；create/measure/destroy 在 thickness-measure-v3-worker.exe。
     // 预处理仅在 DLL 内按 thickness_measurement.ini 执行，IPC 不再二次降采样。
     if (!thicknessPairs.isEmpty()) {
         QString initError;
