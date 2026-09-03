@@ -543,7 +543,10 @@ void ConsoleRuntime::initModules()
     } else {
         qInfo(appLog).noquote() << QStringLiteral("调用 梅卡-机械臂 start…");
         mechEyeArmService_->start(armMechKey);
-        qInfo(appLog).noquote() << QStringLiteral("梅卡-机械臂 start() 已返回");
+        QCoreApplication::processEvents(QEventLoop::AllEvents);
+        qInfo(appLog).noquote()
+            << QStringLiteral("梅卡-机械臂 start() 已返回，当前状态=")
+            << static_cast<int>(mechEyeArmService_->state());
     }
     qInfo(appLog).noquote()
         << QStringLiteral("梅卡相机服务已启动：伸缩杆=") << telescopicMechKey
@@ -919,9 +922,9 @@ void ConsoleRuntime::initModules()
                 }
                 hoistAssistService_->evaluate();
             });
-        hoistAssistCycleTimer_->start();
+        // 延后到 StateMachine::start 之后再开周期采图，避免启动期与梅卡/状态机并发。
         qInfo(appLog) << QStringLiteral(
-            "[HoistAssist] third Hik C periodic capture/evaluation started: 500ms, ip=")
+            "[HoistAssist] third Hik C periodic capture armed (start after StateMachine): 500ms, ip=")
                       << thirdCameraIp;
     }
 
@@ -952,6 +955,9 @@ void ConsoleRuntime::initModules()
     visionPipelineService_->start(visionConfig);
     qInfo(appLog) << QStringLiteral("视觉集成框架已启动。");
 
+    // 与 CXP「延后 EnumDevices」同理：状态机启动前先排空梅卡 worker 队列，降低启动闪退。
+    settleMechEyeBeforeStateMachine();
+
     // StateMachine 是主流程编排核心，注入 Modbus / 视觉等依赖
     stateMachine_ = std::make_unique<scan_tracking::flow_control::StateMachine>(
         modbusService_.get(),
@@ -980,6 +986,12 @@ void ConsoleRuntime::initModules()
     stateMachine_->start();
     qInfo(appLog) << QStringLiteral("状态机已启动。");
 
+    if (hoistAssistCycleTimer_ != nullptr && !hoistAssistCycleTimer_->isActive()) {
+        hoistAssistCycleTimer_->start();
+        qInfo(appLog) << QStringLiteral(
+            "[HoistAssist] third Hik C periodic capture/evaluation started after StateMachine.");
+    }
+
     // StateMachine 启动完成后再拉起 CXP SDK 枚举/连接，降低启动期进程闪退概率。
     if (visionConfig.hikCxpEnabled && hikCxpCameraAService_ && hikCxpCameraBService_) {
         hikCxpCameraAService_->start(
@@ -999,6 +1011,24 @@ void ConsoleRuntime::initModules()
     qInfo(appLog) << QStringLiteral("所有模块已初始化（Modbus 将在 Mech+海康智能齐套后监听，忽略CXP）。");
 
     QTimer::singleShot(0, this, &ConsoleRuntime::runDeferredStartupTasks);
+}
+
+void ConsoleRuntime::settleMechEyeBeforeStateMachine()
+{
+    qInfo(appLog).noquote()
+        << QStringLiteral("启动串行化：排空梅卡 worker 队列后再启动状态机…");
+    if (mechEyeTelescopicService_) {
+        mechEyeTelescopicService_->waitWorkerIdle();
+    }
+    if (mechEyeArmService_) {
+        mechEyeArmService_->waitWorkerIdle();
+    }
+    // 消化 QueuedConnection 回投到主线程的 stateChanged / fatalError。
+    QCoreApplication::processEvents(QEventLoop::AllEvents);
+    // 给 MechEye SDK 辅助线程一个极短静默窗口（现场启动闪退与 SM start 并发相关）。
+    QThread::msleep(150);
+    QCoreApplication::processEvents(QEventLoop::AllEvents);
+    qInfo(appLog).noquote() << QStringLiteral("启动串行化：梅卡侧已排空，开始构造/启动状态机。");
 }
 
 void ConsoleRuntime::printStartupStatus()

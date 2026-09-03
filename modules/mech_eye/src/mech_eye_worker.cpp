@@ -29,6 +29,9 @@
 #include <qdir.h>
 #include <qcoreapplication.h>
 #include "scan_tracking/mech_eye/mech_eye_sdk_seh.h"
+#include "scan_tracking/mech_eye/mech_eye_qt_seh.h"
+#include <utility>
+
 #include "ErrorStatus.h"
 #include "area_scan_3d_camera/Camera.h"
 #include "area_scan_3d_camera/CameraProperties.h"
@@ -404,10 +407,11 @@ void MechEyeWorker::startWorker(const QString& defaultCameraKey)
             // 重试等待期间释放 SDK 锁，避免阻塞另一路梅卡 worker。
             const std::lock_guard<std::mutex> sdkLock(mechEyeSdkMutex());
             if (connectCamera(m_defaultCameraKey, 5000, &errorMessage)) {
+                const CameraInfoSnapshot snap = safeCopyCameraInfo(m_cameraInfo);
                 setRuntimeState(
                     CameraRuntimeState::Ready,
                     QStringLiteral("相机已连接: %1 @ %2")
-                        .arg(m_cameraInfo.serialNumber, m_cameraInfo.ipAddress));
+                        .arg(snap.serialNumber, snap.ipAddress));
                 return;
             }
         }
@@ -461,9 +465,10 @@ void MechEyeWorker::refreshStatus()
     if (!m_connected) {
         QString errorMessage;
         if (ensureConnected(m_defaultCameraKey, 3000, &errorMessage)) {
+            const CameraInfoSnapshot snap = safeCopyCameraInfo(m_cameraInfo);
             setRuntimeState(
                 CameraRuntimeState::Ready,
-                QStringLiteral("相机重新连接成功: %1").arg(m_cameraInfo.serialNumber));
+                QStringLiteral("相机重新连接成功: %1").arg(snap.serialNumber));
         } else {
             setRuntimeState(CameraRuntimeState::Error, errorMessage);
         }
@@ -490,11 +495,12 @@ void MechEyeWorker::refreshStatus()
         return;
     }
 
-    m_cameraInfo = makeSnapshot(liveInfo, true);
+    replaceCameraInfo(&m_cameraInfo, makeSnapshot(liveInfo, true));
+    const CameraInfoSnapshot snap = safeCopyCameraInfo(m_cameraInfo);
     emit stateChanged(
         m_state,
         QStringLiteral("相机在线: %1 @ %2")
-            .arg(m_cameraInfo.serialNumber, m_cameraInfo.ipAddress));
+            .arg(snap.serialNumber, snap.ipAddress));
 }
 
 /* 执行一次采集：先确保连接正常，再按采集模式调用 SDK。 */
@@ -537,9 +543,9 @@ void MechEyeWorker::performCapture(const scan_tracking::mech_eye::CaptureRequest
 
     CaptureResult result;
     result.requestId = normalized.requestId;
-    result.cameraKey = normalized.cameraKey;
+    result.cameraKey = safeCopyQString(normalized.cameraKey);
     result.mode = normalized.mode;
-    result.cameraInfo = m_cameraInfo;
+    result.cameraInfo = safeCopyCameraInfo(m_cameraInfo);
     result.elapsedMs = 0;
 
 #if defined(__cpp_exceptions) || defined(_CPPUNWIND)
@@ -807,7 +813,7 @@ bool MechEyeWorker::connectCamera(const QString& cameraKey, int timeoutMs, QStri
                     .arg(QString::fromStdString(status.errorDescription));
             }
             m_connected = false;
-            m_cameraInfo = {};
+            replaceCameraInfo(&m_cameraInfo, CameraInfoSnapshot{});
             return false;
         }
 
@@ -815,11 +821,12 @@ bool MechEyeWorker::connectCamera(const QString& cameraKey, int timeoutMs, QStri
         mmind::eye::ErrorStatus infoStatus;
         const unsigned infoSeh = sdk_seh::getCameraInfo(m_impl->camera.get(), &info, &infoStatus);
         if (infoSeh == 0 && infoStatus.isOK()) {
-            m_cameraInfo = makeSnapshot(info, true);
+            replaceCameraInfo(&m_cameraInfo, makeSnapshot(info, true));
         } else {
-            m_cameraInfo = {};
-            m_cameraInfo.ipAddress = normalizedKey;
-            m_cameraInfo.connected = true;
+            CameraInfoSnapshot fallback;
+            fallback.ipAddress = normalizedKey;
+            fallback.connected = true;
+            replaceCameraInfo(&m_cameraInfo, std::move(fallback));
         }
 
         m_connected = true;
@@ -888,12 +895,12 @@ bool MechEyeWorker::connectCamera(const QString& cameraKey, int timeoutMs, QStri
                 .arg(QString::fromStdString(status.errorDescription));
         }
         m_connected = false;
-        m_cameraInfo = {};
+        replaceCameraInfo(&m_cameraInfo, CameraInfoSnapshot{});
         return false;
     }
 
     m_connected = true;
-    m_cameraInfo = makeSnapshot(*selectedIt, true);
+    replaceCameraInfo(&m_cameraInfo, makeSnapshot(*selectedIt, true));
     // 设置 SDK 心跳间隔为 5 秒（默认 10 秒），用于检测相机网络断连
     sdk_seh::setHeartbeatInterval(m_impl->camera.get(), 5000);
     // 连接成功后打印相机基础参数
@@ -926,7 +933,7 @@ void MechEyeWorker::resetSdkCamera()
 {
     m_connected = false;
     m_busy = false;
-    m_cameraInfo = {};
+    forceResetCameraInfo(&m_cameraInfo);
     if (m_impl != nullptr) {
         // AV 后不再立即 recreate，避免脏 SDK 上连环崩溃。
         m_impl->discoveredCameras.clear();
@@ -938,6 +945,11 @@ void MechEyeWorker::resetSdkCamera()
     }
 }
 
+void MechEyeWorker::syncBarrier()
+{
+    // Intentionally empty: BlockingQueuedConnection drain point for startup settle.
+}
+
 CaptureResult MechEyeWorker::makeFailureResult(
     const CaptureRequest& request,
     CaptureErrorCode errorCode,
@@ -946,11 +958,11 @@ CaptureResult MechEyeWorker::makeFailureResult(
 {
     CaptureResult result; 
     result.requestId = request.requestId;  
-    result.cameraKey = request.cameraKey;   
+    result.cameraKey = safeCopyQString(request.cameraKey);
     result.mode = request.mode;             
     result.errorCode = errorCode;           
     result.errorMessage = taggedMessage(errorMessage);
-    result.cameraInfo = m_cameraInfo;
+    result.cameraInfo = safeCopyCameraInfo(m_cameraInfo);
     result.elapsedMs = elapsedMs;
     return result;
 }
@@ -1058,12 +1070,13 @@ void MechEyeWorker::printCameraParametersUnguarded()
     std::string outlierRemoval;
     userSet.getEnumValue("PointCloudOutlierRemoval", outlierRemoval);
 
+    const CameraInfoSnapshot snap = safeCopyCameraInfo(m_cameraInfo);
     qInfo(LOG_MECHEYE_WORKER).noquote()
         << taggedMessage(QStringLiteral("=== MechEye 相机信息 ===")) << "\n"
-        << "  型号:" << m_cameraInfo.model << "\n"
-        << "  序列号:" << m_cameraInfo.serialNumber << "\n"
-        << "  IP:" << m_cameraInfo.ipAddress << "\n"
-        << "  固件版本:" << m_cameraInfo.firmwareVersion << "\n"
+        << "  型号:" << snap.model << "\n"
+        << "  序列号:" << snap.serialNumber << "\n"
+        << "  IP:" << snap.ipAddress << "\n"
+        << "  固件版本:" << snap.firmwareVersion << "\n"
         << "  当前用户设置:" << QString::fromStdString(userSetName) << "\n"
         << "  2D 分辨率:" << resolutions.texture.width << "x" << resolutions.texture.height << "\n"
         << "  深度图分辨率:" << resolutions.depth.width << "x" << resolutions.depth.height << "\n"

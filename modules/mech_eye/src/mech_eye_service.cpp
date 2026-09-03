@@ -215,6 +215,15 @@ void MechEyeService::requestRefreshStatus()
     emit sig_refreshStatus();
 }
 
+void MechEyeService::waitWorkerIdle()
+{
+    if (!m_started || m_worker == nullptr || m_workerThread == nullptr ||
+        !m_workerThread->isRunning()) {
+        return;
+    }
+    QMetaObject::invokeMethod(m_worker, "syncBarrier", Qt::BlockingQueuedConnection);
+}
+
 /* 发起采集请求。
  * 这里仅做状态与参数检查，真正的采集逻辑在 worker 线程执行。
  */

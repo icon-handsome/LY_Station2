@@ -41,6 +41,8 @@ void appendInspectionMeasurementFields(QJsonObject& payload, const InspectionMea
     headMetrics[QStringLiteral("leftUndercutMm")] = measurement.leftUndercutMm;
     headMetrics[QStringLiteral("rightUndercutMm")] = measurement.rightUndercutMm;
     headMetrics[QStringLiteral("maxUndercutMm")] = measurement.maxUndercutMm;
+    headMetrics[QStringLiteral("leftUndercutLengthMm")] = measurement.leftUndercutLengthMm;
+    headMetrics[QStringLiteral("rightUndercutLengthMm")] = measurement.rightUndercutLengthMm;
     headMetrics[QStringLiteral("measuredSegmentCount")] = measurement.measuredSegmentCount;
     headMetrics[QStringLiteral("thicknessMm")] = measurement.thicknessMm;
     headMetrics[QStringLiteral("thickness_mm")] = measurement.thicknessMm;
@@ -117,6 +119,8 @@ QString formatInspectionResultTextBlock(const InspectionResult& result)
         appendKeyValue(&text, QStringLiteral("leftUndercutMm"), m.leftUndercutMm);
         appendKeyValue(&text, QStringLiteral("rightUndercutMm"), m.rightUndercutMm);
         appendKeyValue(&text, QStringLiteral("maxUndercutMm"), m.maxUndercutMm);
+        appendKeyValue(&text, QStringLiteral("leftUndercutLengthMm"), m.leftUndercutLengthMm);
+        appendKeyValue(&text, QStringLiteral("rightUndercutLengthMm"), m.rightUndercutLengthMm);
         appendKeyValue(&text, QStringLiteral("measuredSegmentCount"),
                        static_cast<qint64>(m.measuredSegmentCount));
     } else if (algorithm == QLatin1String("thickness_inner_surface")) {
@@ -201,6 +205,7 @@ bool appendInspectionResultToRunFile(
     const QString filePath = QDir(root).absoluteFilePath(QStringLiteral("result.txt"));
     // 与 path_{id}/ 并列：output/run_*/result.txt
     QFile file(filePath);
+    const bool needsHeader = !file.exists() || file.size() == 0;
     if (!file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("无法打开 %1：%2")
@@ -211,6 +216,24 @@ bool appendInspectionResultToRunFile(
 
     QTextStream stream(&file);
     stream.setCodec("UTF-8");
+    if (needsHeader) {
+        const auto& m = result.measurement;
+        stream << QStringLiteral("测试目标指标（12项，左右侧咬边合并计项）:\n")
+               << QStringLiteral("1. 焊缝错边量 = ") << m.mismatchMm << QStringLiteral(" mm\n")
+               << QStringLiteral("2. 焊缝余高 = ") << m.reinforcementMm << QStringLiteral(" mm\n")
+               << QStringLiteral("3. 母材拟合线夹角 = ") << m.includedAngleDeg << QStringLiteral(" deg\n")
+               << QStringLiteral("4. 棱角度 = ") << m.angularityMm << QStringLiteral(" mm\n")
+               << QStringLiteral("5. 左右咬边深度 = 左 ") << m.leftUndercutMm
+               << QStringLiteral(" mm，右 ") << m.rightUndercutMm << QStringLiteral(" mm\n")
+               << QStringLiteral("6. 左右咬边长度 = 左 ") << m.leftUndercutLengthMm
+               << QStringLiteral(" mm，右 ") << m.rightUndercutLengthMm << QStringLiteral(" mm\n")
+               << QStringLiteral("7. 筒体焊缝附近平均厚度 = ") << m.thicknessMm << QStringLiteral(" mm\n")
+               << QStringLiteral("8. 内径 = ") << m.innerDiameterMm << QStringLiteral(" mm\n")
+               << QStringLiteral("9. 内周长 = ") << m.innerCircumferenceMm << QStringLiteral(" mm\n")
+               << QStringLiteral("10. 内表面圆度 = ") << m.innerRoundness << QStringLiteral(" mm\n")
+               << QStringLiteral("11. 筒体总长 = ") << m.lengthMm << QStringLiteral(" mm\n")
+               << QStringLiteral("12. 容积 = ") << m.volumeLiters << QStringLiteral(" L\n\n");
+    }
     stream << formatInspectionResultTextBlock(result);
     stream.flush();
     if (stream.status() != QTextStream::Ok) {

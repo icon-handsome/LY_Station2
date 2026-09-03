@@ -18,6 +18,8 @@ struct InspectionMeasurement {
     double leftUndercutMm = 0.0;
     double rightUndercutMm = 0.0;
     double maxUndercutMm = 0.0;
+    double leftUndercutLengthMm = 0.0;
+    double rightUndercutLengthMm = 0.0;
     int measuredSegmentCount = 0;
     // thickness_inner_surface
     double thicknessMm = 0.0;

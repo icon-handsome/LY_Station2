@@ -50,6 +50,8 @@ private:
     void printStartupStatus();
     void printShutdownStatus();
     void initModules();
+    /// Drain MechEye worker queues + processEvents before StateMachine::start (field Qt/QString AV).
+    void settleMechEyeBeforeStateMachine();
     void onOrbbecOpenFinished(
         bool success,
         scan_tracking::orbbec_gemini::OrbbecGeminiDeviceSummary summary,

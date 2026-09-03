@@ -4,6 +4,7 @@ add_library(scan_tracking_mech_eye STATIC
     src/mech_eye_service.cpp
     src/mech_eye_worker.cpp
     src/mech_eye_sdk_seh.cpp
+    src/mech_eye_qt_seh.cpp
     src/point_cloud_io.cpp
     src/point_cloud_processor.cpp
     src/mech_eye_nano_smoke_test.cpp
@@ -11,6 +12,7 @@ add_library(scan_tracking_mech_eye STATIC
     include/scan_tracking/mech_eye/mech_eye_service.h
     include/scan_tracking/mech_eye/mech_eye_worker.h
     include/scan_tracking/mech_eye/mech_eye_sdk_seh.h
+    include/scan_tracking/mech_eye/mech_eye_qt_seh.h
     include/scan_tracking/mech_eye/point_cloud_io.h
     include/scan_tracking/mech_eye/point_cloud_processor.h
 )

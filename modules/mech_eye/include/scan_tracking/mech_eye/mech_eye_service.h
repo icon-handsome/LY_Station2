@@ -67,6 +67,9 @@ public:
      */
     void requestRefreshStatus();
 
+    /// Block until the worker thread has drained queued start/capture/refresh slots.
+    void waitWorkerIdle();
+
     /* 发起一次采集请求
      * @param cameraKey 相机标识，可以是型号、序列号、IP 或设备名
      * @param mode 采集模式

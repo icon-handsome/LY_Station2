@@ -5,6 +5,8 @@
 #include <QtCore/QFileInfo>
 #include <QtCore/QLoggingCategory>
 
+#include <cstddef>
+#include <cstring>
 #include <mutex>
 #include <vector>
 
@@ -15,6 +17,31 @@ Q_LOGGING_CATEGORY(LOG_THICKNESS_MEASURE_V2, "thickness_measure_v2.service")
 namespace scan_tracking::thickness_measure_v2 {
 
 namespace {
+
+constexpr size_t kMaxInputPointsPerCloud = 600000;
+
+std::vector<float> boundedCloud(const float* xyz, size_t pointCount)
+{
+    if (xyz == nullptr || pointCount == 0) {
+        return {};
+    }
+    if (pointCount <= kMaxInputPointsPerCloud) {
+        return std::vector<float>(xyz, xyz + pointCount * 3u);
+    }
+
+    // Uniformly retain the cloud envelope while bounding the V3 DLL's raw
+    // input/ICP working set. The DLL performs its own voxel preprocessing;
+    // this cap prevents it from first materializing multi-million-point copies.
+    std::vector<float> sampled;
+    sampled.reserve(kMaxInputPointsPerCloud * 3u);
+    for (size_t i = 0; i < kMaxInputPointsPerCloud; ++i) {
+        const size_t source = (i * pointCount) / kMaxInputPointsPerCloud;
+        sampled.push_back(xyz[source * 3u + 0u]);
+        sampled.push_back(xyz[source * 3u + 1u]);
+        sampled.push_back(xyz[source * 3u + 2u]);
+    }
+    return sampled;
+}
 
 void FillError(ThicknessV2Error* error, tmv2_status status, const QString& message)
 {
@@ -43,7 +70,15 @@ void FillPairResult(const tmv2_pair_result& src, ThicknessV2PairMeasurement* dst
     dst->innerOuterIcpFitness = src.inner_outer_icp_fitness;
     dst->outerTemplateIcpFitness = src.outer_template_icp_fitness;
     dst->thicknessMm = src.thickness_mm;
-    dst->method = QString::fromUtf8(src.method);
+    // The V3 DLL does not guarantee that its fixed-size method buffer is
+    // NUL-terminated. Never pass it to a C-string API without a bound: the
+    // previous unbounded read occurred immediately after the DLL printed its
+    // completion line and could terminate the IPC process.
+    size_t methodLength = 0;
+    while (methodLength < sizeof(src.method) && src.method[methodLength] != '\0') {
+        ++methodLength;
+    }
+    dst->method = QString::fromUtf8(src.method, static_cast<int>(methodLength));
     dst->sectionCount = src.section_count;
     dst->valid = src.valid != 0;
 }
@@ -186,46 +221,85 @@ bool ThicknessMeasureV2Service::measurePairsAverage(
         return false;
     }
 
+    // The V3 runtime can retain substantial per-pair ICP/ONNX scratch memory.
+    // Calling its batch entry point with both path4 pairs has caused the field
+    // process to terminate while entering the second pair.  Process pairs one
+    // at a time so each call can release its temporary buffers, then aggregate
+    // the valid results here.  This also gives the caller deterministic
+    // success/pair counts when one pair is invalid.
+    *out = ThicknessV2AverageMeasurement{};
+    if (pairs.isEmpty()) {
+        FillError(error, TMV2_ERR_INVALID_ARG, QStringLiteral("pairs is empty"));
+        return false;
+    }
+
     std::lock_guard<std::mutex> lock(m_impl->mutex);
     if (m_impl->ctx == nullptr) {
         FillError(error, TMV2_ERR_NOT_INITIALIZED, QStringLiteral("ThicknessMeasureV2Service not initialized"));
         return false;
     }
 
-    std::vector<tmv2_pair_clouds> cPairs;
-    cPairs.reserve(static_cast<size_t>(pairs.size()));
+    double thicknessSum = 0.0;
+    QString firstError;
     for (const ThicknessV2PairClouds& pair : pairs) {
-        tmv2_pair_clouds view{};
-        view.inner.xyz = pair.inner.xyz;
-        view.inner.point_count = pair.inner.pointCount;
-        view.outer.xyz = pair.outer.xyz;
-        view.outer.point_count = pair.outer.pointCount;
-        cPairs.push_back(view);
+        if (pair.inner.xyz == nullptr || pair.outer.xyz == nullptr ||
+            pair.inner.pointCount == 0 || pair.outer.pointCount == 0) {
+            ++out->pairCount;
+            if (firstError.isEmpty()) {
+                firstError = QStringLiteral("pair contains an empty cloud");
+            }
+            continue;
+        }
+
+        const std::vector<float> innerBounded = boundedCloud(
+            pair.inner.xyz, pair.inner.pointCount);
+        const std::vector<float> outerBounded = boundedCloud(
+            pair.outer.xyz, pair.outer.pointCount);
+        const float* innerXyz = innerBounded.empty() ? pair.inner.xyz : innerBounded.data();
+        const float* outerXyz = outerBounded.empty() ? pair.outer.xyz : outerBounded.data();
+        const size_t innerCount = innerBounded.empty()
+            ? pair.inner.pointCount : innerBounded.size() / 3u;
+        const size_t outerCount = outerBounded.empty()
+            ? pair.outer.pointCount : outerBounded.size() / 3u;
+
+        tmv2_pair_result result{};
+        char message[512] = {0};
+        const tmv2_status status = tmv2_measure_pair(
+            m_impl->ctx,
+            innerXyz,
+            innerCount,
+            outerXyz,
+            outerCount,
+            &result,
+            message,
+            sizeof(message));
+        ++out->pairCount;
+        if (status != TMV2_OK || !result.valid) {
+            if (firstError.isEmpty()) {
+                firstError = message[0] != '\0'
+                    ? QString::fromUtf8(message)
+                    : QString::fromUtf8(tmv2_status_string(
+                          status == TMV2_OK ? TMV2_ERR_MEASURE : status));
+            }
+            qWarning(LOG_THICKNESS_MEASURE_V2)
+                << "tmv2_measure_pair failed:" << message
+                << "status=" << static_cast<int>(status);
+            continue;
+        }
+        thicknessSum += result.thickness_mm;
+        ++out->successCount;
     }
 
-    tmv2_average_result average{};
-    char message[512] = {0};
-    const tmv2_status status = tmv2_measure_pairs_average(
-        m_impl->ctx,
-        cPairs.data(),
-        cPairs.size(),
-        &average,
-        message,
-        sizeof(message));
-    if (status != TMV2_OK || !average.valid || average.success_count == 0) {
-        FillError(
-            error,
-            status == TMV2_OK ? TMV2_ERR_MEASURE : status,
-            message[0] != '\0' ? QString::fromUtf8(message)
-                               : QString::fromUtf8(tmv2_status_string(status)));
-        qWarning(LOG_THICKNESS_MEASURE_V2) << "tmv2_measure_pairs_average failed:" << message;
+    out->valid = out->successCount > 0;
+    out->thicknessMm = out->valid
+        ? thicknessSum / static_cast<double>(out->successCount)
+        : 0.0;
+    if (!out->valid) {
+        FillError(error, TMV2_ERR_MEASURE,
+                  firstError.isEmpty() ? QStringLiteral("no valid thickness pair")
+                                       : firstError);
         return false;
     }
-
-    out->thicknessMm = average.thickness_mm;
-    out->pairCount = average.pair_count;
-    out->successCount = average.success_count;
-    out->valid = average.valid != 0;
     return true;
 }
 

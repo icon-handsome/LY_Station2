@@ -251,12 +251,13 @@ bool extractFiniteXyz(
 
 void accumulateMeasurement(
     InspectionMeasurement* agg,
-    const scan_tracking::weld_measure::WeldSectionMeasurement& section)
+    const scan_tracking::weld_measure::WeldFrameMeasurement& frame)
 {
     if (agg == nullptr) {
         return;
     }
 
+    const auto& section = frame.average;
     if (agg->measuredSegmentCount == 0) {
         agg->mismatchMm = section.mismatchMm;
         agg->reinforcementMm = section.reinforcementMm;
@@ -265,6 +266,9 @@ void accumulateMeasurement(
         agg->leftUndercutMm = section.leftUndercutMm;
         agg->rightUndercutMm = section.rightUndercutMm;
         agg->maxUndercutMm = section.maxUndercutMm;
+        // Undercut lengths are frame-level (V2 measureFrame), not section-level.
+        agg->leftUndercutLengthMm = frame.leftUndercutLengthMm;
+        agg->rightUndercutLengthMm = frame.rightUndercutLengthMm;
     } else {
         // Keep the worst-case undercut / mismatch for multi-segment runs.
         if (section.mismatchMm > agg->mismatchMm) {
@@ -281,6 +285,12 @@ void accumulateMeasurement(
             agg->leftUndercutMm = section.leftUndercutMm;
             agg->rightUndercutMm = section.rightUndercutMm;
             agg->includedAngleDeg = section.includedAngleRad * 180.0 / kPi;
+        }
+        if (frame.leftUndercutLengthMm > agg->leftUndercutLengthMm) {
+            agg->leftUndercutLengthMm = frame.leftUndercutLengthMm;
+        }
+        if (frame.rightUndercutLengthMm > agg->rightUndercutLengthMm) {
+            agg->rightUndercutLengthMm = frame.rightUndercutLengthMm;
         }
     }
     ++agg->measuredSegmentCount;
@@ -518,7 +528,7 @@ InspectionResult evaluateWeldSectionInspection(
             return false;
         }
         for (const WeldFrameMeasurement& frame : deviceResult.frames) {
-            accumulateMeasurement(&result.measurement, frame.average);
+            accumulateMeasurement(&result.measurement, frame);
         }
         return true;
     };
@@ -1756,7 +1766,7 @@ InspectionResult aggregateWeldSectionSegments(
                       .arg(segment.errorMessage);
             return result;
         }
-        accumulateMeasurement(&result.measurement, segment.frame.average);
+        accumulateMeasurement(&result.measurement, segment.frame);
         ++measuredOk;
     }
 

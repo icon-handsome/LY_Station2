@@ -52,6 +52,9 @@ public slots:
      */
     void performCapture(const scan_tracking::mech_eye::CaptureRequest& request);
 
+    /// Drain the worker event queue (BlockingQueuedConnection barrier from service).
+    void syncBarrier();
+
 signals:
     /* 采集完成信号
      * @param result 采集结果

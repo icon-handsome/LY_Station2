@@ -1,8 +1,4 @@
-﻿# Runtime output dir (keep Livox network config only)
-bin/*
-!bin/mid360_config.json
-
-# CMake / Build
+﻿# CMake / Build
 build/
 build-*/
 out/
