@@ -32,6 +32,7 @@ struct InspectionMeasurement {
     int innerSurfaceSuccessCount = 0;
     // path3 container total length (algorithm id remains length_volume for compatibility)
     double lengthMm = 0.0;
+    // volumeLiters / volumeRadiusMm：由 path4 内表面给出；path3 不再填容积。
     double volumeLiters = 0.0;
     double volumeRadiusMm = 0.0;
     double fittedOuterRadiusMm = 0.0;

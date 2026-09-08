@@ -193,11 +193,9 @@ void StateMachine::applyBackgroundInspectionResult(
     quint64 generation,
     const InspectionResult& result,
     const QString& triggerLabel,
-    const QString& runCaptureRoot)
+    const QString& /*runCaptureRoot*/)
 {
-    // 按解算启动时的 run 目录落盘；即使本件已 ResultReset，仍保留该次路径结果。
-    saveInspectionResultTxt(result, runCaptureRoot);
-
+    // result.txt 已在后台解算线程落盘；此处只回投 HMI/内存。
     if (!acceptWorkpieceGeneration(generation, triggerLabel + QStringLiteral(".bgDone"))) {
         return;
     }
@@ -380,7 +378,11 @@ void StateMachine::startBackgroundInspectionSolve(
     job.quota = quota;
     job.generation = generation;
     job.triggerLabel = triggerLabel;
-    job.runCaptureRoot = m_scanSegmentCache.runCaptureRoot();
+    // 优先用快照里的 run 目录，避免入队后主线程切路/清缓存导致落盘路径丢空。
+    job.runCaptureRoot = job.cloudSnapshot.runCaptureRoot;
+    if (job.runCaptureRoot.trimmed().isEmpty()) {
+        job.runCaptureRoot = m_scanSegmentCache.runCaptureRoot();
+    }
     job.persistBarrier = m_latestScanPersistBarrier;
 
     std::thread finishedThread;
@@ -509,6 +511,24 @@ void StateMachine::startBackgroundInspectionSolve(
                     }
                     // 解算结束立刻丢掉点云快照，只保留结果回投所需字段。
                     job.cloudSnapshot.clear();
+
+                    // 先落盘再走 HMI 门闩：ResultReset/stop 后仍保留该次路径结果。
+                    {
+                        QString error;
+                        if (!appendInspectionResultToRunFile(runCaptureRoot, result, &error)) {
+                            qWarning(LOG_ALGORITHM).noquote()
+                                << QStringLiteral("result.txt 写入失败：") << error
+                                << QStringLiteral(" pathId=") << result.pathId
+                                << QStringLiteral(" algorithm=") << result.algorithm
+                                << QStringLiteral(" runRoot=") << runCaptureRoot;
+                        } else {
+                            qInfo(LOG_ALGORITHM).noquote()
+                                << QStringLiteral("已追加路径算法结果到 result.txt pathId=")
+                                << result.pathId
+                                << QStringLiteral(" algorithm=") << result.algorithm
+                                << QStringLiteral(" runRoot=") << runCaptureRoot;
+                        }
+                    }
 
                     if (receiver->m_bgSolveAcceptResults.load(std::memory_order_acquire)) {
                         QMetaObject::invokeMethod(

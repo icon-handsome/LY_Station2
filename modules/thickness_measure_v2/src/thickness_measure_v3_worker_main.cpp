@@ -16,6 +16,49 @@
 
 namespace {
 
+// These are intentionally fixed-size POD buffers: the unhandled-exception
+// path must not depend on the C++ heap after the vendor DLL has corrupted it.
+char g_resultPath[MAX_PATH * 4] = {};
+char g_progressPath[MAX_PATH * 4] = {};
+volatile LONG g_currentPair = -1;
+
+void WriteCrashMarker(const EXCEPTION_POINTERS* info)
+{
+    const DWORD code = info != nullptr && info->ExceptionRecord != nullptr
+        ? info->ExceptionRecord->ExceptionCode : 0;
+    const ULONG_PTR address = info != nullptr && info->ExceptionRecord != nullptr
+        ? reinterpret_cast<ULONG_PTR>(info->ExceptionRecord->ExceptionAddress) : 0;
+    char line[512] = {};
+    _snprintf_s(line, sizeof(line), _TRUNCATE,
+                "status=7\nmessage=unhandled exception code=0x%08lX address=0x%p pair=%ld\n"
+                "valid=0\npair_count=0\nsuccess_count=0\n",
+                static_cast<unsigned long>(code), reinterpret_cast<void*>(address),
+                static_cast<long>(g_currentPair));
+    if (g_resultPath[0] != '\0') {
+        FILE* f = nullptr;
+        if (fopen_s(&f, g_resultPath, "wb") == 0 && f != nullptr) {
+            fwrite(line, 1, std::strlen(line), f);
+            fflush(f);
+            fclose(f);
+        }
+    }
+    if (g_progressPath[0] != '\0') {
+        FILE* f = nullptr;
+        if (fopen_s(&f, g_progressPath, "ab") == 0 && f != nullptr) {
+            fwrite("CRASH ", 1, 6, f);
+            fwrite(line, 1, std::strlen(line), f);
+            fflush(f);
+            fclose(f);
+        }
+    }
+}
+
+LONG WINAPI WorkerUnhandledExceptionFilter(EXCEPTION_POINTERS* info)
+{
+    WriteCrashMarker(info);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
 std::string JoinPath(const std::string& dir, const std::string& name)
 {
     if (dir.empty()) {
@@ -72,6 +115,15 @@ bool WriteResult(const std::string& path, const std::map<std::string, std::strin
     }
     out.flush();
     return static_cast<bool>(out);
+}
+
+void WriteProgress(const std::string& path, const std::string& message)
+{
+    std::ofstream out(path, std::ios::binary | std::ios::app);
+    if (out) {
+        out << message << '\n';
+        out.flush();
+    }
 }
 
 [[noreturn]] void ExitWithoutDllTeardown(int exitCode)
@@ -139,6 +191,10 @@ int main(int argc, char* argv[])
     const std::string workDir = argv[1];
     const std::string requestPath = JoinPath(workDir, "request.txt");
     const std::string resultPath = JoinPath(workDir, "result.txt");
+    const std::string progressPath = JoinPath(workDir, "progress.log");
+    strncpy_s(g_resultPath, resultPath.c_str(), _TRUNCATE);
+    strncpy_s(g_progressPath, progressPath.c_str(), _TRUNCATE);
+    SetUnhandledExceptionFilter(WorkerUnhandledExceptionFilter);
 
     std::fprintf(stdout, "thickness-measure-v3-worker start workdir=%s\n", workDir.c_str());
     std::fflush(stdout);
@@ -214,6 +270,8 @@ int main(int argc, char* argv[])
 
     tmv3_status measureStatus = TMV3_OK;
     if (mode == "pair") {
+        InterlockedExchange(&g_currentPair, 0);
+        WriteProgress(progressPath, "PAIR 0 ENTER");
         tmv3_pair_result pair{};
         measureStatus = tmv3_measure_pair(ctx,
                                           views[0].inner.xyz,
@@ -238,10 +296,36 @@ int main(int argc, char* argv[])
                      static_cast<int>(measureStatus),
                      pair.valid,
                      pair.thickness_mm);
+        WriteProgress(progressPath, "PAIR 0 RETURN status=" + std::to_string(static_cast<int>(measureStatus)));
     } else {
+        // Call the public single-pair API explicitly. This mirrors the DLL's
+        // average implementation but leaves a durable marker around each call,
+        // so a crash can be attributed to a specific pair/return boundary.
         tmv3_average_result average{};
-        measureStatus = tmv3_measure_pairs_average(
-            ctx, views.data(), views.size(), &average, message, sizeof(message));
+        average.pair_count = views.size();
+        for (size_t i = 0; i < views.size(); ++i) {
+            InterlockedExchange(&g_currentPair, static_cast<LONG>(i));
+            WriteProgress(progressPath, "PAIR " + std::to_string(i) + " ENTER");
+            tmv3_pair_result pair{};
+            char pairMessage[512] = {};
+            const tmv3_status pairStatus = tmv3_measure_pair(
+                ctx, views[i].inner.xyz, views[i].inner.point_count,
+                views[i].outer.xyz, views[i].outer.point_count,
+                &pair, pairMessage, sizeof(pairMessage));
+            WriteProgress(progressPath, "PAIR " + std::to_string(i) + " RETURN status=" +
+                                         std::to_string(static_cast<int>(pairStatus)));
+            if (pairStatus == TMV3_OK && pair.valid) {
+                average.thickness_mm += pair.thickness_mm;
+                ++average.success_count;
+            } else if (pairMessage[0] != '\0') {
+                strncpy_s(message, pairMessage, _TRUNCATE);
+            }
+        }
+        measureStatus = average.success_count > 0 ? TMV3_OK : TMV3_ERR_MEASURE;
+        if (average.success_count > 0) {
+            average.thickness_mm /= average.success_count;
+            average.valid = 1;
+        }
         resultKv["status"] = std::to_string(static_cast<int>(measureStatus));
         resultKv["message"] = EscapeMessage(message[0] != '\0' ? message : "");
         resultKv["thickness_mm"] = std::to_string(average.thickness_mm);

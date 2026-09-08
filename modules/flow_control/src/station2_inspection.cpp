@@ -1101,19 +1101,6 @@ bool ensureContainerTotalLengthReady(QString* errorMessage)
     return true;
 }
 
-double resolveVolumeRadiusMm(const InspectionQuota& quota)
-{
-    if (const auto* cfgMgr = common::ConfigManager::instance()) {
-        if (const common::ScanPathConfig* path = cfgMgr->findScanPathById(quota.pathId)) {
-            if (path->volumeRadiusMm > 0.0) {
-                return path->volumeRadiusMm;
-            }
-        }
-    }
-    // 与 smoke 默认一致；现场应在 scan_paths JSON 配置 volumeRadiusMm（通常=内径/2）
-    return 600.0;
-}
-
 /// path3 专用：校验 LB 后把各臂段有限点直接写入 mergedXyz，避免「每段临时向量 → 再合并」二次拷贝。
 /// 段顺序与 loadQuotaSegmentClouds 一致（按 localIndex 升序），保证送入 DLL 的点序不变。
 bool mergeArmLengthVolumeClouds(
@@ -1280,14 +1267,12 @@ InspectionResult evaluateLengthVolumeInspection(
         return result;
     }
 
-    // 对照源码：ctl_create_from_ini + 一次 ctl_measure(合并外表面云)；容积由 IPC 用 πr²L 补算。
-    const double volumeRadiusMm = resolveVolumeRadiusMm(quota);
+    // 对照源码：ctl_create_from_ini + 一次 ctl_measure(合并外表面云)；path3 只报长度，容积由 path4 内表面算。
     qInfo(LOG_STATION2_INSPECTION).noquote()
         << QStringLiteral("开始筒体总长测量 pathId=") << quota.pathId
         << QStringLiteral(" name=") << quota.pathName
         << QStringLiteral(" 段数=") << segmentCount
-        << QStringLiteral(" 合并点数=") << static_cast<qulonglong>(mergedCount)
-        << QStringLiteral(" volumeRadiusMm=") << volumeRadiusMm;
+        << QStringLiteral(" 合并点数=") << static_cast<qulonglong>(mergedCount);
 
     ContainerTotalLengthMeasurement measurement;
     ContainerTotalLengthError error;
@@ -1305,17 +1290,12 @@ InspectionResult evaluateLengthVolumeInspection(
         return result;
     }
 
-    const double volumeLiters =
-        kPi * volumeRadiusMm * volumeRadiusMm * measurement.lengthMm / 1.0e6;
-
     result.resultCode = 1;
-    result.measureItemCount = 2;
+    result.measureItemCount = 1;
     result.measurement.qualityCode = 1;
     result.measurement.measuredSegmentCount = segmentCount;
     result.measurement.lengthMm = measurement.lengthMm;
     rememberMeasuredLength(taskId, measurement.lengthMm);
-    result.measurement.volumeLiters = volumeLiters;
-    result.measurement.volumeRadiusMm = volumeRadiusMm;
     result.measurement.fittedOuterRadiusMm = static_cast<double>(measurement.fittedRadiusMm);
     result.measurement.containerLeftEndPositionMm = measurement.leftEndPosition;
     result.measurement.containerRightEndPositionMm = measurement.rightEndPosition;
@@ -1323,12 +1303,10 @@ InspectionResult evaluateLengthVolumeInspection(
     result.measurement.containerFittedRadiusMm = static_cast<double>(measurement.fittedRadiusMm);
     result.measurement.containerIcpConverged = measurement.icpConverged;
     result.message = QStringLiteral(
-                         "pathId=%1 筒体总长 OK：length=%2 mm, volume=%3 L, "
-                         "radius=%4 mm, fittedOuter=%5 mm, segments=%6")
+                         "pathId=%1 筒体总长 OK：length=%2 mm, "
+                         "fittedOuter=%3 mm, segments=%4")
                          .arg(quota.pathId)
                          .arg(measurement.lengthMm, 0, 'f', 3)
-                         .arg(volumeLiters, 0, 'f', 3)
-                         .arg(volumeRadiusMm, 0, 'f', 3)
                          .arg(measurement.fittedRadiusMm, 0, 'f', 3)
                          .arg(segmentCount);
     qInfo(LOG_STATION2_INSPECTION).noquote() << result.message;

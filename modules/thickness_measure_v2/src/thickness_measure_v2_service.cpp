@@ -268,6 +268,20 @@ WorkerRunOutcome RunThicknessWorker(
         outcome.resultKv = LoadKeyValues(resultPath);
     }
 
+    // The worker workdir is auto-removed on return. Preserve its durable
+    // per-pair markers in the host log before QTemporaryDir deletes it.
+    const QString progressPath = QDir(workDir).filePath(QStringLiteral("progress.log"));
+    if (QFileInfo::exists(progressPath)) {
+        QFile progress(progressPath);
+        if (progress.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            const QString trace = QString::fromUtf8(progress.readAll()).trimmed();
+            if (!trace.isEmpty()) {
+                qInfo(LOG_THICKNESS_MEASURE_V2).noquote()
+                    << QStringLiteral("worker progress:\n") << trace;
+            }
+        }
+    }
+
     if (!outcome.resultKv.isEmpty()) {
         const int status = outcome.resultKv.value(QStringLiteral("status")).toInt();
         const QString message = outcome.resultKv.value(QStringLiteral("message"));
@@ -459,30 +473,63 @@ bool ThicknessMeasureV2Service::measurePairsAverage(
         return false;
     }
 
-    const WorkerRunOutcome outcome =
-        RunThicknessWorker(WorkerMode::PairsAverage, m_impl->configPath, pairs);
-    if (!outcome.ok) {
-        FillError(error, outcome.statusCode, outcome.message);
-        // Best-effort fill counts for callers that log success/pair ratios.
-        if (!outcome.resultKv.isEmpty()) {
-            out->thicknessMm = outcome.resultKv.value(QStringLiteral("thickness_mm")).toDouble();
-            out->pairCount =
-                static_cast<size_t>(outcome.resultKv.value(QStringLiteral("pair_count")).toULongLong());
-            out->successCount =
-                static_cast<size_t>(outcome.resultKv.value(QStringLiteral("success_count")).toULongLong());
-            out->valid = false;
-        } else {
-            out->pairCount = static_cast<size_t>(pairs.size());
-            out->successCount = 0;
-            out->valid = false;
+    // One worker process per pair. ONNX/PCL can leave the CRT heap inconsistent
+    // after a successful pair; continuing into pair[1] in the same process then
+    // trips STATUS_HEAP_CORRUPTION (0xC0000374) and loses the already-good
+    // pair[0] result. Fresh processes keep successes isolatable.
+    out->pairCount = static_cast<size_t>(pairs.size());
+    out->successCount = 0;
+    out->thicknessMm = 0.0;
+    out->valid = false;
+
+    double thicknessSum = 0.0;
+    QString lastFailure;
+    int lastFailureStatus = kStatusMeasure;
+
+    for (int i = 0; i < pairs.size(); ++i) {
+        qInfo(LOG_THICKNESS_MEASURE_V2)
+            << "measurePairsAverage: spawning dedicated worker for pair" << i
+            << "/" << pairs.size();
+        const WorkerRunOutcome outcome = RunThicknessWorker(
+            WorkerMode::Pair, m_impl->configPath, QVector<ThicknessV2PairClouds>{pairs[i]});
+        ThicknessV2PairMeasurement pair{};
+        if (outcome.ok && ParsePairResult(outcome.resultKv, &pair) && pair.valid) {
+            thicknessSum += pair.thicknessMm;
+            ++out->successCount;
+            qInfo(LOG_THICKNESS_MEASURE_V2)
+                << "measurePairsAverage pair" << i << "OK thicknessMm=" << pair.thicknessMm
+                << "method=" << pair.method;
+            continue;
         }
-        qWarning(LOG_THICKNESS_MEASURE_V2) << "measurePairsAverage via worker failed:" << outcome.message;
+        lastFailureStatus = outcome.statusCode;
+        lastFailure = outcome.message.isEmpty()
+            ? QStringLiteral("pair %1 failed").arg(i)
+            : QStringLiteral("pair %1: %2").arg(i).arg(outcome.message);
+        qWarning(LOG_THICKNESS_MEASURE_V2) << "measurePairsAverage" << lastFailure;
+    }
+
+    if (out->successCount == 0) {
+        FillError(error, lastFailureStatus, lastFailure.isEmpty()
+            ? QStringLiteral("All thickness pairs failed")
+            : lastFailure);
+        qWarning(LOG_THICKNESS_MEASURE_V2)
+            << "measurePairsAverage via worker failed: 0/" << out->pairCount << "pairs succeeded";
         return false;
     }
 
-    if (!ParseAverageResult(outcome.resultKv, out)) {
-        FillError(error, kStatusMeasure, QStringLiteral("Worker result missing valid average fields"));
-        return false;
+    out->thicknessMm = thicknessSum / static_cast<double>(out->successCount);
+    out->valid = true;
+    if (out->successCount < out->pairCount) {
+        qWarning(LOG_THICKNESS_MEASURE_V2)
+            << "measurePairsAverage partial success"
+            << out->successCount << "/" << out->pairCount
+            << "thicknessMm=" << out->thicknessMm
+            << "lastFailure=" << lastFailure;
+    } else {
+        qInfo(LOG_THICKNESS_MEASURE_V2)
+            << "measurePairsAverage OK"
+            << out->successCount << "/" << out->pairCount
+            << "thicknessMm=" << out->thicknessMm;
     }
     return true;
 }

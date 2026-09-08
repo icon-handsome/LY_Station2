@@ -16,6 +16,9 @@
 ///   inner_<i>=<filename>   inner_<i>_count=<points>
 ///   outer_<i>=<filename>   outer_<i>_count=<points>
 ///
+/// Host measurePairsAverage prefers mode=pair once per pair (fresh process each
+/// time) so a later-pair heap crash cannot erase an earlier valid thickness.
+///
 /// result.txt keys (subset used by host):
 ///   status=<tmv3_status int>
 ///   message=<text>

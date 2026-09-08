@@ -140,9 +140,8 @@ QString formatInspectionResultTextBlock(const InspectionResult& result)
         appendKeyValue(&text, QStringLiteral("innerSurfaceSuccessCount"),
                        static_cast<qint64>(m.innerSurfaceSuccessCount));
     } else if (algorithm == QLatin1String("length_volume")) {
+        // path3：仅落盘长度及相关拟合信息，容积改由 path4 内表面结果给出。
         appendKeyValue(&text, QStringLiteral("lengthMm"), m.lengthMm);
-        appendKeyValue(&text, QStringLiteral("volumeLiters"), m.volumeLiters);
-        appendKeyValue(&text, QStringLiteral("volumeRadiusMm"), m.volumeRadiusMm);
         appendKeyValue(&text, QStringLiteral("fittedOuterRadiusMm"), m.fittedOuterRadiusMm);
         appendKeyValue(&text, QStringLiteral("containerLeftEndPositionMm"),
                        m.containerLeftEndPositionMm);
