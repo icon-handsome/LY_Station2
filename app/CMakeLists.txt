@@ -96,6 +96,7 @@ scan_tracking_deploy_hik_mvs_runtime(scan_tracking)
 scan_tracking_deploy_weld_measure_runtime(scan_tracking)
 # Thickness V3 runs in thickness-measure-v3-worker.exe (process isolation).
 scan_tracking_deploy_thickness_measure_v3_worker(scan_tracking)
+scan_tracking_deploy_thickness_measure_v3_1_worker(scan_tracking)
 scan_tracking_deploy_inner_surface_measure_runtime(scan_tracking)
 scan_tracking_deploy_undercut_length_measure_runtime(scan_tracking)
 scan_tracking_deploy_container_total_length_runtime(scan_tracking)

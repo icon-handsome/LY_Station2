@@ -51,7 +51,14 @@ void FillError(ThicknessV2Error* error, int status, const QString& message)
 
 QString WorkerExecutablePath()
 {
-    return QDir(QCoreApplication::applicationDirPath()).filePath(QString::fromLatin1(kWorkerExeName));
+    const QByteArray selected = qgetenv("SCAN_TRACKING_THICKNESS_WORKER");
+    if (selected.compare("legacy", Qt::CaseInsensitive) == 0) {
+        return QDir(QCoreApplication::applicationDirPath()).filePath(QString::fromLatin1(kWorkerExeName));
+    }
+    if (!selected.isEmpty() && selected.compare("v3_1", Qt::CaseInsensitive) != 0) {
+        return QDir(QCoreApplication::applicationDirPath()).filePath(QString::fromLocal8Bit(selected));
+    }
+    return QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("thickness-measure-v3_1-worker.exe"));
 }
 
 int ResolveTimeoutMs()
@@ -352,7 +359,7 @@ ThicknessMeasureV2Service::~ThicknessMeasureV2Service()
 QString ThicknessMeasureV2Service::defaultConfigPath()
 {
     return QDir(QCoreApplication::applicationDirPath())
-        .filePath(QStringLiteral("config/thickness_measure_v3/thickness_measurement.ini"));
+        .filePath(QStringLiteral("config/thickness_measure_v3_1/thickness_measurement.ini"));
 }
 
 bool ThicknessMeasureV2Service::isReady() const

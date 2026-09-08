@@ -115,3 +115,6 @@ set_target_properties(scan_tracking_path4_offline PROPERTIES
 if(TARGET thickness_measure_v3_worker)
     scan_tracking_deploy_thickness_measure_v3_worker(scan_tracking_path4_offline)
 endif()
+if(TARGET thickness_measure_v3_1_worker)
+    scan_tracking_deploy_thickness_measure_v3_1_worker(scan_tracking_path4_offline)
+endif()
