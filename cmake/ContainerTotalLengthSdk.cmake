@@ -7,6 +7,22 @@ set(
     "Path to the ContainerTotalLength SDK directory (headers/lib/bin)"
 )
 
+option(
+    SCAN_TRACKING_USE_CONTAINER_TOTAL_LENGTH_V22
+    "Use the separately packaged path3 ContainerTotalLength V2.2 SDK"
+    ON
+)
+
+if(SCAN_TRACKING_USE_CONTAINER_TOTAL_LENGTH_V22)
+    set(
+        SCAN_TRACKING_CONTAINER_TOTAL_LENGTH_SDK_DIR
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/container_total_length_v2_2"
+        CACHE PATH
+        "Path to the ContainerTotalLength V2.2 SDK directory (headers/lib/bin)"
+        FORCE
+    )
+endif()
+
 set(_SCAN_TRACKING_CONTAINER_TOTAL_LENGTH_PCL_DLLS
     pcl_common.dll
     pcl_filters.dll
@@ -81,11 +97,16 @@ function(scan_tracking_deploy_container_total_length_runtime target_name)
     endif()
 
     set(_config_dir "${CMAKE_SOURCE_DIR}/config/container_total_length")
-    set(_config_ini "${_config_dir}/config.ini")
-    if(NOT EXISTS "${_config_ini}")
+    if(SCAN_TRACKING_USE_CONTAINER_TOTAL_LENGTH_V22)
         set(_config_ini "${_sdk_dir}/config.ini")
+        set(_config_data_dir "${_sdk_dir}/Data")
+    else()
+        set(_config_ini "${_config_dir}/config.ini")
+        if(NOT EXISTS "${_config_ini}")
+            set(_config_ini "${_sdk_dir}/config.ini")
+        endif()
+        set(_config_data_dir "${_config_dir}/Data")
     endif()
-    set(_config_data_dir "${_config_dir}/Data")
 
     set(_copy_cmds
         COMMAND ${CMAKE_COMMAND} -E copy_if_different

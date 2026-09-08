@@ -46,6 +46,8 @@ third_party/onnxruntime/logs/
 
 # Third party SDK bundles (ignore by default, then un-ignore each tree for IDE visibility)
 third_party/*
+!third_party/inner_surface_measure_v2/
+!third_party/inner_surface_measure_v2/**
 !third_party/CMakeLists.txt
 !third_party/Po_Kou_Ce_Liang/
 !third_party/Po_Kou_Ce_Liang/**
@@ -71,6 +73,8 @@ third_party/*
 !third_party/length_volume_measure/**
 !third_party/container_total_length/
 !third_party/container_total_length/**
+!third_party/container_total_length_v2_2/
+!third_party/container_total_length_v2_2/**
 third_party/Po_Kou_Ce_Liang/x64/
 # Hole: standalone VS2013 local build output only
 third_party/Hole/build_vs2013/
@@ -115,3 +119,12 @@ third_party/MVS/**/bin/
 /_path3_820_stderr.txt
 /_path3_run_offline.py
 /_path4_new_result.txt
+/_deploy_v31_stage2/config/thickness_measure_v3_1
+/_deploy_v31_stage2.zip
+
+# Large template clouds (local deploy only)
+third_party/container_total_length_v2_2/**/*.pcd
+third_party/inner_surface_measure_v2/**/*.pcd
+third_party/container_total_length_v2_2/bin/
+third_party/inner_surface_measure_v2/bin/
+

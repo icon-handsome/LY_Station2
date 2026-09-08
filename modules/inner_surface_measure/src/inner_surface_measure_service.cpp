@@ -2,328 +2,154 @@
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
+#include <QtCore/QFile>
 #include <QtCore/QFileInfo>
-#include <QtCore/QLoggingCategory>
+#include <QtCore/QRegularExpression>
+#include <QtCore/QSaveFile>
+#include <QtCore/QTextStream>
 
 #include <mutex>
+#include <string>
 
-#include "inner_surface_measure_c_api.h"
-
-Q_LOGGING_CATEGORY(LOG_INNER_SURFACE_MEASURE, "inner_surface_measure.service")
+#include "InnerSurfaceMeasure.h"
 
 namespace scan_tracking::inner_surface_measure {
-
 namespace {
+enum ErrorCode { kInvalidArg = 1, kNotInitialized = 2, kConfig = 3, kCloud = 4, kMeasure = 6, kInternal = 7 };
 
-void FillError(InnerSurfaceMeasureError* error, ism_status status, const QString& message)
+void FillError(InnerSurfaceMeasureError* error, int status, const QString& message)
 {
-    if (error == nullptr) {
-        return;
-    }
-    error->statusCode = static_cast<int>(status);
-    error->message = message.isEmpty()
-        ? QString::fromUtf8(ism_status_string(status))
-        : message;
+    if (error) { error->statusCode = status; error->message = message; }
 }
-
-void DestroyContext(ism_context*& ctx)
+void DestroyContext(InnerSurfaceMeasure*& ctx)
 {
-    if (ctx != nullptr) {
-        ism_destroy(ctx);
-        ctx = nullptr;
-    }
+    if (ctx) { DestroyInnerSurfaceMeasure(ctx); ctx = nullptr; }
 }
-
-ism_config ToCApiConfig(const InnerSurfaceConfig& src)
+void FillFrameResult(const ism::MeasurementResult& src, InnerSurfaceFrameMeasurement* dst)
 {
-    ism_config dst;
-    ism_config_default(&dst);
-
-    dst.voxel_size = src.voxelSize;
-    dst.outlier_k = src.outlierK;
-    dst.outlier_std = src.outlierStd;
-    dst.fit_iterations = src.fitIterations;
-    dst.cylinder_inlier_band = src.cylinderInlierBand;
-    dst.section_half_width = src.sectionHalfWidth;
-    dst.icp_max_iterations = src.icpMaxIterations;
-    dst.icp_max_correspondence_distance = src.icpMaxCorrespondenceDistance;
-    dst.icp_transformation_epsilon = src.icpTransformationEpsilon;
-    dst.icp_euclidean_fitness_epsilon = src.icpEuclideanFitnessEpsilon;
-    dst.cylinder_point_x = src.cylinderPointX;
-    dst.cylinder_point_y = src.cylinderPointY;
-    dst.cylinder_point_z = src.cylinderPointZ;
-    dst.cylinder_axis_x = src.cylinderAxisX;
-    dst.cylinder_axis_y = src.cylinderAxisY;
-    dst.cylinder_axis_z = src.cylinderAxisZ;
-    dst.cylinder_radius = src.cylinderRadius;
-    dst.container_length_mm = src.containerLengthMm;
-    return dst;
+    if (!dst) return;
+    dst->diameterMm = src.diameter;
+    dst->circumferenceMm = src.circumference;
+    dst->sectionRoundness[0] = src.sectionRoundness[0];
+    dst->sectionRoundness[1] = src.sectionRoundness[1];
+    dst->sectionRoundness[2] = src.sectionRoundness[2];
+    dst->averageRoundness = src.averageRoundness;
+    dst->icpFitnessScore = 0.0;
+    dst->icpConverged = src.roundnessValid;
+    dst->usedPointCount = src.usedPointCount;
+    dst->valid = src.roundnessValid && src.diameter > 0.0;
 }
-
-void FillFrameResult(const ism_frame_result& src, InnerSurfaceFrameMeasurement* dst)
+bool WritePcd(const QString& path, const float* xyz, size_t count, QString* error)
 {
-    dst->diameterMm = src.diameter_mm;
-    dst->circumferenceMm = src.circumference_mm;
-    dst->sectionRoundness[0] = src.section_roundness[0];
-    dst->sectionRoundness[1] = src.section_roundness[1];
-    dst->sectionRoundness[2] = src.section_roundness[2];
-    dst->averageRoundness = src.average_roundness;
-    dst->icpFitnessScore = src.icp_fitness_score;
-    dst->icpConverged = src.icp_converged != 0;
-    dst->usedPointCount = src.used_point_count;
-    dst->valid = src.valid != 0;
+    if (!xyz || count == 0) { if (error) *error = QStringLiteral("Point cloud is empty"); return false; }
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) { if (error) *error = QStringLiteral("Cannot write point cloud: %1").arg(path); return false; }
+    QTextStream out(&file);
+    out << "# .PCD v0.7 - Point Cloud Data file format\nVERSION 0.7\nFIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nCOUNT 1 1 1\nWIDTH "
+        << count << "\nHEIGHT 1\nVIEWPOINT 0 0 0 1 0 0 0\nPOINTS " << count << "\nDATA ascii\n";
+    for (size_t i = 0; i < count; ++i) out << xyz[i * 3] << ' ' << xyz[i * 3 + 1] << ' ' << xyz[i * 3 + 2] << '\n';
+    if (!file.commit()) { if (error) *error = QStringLiteral("Cannot commit point cloud: %1").arg(path); return false; }
+    return true;
 }
-
+QString ResolvePath(const QString& baseDir, const QString& value)
+{
+    const QFileInfo info(value);
+    return info.isAbsolute() ? info.absoluteFilePath() : QFileInfo(baseDir, value).absoluteFilePath();
+}
+bool WriteRuntimeIni(const QString& sourcePath, const QString& outputPath, const QString& templatePath,
+                     const QString& frame1Path, const QString& frame2Path, double lengthMm, QString* error)
+{
+    QFile source(sourcePath);
+    if (!source.open(QIODevice::ReadOnly | QIODevice::Text)) { if (error) *error = QStringLiteral("Cannot read config: %1").arg(sourcePath); return false; }
+    QString text = QString::fromUtf8(source.readAll());
+    auto replaceKey = [&text](const QString& key, const QString& value) {
+        QRegularExpression re(QStringLiteral("(?m)^(\\s*%1\\s*=).*?$").arg(QRegularExpression::escape(key)));
+        text.replace(re, QStringLiteral("\\1 %2").arg(value));
+    };
+    replaceKey(QStringLiteral("templateCloud"), QDir::toNativeSeparators(templatePath));
+    replaceKey(QStringLiteral("frame1"), QDir::toNativeSeparators(frame1Path));
+    replaceKey(QStringLiteral("frame2"), QDir::toNativeSeparators(frame2Path));
+    if (lengthMm > 0.0) replaceKey(QStringLiteral("containerLength"), QString::number(lengthMm, 'f', 6));
+    QSaveFile output(outputPath);
+    if (!output.open(QIODevice::WriteOnly | QIODevice::Text)) { if (error) *error = QStringLiteral("Cannot write runtime config: %1").arg(outputPath); return false; }
+    output.write(text.toUtf8());
+    return output.commit();
+}
 }  // namespace
 
-struct InnerSurfaceMeasureService::Impl {
-    mutable std::mutex mutex;
-    ism_context* ctx = nullptr;
-    QString configPath;
-};
-
-InnerSurfaceMeasureService::InnerSurfaceMeasureService()
-    : m_impl(new Impl)
-{
-}
-
-InnerSurfaceMeasureService::~InnerSurfaceMeasureService()
-{
-    shutdown();
-    delete m_impl;
-    m_impl = nullptr;
-}
-
-QString InnerSurfaceMeasureService::defaultConfigPath()
-{
-    return QDir(QCoreApplication::applicationDirPath())
-        .filePath(QStringLiteral("config/inner_surface_measure/config.ini"));
-}
-
-bool InnerSurfaceMeasureService::isReady() const
-{
-    if (m_impl == nullptr) {
-        return false;
-    }
-    std::lock_guard<std::mutex> lock(m_impl->mutex);
-    return m_impl->ctx != nullptr;
-}
-
-QString InnerSurfaceMeasureService::configPath() const
-{
-    return m_impl != nullptr ? m_impl->configPath : QString();
-}
+struct InnerSurfaceMeasureService::Impl { mutable std::mutex mutex; InnerSurfaceMeasure* ctx = nullptr; QString configPath; };
+InnerSurfaceMeasureService::InnerSurfaceMeasureService() : m_impl(new Impl) {}
+InnerSurfaceMeasureService::~InnerSurfaceMeasureService() { shutdown(); delete m_impl; m_impl = nullptr; }
+QString InnerSurfaceMeasureService::defaultConfigPath() { return QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("config/inner_surface_measure/config.ini")); }
+bool InnerSurfaceMeasureService::isReady() const { if (!m_impl) return false; std::lock_guard<std::mutex> lock(m_impl->mutex); return m_impl->ctx != nullptr; }
+QString InnerSurfaceMeasureService::configPath() const { return m_impl ? m_impl->configPath : QString(); }
 
 bool InnerSurfaceMeasureService::initializeFromIni(const QString& configPath, InnerSurfaceMeasureError* error)
 {
-    std::lock_guard<std::mutex> lock(m_impl->mutex);
-    DestroyContext(m_impl->ctx);
-    m_impl->configPath.clear();
-
+    std::lock_guard<std::mutex> lock(m_impl->mutex); DestroyContext(m_impl->ctx); m_impl->configPath.clear();
     const QString resolved = configPath.isEmpty() ? defaultConfigPath() : configPath;
-    if (!QFileInfo::exists(resolved)) {
-        FillError(error, ISM_ERR_CONFIG, QStringLiteral("Config not found: %1").arg(resolved));
-        qWarning(LOG_INNER_SURFACE_MEASURE) << "Config missing:" << resolved;
-        return false;
-    }
-
-    const QByteArray pathUtf8 = QDir::toNativeSeparators(resolved).toUtf8();
-    ism_context* ctx = nullptr;
-    const ism_status status = ism_create_from_ini(pathUtf8.constData(), &ctx);
-    if (status != ISM_OK || ctx == nullptr) {
-        FillError(error, status, QString::fromUtf8(ism_status_string(status)));
-        qWarning(LOG_INNER_SURFACE_MEASURE) << "ism_create_from_ini failed:" << ism_status_string(status);
-        return false;
-    }
-
-    m_impl->ctx = ctx;
-    m_impl->configPath = resolved;
-    qInfo(LOG_INNER_SURFACE_MEASURE) << "InnerSurfaceMeasure ready, config:" << resolved;
-    return true;
+    if (!QFileInfo::exists(resolved)) { FillError(error, kConfig, QStringLiteral("Config not found: %1").arg(resolved)); return false; }
+    InnerSurfaceMeasure* ctx = CreateInnerSurfaceMeasure(); std::string detail;
+    const bool ok = ctx && ctx->LoadIni(QDir::toNativeSeparators(resolved).toStdString(), &detail);
+    if (!ok) { DestroyContext(ctx); FillError(error, kConfig, QString::fromStdString(detail)); return false; }
+    m_impl->ctx = ctx; m_impl->configPath = resolved; return true;
 }
-
-bool InnerSurfaceMeasureService::initialize(
-    const InnerSurfaceConfig& config,
-    const float* templateXyz,
-    size_t templateCount,
-    InnerSurfaceMeasureError* error)
+bool InnerSurfaceMeasureService::initialize(const InnerSurfaceConfig&, const float* templateXyz, size_t templateCount, InnerSurfaceMeasureError* error)
 {
+    if (!templateXyz || templateCount == 0) { FillError(error, kInvalidArg, QStringLiteral("Template cloud is empty")); return false; }
     std::lock_guard<std::mutex> lock(m_impl->mutex);
     DestroyContext(m_impl->ctx);
-    m_impl->configPath.clear();
-
-    if (templateXyz == nullptr || templateCount == 0) {
-        FillError(error, ISM_ERR_INVALID_ARG, QStringLiteral("Template cloud is empty"));
+    const QString baseConfig = defaultConfigPath();
+    if (!QFileInfo::exists(baseConfig)) { FillError(error, kConfig, QStringLiteral("Config not found: %1").arg(baseConfig)); return false; }
+    const QString root = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("config/inner_surface_measure/runtime"));
+    QDir().mkpath(root);
+    const QString templ = QDir(root).filePath(QStringLiteral("template.pcd"));
+    const QString ini = QDir(root).filePath(QStringLiteral("template_runtime.ini"));
+    QString detail;
+    if (!WritePcd(templ, templateXyz, templateCount, &detail) ||
+        !WriteRuntimeIni(baseConfig, ini, templ, templ, templ, 0.0, &detail)) {
+        FillError(error, kConfig, detail);
         return false;
     }
-
-    const ism_config apiConfig = ToCApiConfig(config);
-    ism_context* ctx = nullptr;
-    const ism_status status = ism_create(&apiConfig, templateXyz, templateCount, &ctx);
-    if (status != ISM_OK || ctx == nullptr) {
-        FillError(error, status, QString::fromUtf8(ism_status_string(status)));
-        qWarning(LOG_INNER_SURFACE_MEASURE) << "ism_create failed:" << ism_status_string(status);
+    InnerSurfaceMeasure* ctx = CreateInnerSurfaceMeasure();
+    std::string loadError;
+    if (!ctx || !ctx->LoadIni(QDir::toNativeSeparators(ini).toStdString(), &loadError)) {
+        DestroyContext(ctx);
+        FillError(error, kConfig, QString::fromStdString(loadError));
         return false;
     }
-
     m_impl->ctx = ctx;
-    qInfo(LOG_INNER_SURFACE_MEASURE) << "InnerSurfaceMeasure ready from memory template";
+    m_impl->configPath = ini;
     return true;
 }
+void InnerSurfaceMeasureService::shutdown() { if (!m_impl) return; std::lock_guard<std::mutex> lock(m_impl->mutex); DestroyContext(m_impl->ctx); m_impl->configPath.clear(); }
+bool InnerSurfaceMeasureService::measureFrame(const float*, size_t, InnerSurfaceFrameMeasurement*, InnerSurfaceMeasureError* error)
+{ FillError(error, kInternal, QStringLiteral("The path4 V2 algorithm requires two frames")); return false; }
+bool InnerSurfaceMeasureService::measureTwoFramesAverage(const float* a, size_t ac, const float* b, size_t bc,
+    InnerSurfaceAverageMeasurement* avg, InnerSurfaceFrameMeasurement* f1, InnerSurfaceFrameMeasurement* f2, InnerSurfaceMeasureError* error)
+{ return measureTwoFramesAverageWithLength(a, ac, b, bc, 0.0, avg, f1, f2, error); }
 
-void InnerSurfaceMeasureService::shutdown()
+bool InnerSurfaceMeasureService::measureTwoFramesAverageWithLength(const float* frame1Xyz, size_t frame1Count,
+    const float* frame2Xyz, size_t frame2Count, double measuredLengthMm, InnerSurfaceAverageMeasurement* outAverage,
+    InnerSurfaceFrameMeasurement* outFrame1, InnerSurfaceFrameMeasurement* outFrame2, InnerSurfaceMeasureError* error)
 {
-    if (m_impl == nullptr) {
-        return;
-    }
+    if (!outAverage || !frame1Xyz || !frame2Xyz || frame1Count == 0 || frame2Count == 0) { FillError(error, kInvalidArg, QStringLiteral("Invalid path4 frame or output")); return false; }
     std::lock_guard<std::mutex> lock(m_impl->mutex);
-    DestroyContext(m_impl->ctx);
-    m_impl->configPath.clear();
+    if (!m_impl->ctx || m_impl->configPath.isEmpty()) { FillError(error, kNotInitialized, QStringLiteral("InnerSurfaceMeasureService not initialized")); return false; }
+    const QString root = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("config/inner_surface_measure/runtime")); QDir().mkpath(root);
+    const QString p1 = QDir(root).filePath(QStringLiteral("frame1.pcd")); const QString p2 = QDir(root).filePath(QStringLiteral("frame2.pcd")); const QString ini = QDir(root).filePath(QStringLiteral("runtime.ini")); QString detail;
+    if (!WritePcd(p1, frame1Xyz, frame1Count, &detail) || !WritePcd(p2, frame2Xyz, frame2Count, &detail)) { FillError(error, kCloud, detail); return false; }
+    QFile source(m_impl->configPath); if (!source.open(QIODevice::ReadOnly | QIODevice::Text)) { FillError(error, kConfig, QStringLiteral("Cannot read config")); return false; }
+    const QString configText = QString::fromUtf8(source.readAll()); const auto match = QRegularExpression(QStringLiteral("(?m)^\\s*templateCloud\\s*=\\s*(.*?)\\s*$")).match(configText);
+    if (!match.hasMatch()) { FillError(error, kConfig, QStringLiteral("templateCloud is missing from config")); return false; }
+    const QString templ = ResolvePath(QFileInfo(m_impl->configPath).absolutePath(), match.captured(1).trimmed());
+    if (!WriteRuntimeIni(m_impl->configPath, ini, templ, p1, p2, measuredLengthMm, &detail)) { FillError(error, kConfig, detail); return false; }
+    InnerSurfaceMeasure* run = CreateInnerSurfaceMeasure(); std::string runError; const bool loaded = run && run->LoadIni(QDir::toNativeSeparators(ini).toStdString(), &runError);
+    ism::MeasurementResult frames[2]{}; double diameter = 0.0, circumference = 0.0, roundness = 0.0, volume = 0.0;
+    const bool measured = loaded && run->Measure(frames, &diameter, &circumference, &roundness, &volume, &runError); if (run) DestroyInnerSurfaceMeasure(run);
+    if (!measured) { FillError(error, kMeasure, QString::fromStdString(runError)); return false; }
+    outAverage->diameterMm = diameter; outAverage->circumferenceMm = circumference; outAverage->roundness = roundness; outAverage->volumeLiters = volume;
+    outAverage->containerLengthMm = measuredLengthMm > 0.0 ? measuredLengthMm : m_impl->ctx->ContainerLength(); outAverage->valid = diameter > 0.0 && frames[0].roundnessValid && frames[1].roundnessValid;
+    FillFrameResult(frames[0], outFrame1); FillFrameResult(frames[1], outFrame2); return outAverage->valid;
 }
-
-bool InnerSurfaceMeasureService::measureFrame(
-    const float* scanXyz,
-    size_t scanCount,
-    InnerSurfaceFrameMeasurement* out,
-    InnerSurfaceMeasureError* error)
-{
-    if (out == nullptr) {
-        FillError(error, ISM_ERR_INVALID_ARG, QStringLiteral("out is null"));
-        return false;
-    }
-
-    std::lock_guard<std::mutex> lock(m_impl->mutex);
-    if (m_impl->ctx == nullptr) {
-        FillError(error, ISM_ERR_NOT_INITIALIZED, QStringLiteral("InnerSurfaceMeasureService not initialized"));
-        return false;
-    }
-
-    ism_frame_result result{};
-    char message[512] = {0};
-    const ism_status status = ism_measure_frame(
-        m_impl->ctx,
-        scanXyz,
-        scanCount,
-        &result,
-        message,
-        sizeof(message));
-
-    if (status != ISM_OK) {
-        FillError(
-            error,
-            status,
-            message[0] != '\0' ? QString::fromUtf8(message) : QString::fromUtf8(ism_status_string(status)));
-        qWarning(LOG_INNER_SURFACE_MEASURE) << "ism_measure_frame failed:" << message;
-        return false;
-    }
-
-    FillFrameResult(result, out);
-    return true;
-}
-
-bool InnerSurfaceMeasureService::measureTwoFramesAverage(
-    const float* frame1Xyz,
-    size_t frame1Count,
-    const float* frame2Xyz,
-    size_t frame2Count,
-    InnerSurfaceAverageMeasurement* outAverage,
-    InnerSurfaceFrameMeasurement* outFrame1,
-    InnerSurfaceFrameMeasurement* outFrame2,
-    InnerSurfaceMeasureError* error)
-{
-    if (outAverage == nullptr) {
-        FillError(error, ISM_ERR_INVALID_ARG, QStringLiteral("outAverage is null"));
-        return false;
-    }
-
-    std::lock_guard<std::mutex> lock(m_impl->mutex);
-    if (m_impl->ctx == nullptr) {
-        FillError(error, ISM_ERR_NOT_INITIALIZED, QStringLiteral("InnerSurfaceMeasureService not initialized"));
-        return false;
-    }
-
-    ism_average_result average{};
-    ism_frame_result frame1{};
-    ism_frame_result frame2{};
-    char message[512] = {0};
-    const ism_status status = ism_measure_two_frames_average(
-        m_impl->ctx,
-        frame1Xyz,
-        frame1Count,
-        frame2Xyz,
-        frame2Count,
-        &average,
-        &frame1,
-        &frame2,
-        message,
-        sizeof(message));
-
-    if (status != ISM_OK) {
-        FillError(
-            error,
-            status,
-            message[0] != '\0' ? QString::fromUtf8(message) : QString::fromUtf8(ism_status_string(status)));
-        qWarning(LOG_INNER_SURFACE_MEASURE) << "ism_measure_two_frames_average failed:" << message;
-        return false;
-    }
-
-    outAverage->diameterMm = average.diameter_mm;
-    outAverage->circumferenceMm = average.circumference_mm;
-    outAverage->roundness = average.roundness;
-    outAverage->volumeLiters = average.volume_liters;
-    outAverage->containerLengthMm = average.container_length_mm;
-    outAverage->valid = average.valid != 0;
-
-    if (outFrame1 != nullptr) {
-        FillFrameResult(frame1, outFrame1);
-    }
-    if (outFrame2 != nullptr) {
-        FillFrameResult(frame2, outFrame2);
-    }
-    return true;
-}
-
-bool InnerSurfaceMeasureService::measureTwoFramesAverageWithLength(
-    const float* frame1Xyz,
-    size_t frame1Count,
-    const float* frame2Xyz,
-    size_t frame2Count,
-    double measuredLengthMm,
-    InnerSurfaceAverageMeasurement* outAverage,
-    InnerSurfaceFrameMeasurement* outFrame1,
-    InnerSurfaceFrameMeasurement* outFrame2,
-    InnerSurfaceMeasureError* error)
-{
-    if (outAverage == nullptr) {
-        FillError(error, ISM_ERR_INVALID_ARG, QStringLiteral("outAverage is null"));
-        return false;
-    }
-    std::lock_guard<std::mutex> lock(m_impl->mutex);
-    if (m_impl->ctx == nullptr) {
-        FillError(error, ISM_ERR_NOT_INITIALIZED, QStringLiteral("InnerSurfaceMeasureService not initialized"));
-        return false;
-    }
-    ism_average_result average{};
-    ism_frame_result frame1{};
-    ism_frame_result frame2{};
-    char message[512] = {0};
-    const ism_status status = ism_measure_two_frames_average_with_length(
-        m_impl->ctx, frame1Xyz, frame1Count, frame2Xyz, frame2Count,
-        measuredLengthMm, &average, &frame1, &frame2, message, sizeof(message));
-    if (status != ISM_OK) {
-        FillError(error, status, message[0] != '\0' ? QString::fromUtf8(message)
-                                                   : QString::fromUtf8(ism_status_string(status)));
-        return false;
-    }
-    outAverage->diameterMm = average.diameter_mm;
-    outAverage->circumferenceMm = average.circumference_mm;
-    outAverage->roundness = average.roundness;
-    outAverage->volumeLiters = average.volume_liters;
-    outAverage->containerLengthMm = average.container_length_mm;
-    outAverage->valid = average.valid != 0;
-    if (outFrame1 != nullptr) FillFrameResult(frame1, outFrame1);
-    if (outFrame2 != nullptr) FillFrameResult(frame2, outFrame2);
-    return true;
-}
-
 }  // namespace scan_tracking::inner_surface_measure

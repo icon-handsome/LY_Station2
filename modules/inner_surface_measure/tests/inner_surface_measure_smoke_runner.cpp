@@ -285,8 +285,7 @@ int main(int argc, char* argv[])
 
     InnerSurfaceMeasureService service;
     InnerSurfaceMeasureError error;
-    const InnerSurfaceConfig config = MakeConfigFromIniSample();
-    if (!service.initialize(config, templateXyz.data(), nTemplate, &error)) {
+    if (!service.initializeFromIni(InnerSurfaceMeasureService::defaultConfigPath(), &error)) {
         std::fprintf(stderr, "initialize failed: %s (code=%d)\n",
                      qPrintable(error.message), error.statusCode);
         return 3;

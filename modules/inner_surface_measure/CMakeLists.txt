@@ -1,4 +1,5 @@
-scan_tracking_require_inner_surface_measure_sdk()
+include(InnerSurfaceMeasureV2Sdk)
+scan_tracking_require_inner_surface_measure_v2_sdk()
 
 add_library(scan_tracking_inner_surface_measure STATIC
     src/inner_surface_measure_service.cpp
@@ -19,7 +20,7 @@ target_link_libraries(scan_tracking_inner_surface_measure
     PUBLIC
         Qt5::Core
     PRIVATE
-        InnerSurfaceMeasureSdk::Api
+        InnerSurfaceMeasureV2Sdk::Api
 )
 
 target_compile_features(scan_tracking_inner_surface_measure PUBLIC cxx_std_17)
@@ -39,4 +40,4 @@ set_target_properties(scan_tracking_inner_surface_measure_smoke PROPERTIES
     FOLDER "tests"
 )
 
-scan_tracking_deploy_inner_surface_measure_runtime(scan_tracking_inner_surface_measure_smoke)
+scan_tracking_deploy_inner_surface_measure_v2_runtime(scan_tracking_inner_surface_measure_smoke)
