@@ -59,6 +59,16 @@ function(scan_tracking_require_container_total_length_sdk)
         endif()
     endforeach()
 
+    set(_bin_release "${_sdk_dir}/bin/Release")
+    foreach(_pcl_dll IN LISTS _SCAN_TRACKING_CONTAINER_TOTAL_LENGTH_PCL_DLLS)
+        set(_pcl_path "${_bin_release}/${_pcl_dll}")
+        if(NOT EXISTS "${_pcl_path}")
+            message(FATAL_ERROR
+                "ContainerTotalLength SDK PCL runtime missing: ${_pcl_path}\n"
+                "Copy PCL 1.12.0 Release DLLs into ${_bin_release}, or re-run the algorithm repo packaging script.")
+        endif()
+    endforeach()
+
     if(NOT EXISTS "${_debug_lib}")
         set(_debug_lib "${_release_lib}")
     endif()

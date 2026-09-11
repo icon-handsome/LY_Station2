@@ -1,0 +1,25 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="D:\work\LY\IPC_Station2\third_party\container_total_length_v2_2\src\ContainerTotalLengthApi.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\work\LY\IPC_Station2\third_party\container_total_length_v2_2\src\Measurement.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\work\LY\IPC_Station2\third_party\container_total_length_v2_2\src\PointCloudIO.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\work\LY\IPC_Station2\third_party\container_total_length_v2_2\src\SimplePcdIo.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="D:\work\LY\IPC_Station2\third_party\container_total_length_v2_2\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{8CAF0B1C-23EE-30DE-A1ED-D7CBCD063A57}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

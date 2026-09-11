@@ -1,0 +1,10 @@
+^D:\WORK\LY\IPC_STATION2\THIRD_PARTY\CONTAINER_TOTAL_LENGTH_V2_2\_BUILD\CMAKEFILES\139F3B79EFF576DA4D30F34EECBCDFB4\GENERATE.STAMP.RULE
+setlocal
+C:\Users\wyx\miniconda3\Library\bin\cmake.exe -SD:/work/LY/IPC_Station2/third_party/container_total_length_v2_2 -BD:/work/LY/IPC_Station2/third_party/container_total_length_v2_2/_build --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file D:/work/LY/IPC_Station2/third_party/container_total_length_v2_2/_build/ContainerTotalLengthV22.slnx
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

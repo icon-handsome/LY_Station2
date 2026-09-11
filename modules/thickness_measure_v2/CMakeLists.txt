@@ -84,11 +84,14 @@ function(scan_tracking_deploy_thickness_measure_v3_1_worker target)
         message(FATAL_ERROR "thickness_measure_v3_1_worker target missing")
     endif()
     add_dependencies(${target} thickness_measure_v3_1_worker)
+    # Worker exe must live beside its PCL 1.15 DLLs (private dir), not beside path3 PCL 1.12.
     add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:${target}>/${SCAN_TRACKING_THICKNESS_V3_1_WORKER_RELDIR}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "$<TARGET_FILE:thickness_measure_v3_1_worker>"
-            "$<TARGET_FILE_DIR:${target}>"
-        COMMENT "Deploying thickness-measure-v3_1-worker beside ${target}")
+            "$<TARGET_FILE_DIR:${target}>/${SCAN_TRACKING_THICKNESS_V3_1_WORKER_RELDIR}"
+        COMMENT "Deploying thickness-measure-v3_1-worker into ${SCAN_TRACKING_THICKNESS_V3_1_WORKER_RELDIR}")
     scan_tracking_deploy_thickness_measure_v3_1_runtime(${target})
 endfunction()
 

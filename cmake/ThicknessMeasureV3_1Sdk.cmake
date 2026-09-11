@@ -6,6 +6,9 @@ set(SCAN_TRACKING_THICKNESS_MEASURE_V3_1_SDK_DIR
 set(SCAN_TRACKING_PCL_ROOT "C:/Program Files/PCL 1.15.1" CACHE PATH
     "PCL installation used by the ThicknessMeasurement V3.1 worker")
 
+# Private runtime dir beside the host exe. Keeps PCL 1.15.1 away from path3's PCL 1.12.
+set(SCAN_TRACKING_THICKNESS_V3_1_WORKER_RELDIR "workers/thickness_v3_1")
+
 function(scan_tracking_require_thickness_measure_v3_1_sdk)
     if(TARGET ThicknessMeasureV3_1Sdk::Api)
         return()
@@ -32,25 +35,25 @@ endfunction()
 function(scan_tracking_deploy_thickness_measure_v3_1_runtime target)
     scan_tracking_require_thickness_measure_v3_1_sdk()
     get_property(d GLOBAL PROPERTY SCAN_TRACKING_THICKNESS_MEASURE_V3_1_SDK_DIR)
-    set(_pcl_dlls
-        pcl_common.dll pcl_io.dll pcl_filters.dll pcl_sample_consensus.dll
-        pcl_features.dll pcl_search.dll pcl_kdtree.dll pcl_octree.dll
-        pcl_registration.dll flann_cpp.dll onnxruntime.dll
-        msvcp140.dll msvcp140_1.dll msvcp140_2.dll msvcp140_atomic_wait.dll
-        msvcp140_codecvt_ids.dll concrt140.dll)
+    set(_worker_dir "$<TARGET_FILE_DIR:${target}>/${SCAN_TRACKING_THICKNESS_V3_1_WORKER_RELDIR}")
+
+    # Config stays under the host tree (absolute path passed in request.txt).
+    # DLL/runtime goes only into the private worker dir so path3 PCL 1.12 is not overwritten.
     set(_commands
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_worker_dir}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${d}/bin/Release/ThicknessMeasurement.dll" "$<TARGET_FILE_DIR:${target}>"
+            "${d}/bin/Release/ThicknessMeasurement.dll" "${_worker_dir}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${d}/bin/Release/ThicknessMeasurementDemo.exe" "$<TARGET_FILE_DIR:${target}>"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target}>/config/thickness_measure_v3_1"
+            "${d}/bin/Release/ThicknessMeasurementDemo.exe" "${_worker_dir}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:${target}>/config/thickness_measure_v3_1"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${d}/config/thickness_measurement.ini"
             "$<TARGET_FILE_DIR:${target}>/config/thickness_measure_v3_1/thickness_measurement.ini")
     file(GLOB _runtime_dlls "${d}/bin/Release/*.dll")
     foreach(runtime_dll IN LISTS _runtime_dlls)
         list(APPEND _commands COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${runtime_dll}" "$<TARGET_FILE_DIR:${target}>")
+            "${runtime_dll}" "${_worker_dir}")
     endforeach()
     if(EXISTS "${d}/Data")
         list(APPEND _commands COMMAND ${CMAKE_COMMAND} -E make_directory
@@ -63,5 +66,5 @@ function(scan_tracking_deploy_thickness_measure_v3_1_runtime target)
             "$<TARGET_FILE_DIR:${target}>/config/Data")
     endif()
     add_custom_command(TARGET ${target} POST_BUILD ${_commands}
-        COMMENT "Deploying ThicknessMeasurement V3.1 runtime")
+        COMMENT "Deploying ThicknessMeasurement V3.1 runtime into ${SCAN_TRACKING_THICKNESS_V3_1_WORKER_RELDIR}")
 endfunction()

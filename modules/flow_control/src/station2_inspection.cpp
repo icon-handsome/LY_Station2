@@ -7,8 +7,11 @@
 
 #include "scan_tracking/common/config_manager.h"
 
+#include <QtCore/QDir>
 #include <QtCore/QElapsedTimer>
+#include <QtCore/QFile>
 #include <QtCore/QLoggingCategory>
+#include <QtCore/QTextStream>
 #include <QtCore/QVector>
 
 #include <algorithm>
@@ -40,40 +43,146 @@ constexpr quint16 kNgReasonAlgorithmUnsupported = 1u << 4;
 
 constexpr double kPi = 3.14159265358979323846;
 
-// 同一 taskId 内，length_volume 路径产出的实测长度供内表面容积计算复用。
+// path3 length_volume 实测筒体长度：供同一次运行的 path4 内表面容积复用。
+// PLC 常不写 taskId（=0），因此不能只按 taskId 索引；同时落盘到 run 根，避免仅内存丢失。
+constexpr const char* kMeasuredLengthFileName = "container_length_mm.txt";
+
 std::mutex& measuredLengthCacheMutex()
 {
     static std::mutex mutex;
     return mutex;
 }
 
-std::map<quint32, double>& measuredLengthCache()
+std::map<quint32, double>& measuredLengthCacheByTask()
 {
     static std::map<quint32, double> cache;
     return cache;
 }
 
-void rememberMeasuredLength(quint32 taskId, double lengthMm)
+QString& measuredLengthLatestRunRoot()
 {
-    if (taskId == 0 || lengthMm <= 0.0) {
+    static QString runRoot;
+    return runRoot;
+}
+
+double& measuredLengthLatestMm()
+{
+    static double lengthMm = 0.0;
+    return lengthMm;
+}
+
+bool writeMeasuredLengthFile(const QString& runRoot, double lengthMm, QString* errorMessage)
+{
+    if (runRoot.trimmed().isEmpty() || lengthMm <= 0.0) {
+        return false;
+    }
+    QDir().mkpath(runRoot);
+    const QString path = QDir(runRoot).filePath(QString::fromLatin1(kMeasuredLengthFileName));
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+        if (errorMessage != nullptr) {
+            *errorMessage = file.errorString();
+        }
+        return false;
+    }
+    QTextStream out(&file);
+    out.setRealNumberNotation(QTextStream::FixedNotation);
+    out.setRealNumberPrecision(6);
+    out << lengthMm << '\n';
+    return true;
+}
+
+double readMeasuredLengthFile(const QString& runRoot)
+{
+    if (runRoot.trimmed().isEmpty()) {
+        return 0.0;
+    }
+    const QString path = QDir(runRoot).filePath(QString::fromLatin1(kMeasuredLengthFileName));
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return 0.0;
+    }
+    bool ok = false;
+    const double value = QString::fromUtf8(file.readAll()).trimmed().toDouble(&ok);
+    return (ok && value > 0.0) ? value : 0.0;
+}
+
+void rememberMeasuredLength(quint32 taskId, double lengthMm, const QString& runRoot = QString())
+{
+    if (lengthMm <= 0.0) {
         return;
     }
-    std::lock_guard<std::mutex> lock(measuredLengthCacheMutex());
-    measuredLengthCache()[taskId] = lengthMm;
-    // 防止长期运行时任务结果无限增长；保留最近的有限窗口。
-    while (measuredLengthCache().size() > 64) {
-        measuredLengthCache().erase(measuredLengthCache().begin());
+    {
+        std::lock_guard<std::mutex> lock(measuredLengthCacheMutex());
+        if (taskId != 0) {
+            measuredLengthCacheByTask()[taskId] = lengthMm;
+            while (measuredLengthCacheByTask().size() > 64) {
+                measuredLengthCacheByTask().erase(measuredLengthCacheByTask().begin());
+            }
+        }
+        measuredLengthLatestMm() = lengthMm;
+        if (!runRoot.trimmed().isEmpty()) {
+            measuredLengthLatestRunRoot() = runRoot;
+        }
+    }
+
+    if (!runRoot.trimmed().isEmpty()) {
+        QString writeError;
+        if (!writeMeasuredLengthFile(runRoot, lengthMm, &writeError)) {
+            qWarning(LOG_STATION2_INSPECTION).noquote()
+                << QStringLiteral("写入 path3 实测长度失败 runRoot=") << runRoot
+                << QStringLiteral(" err=") << writeError;
+        } else {
+            qInfo(LOG_STATION2_INSPECTION).noquote()
+                << QStringLiteral("已记录 path3 实测长度 lengthMm=") << lengthMm
+                << QStringLiteral(" taskId=") << taskId
+                << QStringLiteral(" file=")
+                << QDir(runRoot).filePath(QString::fromLatin1(kMeasuredLengthFileName));
+        }
+    } else {
+        qInfo(LOG_STATION2_INSPECTION).noquote()
+            << QStringLiteral("已记录 path3 实测长度（仅内存） lengthMm=") << lengthMm
+            << QStringLiteral(" taskId=") << taskId;
     }
 }
 
-double measuredLengthForTask(quint32 taskId)
+double measuredLengthForTask(quint32 taskId, const QString& runRoot = QString())
 {
-    if (taskId == 0) {
-        return 0.0;
+    {
+        std::lock_guard<std::mutex> lock(measuredLengthCacheMutex());
+        if (taskId != 0) {
+            const auto it = measuredLengthCacheByTask().find(taskId);
+            if (it != measuredLengthCacheByTask().end() && it->second > 0.0) {
+                return it->second;
+            }
+        }
+        if (!runRoot.trimmed().isEmpty() &&
+            runRoot == measuredLengthLatestRunRoot() &&
+            measuredLengthLatestMm() > 0.0) {
+            return measuredLengthLatestMm();
+        }
+        // taskId=0 且未绑定 run 时，仍允许使用最近一次 path3 结果（同进程同班次）。
+        if (taskId == 0 && runRoot.trimmed().isEmpty() && measuredLengthLatestMm() > 0.0) {
+            return measuredLengthLatestMm();
+        }
     }
+
+    const double fromFile = readMeasuredLengthFile(runRoot);
+    if (fromFile > 0.0) {
+        std::lock_guard<std::mutex> lock(measuredLengthCacheMutex());
+        measuredLengthLatestMm() = fromFile;
+        if (!runRoot.trimmed().isEmpty()) {
+            measuredLengthLatestRunRoot() = runRoot;
+        }
+        if (taskId != 0) {
+            measuredLengthCacheByTask()[taskId] = fromFile;
+        }
+        return fromFile;
+    }
+
+    // 最后兜底：同进程最近一次 path3（覆盖 PLC taskId=0 且 runRoot 暂未对齐的情况）。
     std::lock_guard<std::mutex> lock(measuredLengthCacheMutex());
-    const auto it = measuredLengthCache().find(taskId);
-    return it == measuredLengthCache().end() ? 0.0 : it->second;
+    return measuredLengthLatestMm() > 0.0 ? measuredLengthLatestMm() : 0.0;
 }
 
 void fillPathMeta(InspectionResult* result, const InspectionQuota& quota)
@@ -963,10 +1072,32 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
             << "success=" << average.successCount << "/" << average.pairCount;
     }
 
-    const double measuredLengthMm = measuredLengthForTask(taskId);
+    const double measuredLengthMm =
+        measuredLengthForTask(taskId, cache.runCaptureRoot());
 
     // --- 内表面：严格对照源码（exactly 2 帧 → ism_measure_two_frames_average）---
     if (hasInnerEnds) {
+        if (measuredLengthMm <= 0.0) {
+            result.resultCode = 2;
+            result.ngReasonWord0 = kNgReasonAlgorithmFailed;
+            result.measurement.qualityCode = 2;
+            result.measureItemCount = static_cast<quint16>(
+                (result.measurement.thicknessSuccessCount > 0 ? 1 : 0) + 1);
+            result.measurement.innerSurfacePairCount = 1;
+            result.measurement.innerSurfaceSuccessCount = 0;
+            result.message = QStringLiteral(
+                "pathId=%1 内表面容积缺少 path3 实测筒体长度（lengthSource 不可用）。"
+                "请先完成 path3/length_volume 测量；禁止使用 config.ini 兜底长度。 "
+                "taskId=%2 runRoot=%3")
+                                 .arg(quota.pathId)
+                                 .arg(taskId)
+                                 .arg(cache.runCaptureRoot().isEmpty()
+                                          ? QStringLiteral("(empty)")
+                                          : cache.runCaptureRoot());
+            qWarning(LOG_STATION2_INSPECTION).noquote() << result.message;
+            return result;
+        }
+
         QString initError;
         if (!ensureInnerSurfaceMeasureReady(&initError)) {
             result.resultCode = 2;
@@ -981,28 +1112,21 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
 
         qInfo(LOG_STATION2_INSPECTION).noquote()
             << QStringLiteral("inner_surface ") << innerEndsDetail
-            << QStringLiteral(" available=") << innerAvailableCount;
+            << QStringLiteral(" available=") << innerAvailableCount
+            << QStringLiteral(" measuredLengthMm=") << measuredLengthMm
+            << QStringLiteral(" lengthSource=path3_measured");
 
         scan_tracking::inner_surface_measure::InnerSurfaceAverageMeasurement avg;
         scan_tracking::inner_surface_measure::InnerSurfaceFrameMeasurement frame1;
         scan_tracking::inner_surface_measure::InnerSurfaceFrameMeasurement frame2;
         scan_tracking::inner_surface_measure::InnerSurfaceMeasureError error;
-        const bool innerMeasureOk = measuredLengthMm > 0.0
-            ? sharedInnerSurfaceMeasureService().measureTwoFramesAverageWithLength(
+        const bool innerMeasureOk =
+            sharedInnerSurfaceMeasureService().measureTwoFramesAverageWithLength(
                 innerFrame1->xyz.data(),
                 static_cast<size_t>(innerFrame1->finiteCount),
                 innerFrame2->xyz.data(),
                 static_cast<size_t>(innerFrame2->finiteCount),
                 measuredLengthMm,
-                &avg,
-                &frame1,
-                &frame2,
-                &error)
-            : sharedInnerSurfaceMeasureService().measureTwoFramesAverage(
-                innerFrame1->xyz.data(),
-                static_cast<size_t>(innerFrame1->finiteCount),
-                innerFrame2->xyz.data(),
-                static_cast<size_t>(innerFrame2->finiteCount),
                 &avg,
                 &frame1,
                 &frame2,
@@ -1028,8 +1152,8 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
         result.measurement.innerRoundness = avg.roundness;
         result.measurement.innerSurfacePairCount = 1;
         result.measurement.innerSurfaceSuccessCount = 1;
-        result.measurement.lengthMm = avg.containerLengthMm;
-        if (avg.containerLengthMm > 0.0 && avg.diameterMm > 0.0) {
+        result.measurement.lengthMm = measuredLengthMm;
+        if (measuredLengthMm > 0.0 && avg.diameterMm > 0.0) {
             result.measurement.volumeLiters = avg.volumeLiters;
             result.measurement.volumeRadiusMm = avg.diameterMm * 0.5;
         }
@@ -1040,8 +1164,8 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
             << "circumference=" << avg.circumferenceMm
             << "roundness=" << avg.roundness
             << "volumeL=" << avg.volumeLiters
-            << "containerLengthMm=" << avg.containerLengthMm
-            << "lengthSource=" << (measuredLengthMm > 0.0 ? "task_length_volume" : "config_fallback")
+            << "containerLengthMm=" << measuredLengthMm
+            << "lengthSource=path3_measured"
             << "frame1.valid=" << frame1.valid
             << "frame2.valid=" << frame2.valid;
     }
@@ -1072,9 +1196,8 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
                                                 .arg(innerFrame2->localIndex)
                                           : QStringLiteral("-"))
                          .arg(result.measurement.lengthMm, 0, 'f', 3)
-                         .arg(measuredLengthMm > 0.0
-                                  ? QStringLiteral("task_length_volume")
-                                  : QStringLiteral("config_fallback"));
+                         .arg(hasInnerEnds ? QStringLiteral("path3_measured")
+                                          : QStringLiteral("n/a"));
     return result;
 }
 
@@ -1295,7 +1418,7 @@ InspectionResult evaluateLengthVolumeInspection(
     result.measurement.qualityCode = 1;
     result.measurement.measuredSegmentCount = segmentCount;
     result.measurement.lengthMm = measurement.lengthMm;
-    rememberMeasuredLength(taskId, measurement.lengthMm);
+    rememberMeasuredLength(taskId, measurement.lengthMm, cache.runCaptureRoot());
     result.measurement.fittedOuterRadiusMm = static_cast<double>(measurement.fittedRadiusMm);
     result.measurement.containerLeftEndPositionMm = measurement.leftEndPosition;
     result.measurement.containerRightEndPositionMm = measurement.rightEndPosition;

@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\work\LY\IPC_Station2\third_party\container_total_length_v2_2\_build_v142\CMakeFiles\bd7ef1997c5191578ed7f6a801d1ac66\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{DA5A53DB-C331-39A2-82BD-3881159CE1F1}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

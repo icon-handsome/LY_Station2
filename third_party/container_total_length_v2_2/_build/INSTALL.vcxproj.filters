@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\work\LY\IPC_Station2\third_party\container_total_length_v2_2\_build\CMakeFiles\139f3b79eff576da4d30f34eecbcdfb4\INSTALL_force.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{B2BED3D4-10B8-337B-9057-8593A0BBF818}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

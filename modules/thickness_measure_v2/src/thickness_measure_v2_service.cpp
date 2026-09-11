@@ -51,14 +51,16 @@ void FillError(ThicknessV2Error* error, int status, const QString& message)
 
 QString WorkerExecutablePath()
 {
+    const QDir appDir(QCoreApplication::applicationDirPath());
     const QByteArray selected = qgetenv("SCAN_TRACKING_THICKNESS_WORKER");
     if (selected.compare("legacy", Qt::CaseInsensitive) == 0) {
-        return QDir(QCoreApplication::applicationDirPath()).filePath(QString::fromLatin1(kWorkerExeName));
+        return appDir.filePath(QString::fromLatin1(kWorkerExeName));
     }
     if (!selected.isEmpty() && selected.compare("v3_1", Qt::CaseInsensitive) != 0) {
-        return QDir(QCoreApplication::applicationDirPath()).filePath(QString::fromLocal8Bit(selected));
+        return appDir.filePath(QString::fromLocal8Bit(selected));
     }
-    return QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("thickness-measure-v3_1-worker.exe"));
+    // Private dir: ThicknessMeasurement.dll + PCL 1.15 live beside this exe.
+    return appDir.filePath(QString::fromLatin1(worker_protocol::kWorkerV31RelPath));
 }
 
 int ResolveTimeoutMs()
@@ -103,6 +105,8 @@ bool WriteRequestFile(
     const QString& configPath,
     const QVector<ThicknessV2PairClouds>& pairs,
     const QString& workDir,
+    int groupIndex,
+    int pairIndex,
     QString* error)
 {
     QFile file(path);
@@ -118,6 +122,9 @@ bool WriteRequestFile(
     out << "mode=" << (mode == WorkerMode::Pair ? "pair" : "pairs_average") << '\n';
     out << "config=" << QDir::toNativeSeparators(configPath) << '\n';
     out << "pair_count=" << pairs.size() << '\n';
+    // path4: pair ordinal maps to INI group (0=[Input]/ 1=[Input2]/ template 1 vs 12).
+    out << "group_index=" << groupIndex << '\n';
+    out << "pair_index=" << pairIndex << '\n';
 
     for (int i = 0; i < pairs.size(); ++i) {
         const QString innerName = QStringLiteral("pair_%1_inner.bin").arg(i);
@@ -200,7 +207,9 @@ struct WorkerRunOutcome {
 WorkerRunOutcome RunThicknessWorker(
     WorkerMode mode,
     const QString& configPath,
-    const QVector<ThicknessV2PairClouds>& pairs)
+    const QVector<ThicknessV2PairClouds>& pairs,
+    int groupIndex = 0,
+    int pairIndex = 0)
 {
     WorkerRunOutcome outcome;
 
@@ -224,7 +233,8 @@ WorkerRunOutcome RunThicknessWorker(
     const QString resultPath = QDir(workDir).filePath(QString::fromLatin1(kResultFileName));
 
     QString ioError;
-    if (!WriteRequestFile(requestPath, mode, configPath, pairs, workDir, &ioError)) {
+    if (!WriteRequestFile(
+            requestPath, mode, configPath, pairs, workDir, groupIndex, pairIndex, &ioError)) {
         outcome.statusCode = kStatusInternal;
         outcome.message = ioError;
         return outcome;
@@ -234,13 +244,16 @@ WorkerRunOutcome RunThicknessWorker(
     qInfo(LOG_THICKNESS_MEASURE_V2)
         << "Starting thickness worker" << workerPath
         << "pairs=" << pairs.size()
+        << "groupIndex=" << groupIndex
+        << "pairIndex=" << pairIndex
         << "timeoutMs=" << timeoutMs
         << "workdir=" << workDir;
 
     QProcess process;
     process.setProgram(workerPath);
     process.setArguments(QStringList() << QDir::toNativeSeparators(workDir));
-    process.setWorkingDirectory(QCoreApplication::applicationDirPath());
+    // DLL search starts from the worker exe directory; keep cwd there too.
+    process.setWorkingDirectory(QFileInfo(workerPath).absolutePath());
     process.setProcessChannelMode(QProcess::MergedChannels);
     process.start();
     if (!process.waitForStarted(15000)) {
@@ -494,18 +507,27 @@ bool ThicknessMeasureV2Service::measurePairsAverage(
     int lastFailureStatus = kStatusMeasure;
 
     for (int i = 0; i < pairs.size(); ++i) {
+        // path4 convention: pair ordinal == INI group (0=template1, 1=template12).
+        const int groupIndex = i;
         qInfo(LOG_THICKNESS_MEASURE_V2)
             << "measurePairsAverage: spawning dedicated worker for pair" << i
-            << "/" << pairs.size();
+            << "/" << pairs.size()
+            << "groupIndex=" << groupIndex;
         const WorkerRunOutcome outcome = RunThicknessWorker(
-            WorkerMode::Pair, m_impl->configPath, QVector<ThicknessV2PairClouds>{pairs[i]});
+            WorkerMode::Pair,
+            m_impl->configPath,
+            QVector<ThicknessV2PairClouds>{pairs[i]},
+            groupIndex,
+            i);
         ThicknessV2PairMeasurement pair{};
         if (outcome.ok && ParsePairResult(outcome.resultKv, &pair) && pair.valid) {
             thicknessSum += pair.thicknessMm;
             ++out->successCount;
             qInfo(LOG_THICKNESS_MEASURE_V2)
                 << "measurePairsAverage pair" << i << "OK thicknessMm=" << pair.thicknessMm
-                << "method=" << pair.method;
+                << "method=" << pair.method
+                << "innerOuterIcp=" << pair.innerOuterIcpFitness
+                << "outerTemplateIcp=" << pair.outerTemplateIcpFitness;
             continue;
         }
         lastFailureStatus = outcome.statusCode;

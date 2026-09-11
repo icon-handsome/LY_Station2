@@ -1,5 +1,6 @@
 #include "ContainerTotalLengthApi.h"
 
+#include "CtlTrace.h"
 #include "Measurement.h"
 #include "PointCloudIO.h"
 
@@ -53,6 +54,8 @@ void ResetResult(ctl_result* result)
 extern "C" ctl_status ctl_create_from_ini(const char* config_path,
     ctl_context** out_context, char* message, size_t message_size)
 {
+    CTL_TRACE("ctl_create_from_ini: ENTER config=%s", config_path ? config_path : "(null)");
+    CTL_TRACE_MEM("ctl_create:enter");
     if (!config_path || !*config_path || !out_context) {
         SetMessage(message, message_size, "config_path and out_context are required");
         return CTL_ERR_INVALID_ARGUMENT;
@@ -62,25 +65,46 @@ extern "C" ctl_status ctl_create_from_ini(const char* config_path,
         ctl_context* context = new ctl_context;
         std::string error;
         if (!LoadIniConfig(config_path, &context->config, &error)) {
+            CTL_TRACE("ctl_create_from_ini: LoadIniConfig FAIL %s", error.c_str());
             delete context;
             SetMessage(message, message_size, error);
             return CTL_ERR_CONFIG;
         }
+        CTL_TRACE("ctl_create_from_ini: ini ok voxel=%.3f crop=%d template=%s",
+                  context->config.voxelSize,
+                  context->config.cropInputCloud ? 1 : 0,
+                  context->config.templateCloudPath.c_str());
+        if (context->config.cropInputCloud) {
+            CTL_TRACE("ctl_create_from_ini: cropBox=[(%.3f,%.3f,%.3f)-(%.3f,%.3f,%.3f)]",
+                      context->config.cropMinPoint.x(),
+                      context->config.cropMinPoint.y(),
+                      context->config.cropMinPoint.z(),
+                      context->config.cropMaxPoint.x(),
+                      context->config.cropMaxPoint.y(),
+                      context->config.cropMaxPoint.z());
+        }
         const std::string templatePath = JoinPath(
             DirectoryOf(config_path), context->config.templateCloudPath);
+        CTL_TRACE("ctl_create_from_ini: LoadCloud template %s", templatePath.c_str());
         context->templateCloud = LoadCloud(templatePath, &error);
         if (!context->templateCloud || context->templateCloud->empty()) {
+            CTL_TRACE("ctl_create_from_ini: template FAIL %s", error.c_str());
             delete context;
             SetMessage(message, message_size, error.empty() ? "template cloud is empty" : error);
             return CTL_ERR_TEMPLATE;
         }
+        CTL_TRACE("ctl_create_from_ini: OK templateSize=%llu",
+                  static_cast<unsigned long long>(context->templateCloud->size()));
+        CTL_TRACE_MEM("ctl_create:exit");
         *out_context = context;
         SetMessage(message, message_size, "ok");
         return CTL_OK;
     } catch (const std::exception& exception) {
+        CTL_TRACE("ctl_create_from_ini: EXCEPTION %s", exception.what());
         SetMessage(message, message_size, exception.what());
         return CTL_ERR_CONFIG;
     } catch (...) {
+        CTL_TRACE("ctl_create_from_ini: UNKNOWN EXCEPTION");
         SetMessage(message, message_size, "unknown exception while creating context");
         return CTL_ERR_CONFIG;
     }
@@ -90,6 +114,10 @@ extern "C" ctl_status ctl_measure(ctl_context* context, const float* xyz,
     size_t point_count, ctl_result* result, char* message, size_t message_size)
 {
     ResetResult(result);
+    CTL_TRACE("ctl_measure: ENTER point_count=%llu xyz=%p",
+              static_cast<unsigned long long>(point_count),
+              static_cast<const void*>(xyz));
+    CTL_TRACE_MEM("ctl_measure:enter");
     if (!context) return CTL_ERR_NOT_INITIALIZED;
     if (!xyz || point_count == 0 || !result) {
         SetMessage(message, message_size, "xyz, point_count and result are required");
@@ -97,17 +125,26 @@ extern "C" ctl_status ctl_measure(ctl_context* context, const float* xyz,
     }
     try {
         std::lock_guard<std::mutex> lock(context->mutex);
+        const unsigned long long tBuild = ctl_trace::NowTick();
         CloudPtr input(new CloudT);
         input->reserve(point_count);
+        size_t skippedNonFinite = 0;
+        size_t skippedCrop = 0;
         for (size_t i = 0; i < point_count; ++i) {
             const float x = xyz[i * 3];
             const float y = xyz[i * 3 + 1];
             const float z = xyz[i * 3 + 2];
-            if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) continue;
+            if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+                ++skippedNonFinite;
+                continue;
+            }
             if (context->config.cropInputCloud &&
                 (x < context->config.cropMinPoint.x() || x > context->config.cropMaxPoint.x() ||
                  y < context->config.cropMinPoint.y() || y > context->config.cropMaxPoint.y() ||
-                 z < context->config.cropMinPoint.z() || z > context->config.cropMaxPoint.z())) continue;
+                 z < context->config.cropMinPoint.z() || z > context->config.cropMaxPoint.z())) {
+                ++skippedCrop;
+                continue;
+            }
             PointT point;
             point.x = x; point.y = y; point.z = z;
             input->push_back(point);
@@ -115,18 +152,31 @@ extern "C" ctl_status ctl_measure(ctl_context* context, const float* xyz,
         input->width = static_cast<unsigned int>(input->size());
         input->height = 1;
         input->is_dense = false;
+        CTL_TRACE("ctl_measure: buildCloud kept=%llu skippedNonFinite=%llu skippedCrop=%llu crop=%d elapsedMs=%.0f",
+                  static_cast<unsigned long long>(input->size()),
+                  static_cast<unsigned long long>(skippedNonFinite),
+                  static_cast<unsigned long long>(skippedCrop),
+                  context->config.cropInputCloud ? 1 : 0,
+                  ctl_trace::MsSince(tBuild));
+        CTL_TRACE_MEM("ctl_measure:afterBuildCloud");
         if (input->empty()) {
+            CTL_TRACE("ctl_measure: FAIL empty after crop/filter");
             SetMessage(message, message_size, "xyz contains no finite points");
             return CTL_ERR_INPUT;
         }
 
+        CTL_TRACE("ctl_measure: call MeasureContainerLength templateSize=%llu",
+                  static_cast<unsigned long long>(
+                      context->templateCloud ? context->templateCloud->size() : 0ull));
         MeasurementResult measurement;
         std::string error;
         if (!MeasureContainerLength(input, context->templateCloud, context->config,
                                     &measurement, &error)) {
+            CTL_TRACE("ctl_measure: MeasureContainerLength FAIL %s", error.c_str());
             SetMessage(message, message_size, error.empty() ? "length measurement failed" : error);
             return CTL_ERR_MEASURE;
         }
+        CTL_TRACE("ctl_measure: after MeasureContainerLength return");
         result->length_mm = measurement.length;
         result->left_end_position = measurement.ends[0].refinedPosition;
         result->right_end_position = measurement.ends[1].refinedPosition;
@@ -140,18 +190,41 @@ extern "C" ctl_status ctl_measure(ctl_context* context, const float* xyz,
         result->icp_converged = measurement.icpConverged ? 1 : 0;
         result->input_point_count = static_cast<int>(input->size());
         result->valid = measurement.length > 0.0 ? 1 : 0;
+        CTL_TRACE("ctl_measure: result filled inputPts=%d", result->input_point_count);
+
+        // TEST ONLY: leak the 23M input cloud so try-block exit does not free it.
+        CTL_TRACE("ctl_measure: TEST_LEAK begin input size=%llu",
+                  static_cast<unsigned long long>(input ? input->size() : 0ull));
+        CTL_TRACE_MEM("ctl_measure:beforeLeak");
+        (void)new CloudPtr(input);
+        input.reset();
+        CTL_TRACE("ctl_measure: TEST_LEAK input holder kept; local reset without free");
+
+        CTL_TRACE("ctl_measure: OK length=%.3f left=%.3f right=%.3f fitness=%.6f inputPts=%d",
+                  result->length_mm,
+                  result->left_end_position,
+                  result->right_end_position,
+                  result->icp_fitness,
+                  result->input_point_count);
+        CTL_TRACE_MEM("ctl_measure:exit");
         SetMessage(message, message_size, "ok");
         return result->valid ? CTL_OK : CTL_ERR_MEASURE;
     } catch (const std::exception& exception) {
+        CTL_TRACE("ctl_measure: EXCEPTION %s", exception.what());
         SetMessage(message, message_size, exception.what());
         return CTL_ERR_MEASURE;
     } catch (...) {
+        CTL_TRACE("ctl_measure: UNKNOWN EXCEPTION");
         SetMessage(message, message_size, "unknown exception while measuring");
         return CTL_ERR_MEASURE;
     }
 }
 
-extern "C" void ctl_destroy(ctl_context* context) { delete context; }
+extern "C" void ctl_destroy(ctl_context* context)
+{
+    CTL_TRACE("ctl_destroy: context=%p", static_cast<const void*>(context));
+    delete context;
+}
 
 extern "C" const char* ctl_status_string(ctl_status status)
 {
