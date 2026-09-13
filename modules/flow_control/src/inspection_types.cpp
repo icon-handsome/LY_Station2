@@ -3,12 +3,16 @@
 #include <QtCore/QDateTime>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
+#include <QtCore/QHash>
 #include <QtCore/QTextStream>
 
 namespace scan_tracking {
 namespace flow_control {
 
 namespace {
+
+constexpr const char* kTwelveMetricHeaderPrefix =
+    "测试目标指标（12项，左右侧咬边合并计项）:";
 
 void appendKeyValue(QString* out, const QString& key, const QString& value)
 {
@@ -26,6 +30,232 @@ void appendKeyValue(QString* out, const QString& key, qint64 value)
 void appendKeyValue(QString* out, const QString& key, double value)
 {
     appendKeyValue(out, key, QString::number(value, 'f', 6));
+}
+
+QString formatTwelveMetricHeader(const InspectionMeasurement& m)
+{
+    QString text;
+    text.reserve(512);
+    text += QString::fromUtf8(kTwelveMetricHeaderPrefix);
+    text += QLatin1Char('\n');
+    text += QStringLiteral("1. 焊缝错边量 = %1 mm\n").arg(m.mismatchMm);
+    text += QStringLiteral("2. 焊缝余高 = %1 mm\n").arg(m.reinforcementMm);
+    text += QStringLiteral("3. 母材拟合线夹角 = %1 deg\n").arg(m.includedAngleDeg);
+    text += QStringLiteral("4. 棱角度 = %1 mm\n").arg(m.angularityMm);
+    text += QStringLiteral("5. 左右咬边深度 = 左 %1 mm，右 %2 mm\n")
+                .arg(m.leftUndercutMm)
+                .arg(m.rightUndercutMm);
+    text += QStringLiteral("6. 左右咬边长度 = 左 %1 mm，右 %2 mm\n")
+                .arg(m.leftUndercutLengthMm)
+                .arg(m.rightUndercutLengthMm);
+    text += QStringLiteral("7. 筒体焊缝附近平均厚度 = %1 mm\n").arg(m.thicknessMm);
+    text += QStringLiteral("8. 内径 = %1 mm\n").arg(m.innerDiameterMm);
+    text += QStringLiteral("9. 内周长 = %1 mm\n").arg(m.innerCircumferenceMm);
+    text += QStringLiteral("10. 内表面圆度 = %1 mm\n").arg(m.innerRoundness);
+    text += QStringLiteral("11. 筒体总长 = %1 mm\n").arg(m.lengthMm);
+    text += QStringLiteral("12. 容积 = %1 L\n\n").arg(m.volumeLiters);
+    return text;
+}
+
+/// 去掉文件顶部 12 项汇总头，只保留 path 结果块正文。
+QString stripTwelveMetricHeader(const QString& content)
+{
+    const QString trimmed = content;
+    const int marker = trimmed.indexOf(QString::fromUtf8(kTwelveMetricHeaderPrefix));
+    if (marker < 0) {
+        return trimmed;
+    }
+
+    const int blockStart = trimmed.indexOf(QStringLiteral("========"), marker);
+    if (blockStart >= 0) {
+        return trimmed.mid(blockStart);
+    }
+
+    // 仅有汇总头、尚无 path 块时视为空正文。
+    return QString();
+}
+
+QString algorithmFromBannerLine(const QString& line)
+{
+    const QString key = QStringLiteral("algorithm=");
+    const int begin = line.indexOf(key);
+    if (begin < 0) {
+        return QString();
+    }
+    const int valueBegin = begin + key.size();
+    int valueEnd = line.indexOf(QLatin1Char(' '), valueBegin);
+    if (valueEnd < 0) {
+        valueEnd = line.size();
+    }
+    return line.mid(valueBegin, valueEnd - valueBegin).trimmed();
+}
+
+double kvDouble(const QHash<QString, QString>& kv, const QString& key)
+{
+    bool ok = false;
+    const double value = kv.value(key).toDouble(&ok);
+    return ok ? value : 0.0;
+}
+
+int kvInt(const QHash<QString, QString>& kv, const QString& key)
+{
+    bool ok = false;
+    const int value = kv.value(key).toInt(&ok);
+    return ok ? value : 0;
+}
+
+void mergeSuccessfulPathBlock(
+    InspectionMeasurement* aggregated,
+    const QString& algorithm,
+    const QHash<QString, QString>& kv)
+{
+    if (aggregated == nullptr) {
+        return;
+    }
+
+    if (algorithm == QLatin1String("weld_section")) {
+        aggregated->mismatchMm = kvDouble(kv, QStringLiteral("mismatchMm"));
+        aggregated->reinforcementMm = kvDouble(kv, QStringLiteral("reinforcementMm"));
+        aggregated->angularityMm = kvDouble(kv, QStringLiteral("angularityMm"));
+        aggregated->includedAngleDeg = kvDouble(kv, QStringLiteral("includedAngleDeg"));
+        aggregated->leftUndercutMm = kvDouble(kv, QStringLiteral("leftUndercutMm"));
+        aggregated->rightUndercutMm = kvDouble(kv, QStringLiteral("rightUndercutMm"));
+        aggregated->maxUndercutMm = kvDouble(kv, QStringLiteral("maxUndercutMm"));
+        aggregated->leftUndercutLengthMm =
+            kvDouble(kv, QStringLiteral("leftUndercutLengthMm"));
+        aggregated->rightUndercutLengthMm =
+            kvDouble(kv, QStringLiteral("rightUndercutLengthMm"));
+        aggregated->measuredSegmentCount =
+            kvInt(kv, QStringLiteral("measuredSegmentCount"));
+        return;
+    }
+
+    if (algorithm == QLatin1String("length_volume")) {
+        const double lengthMm = kvDouble(kv, QStringLiteral("lengthMm"));
+        if (lengthMm != 0.0) {
+            aggregated->lengthMm = lengthMm;
+        }
+        return;
+    }
+
+    if (algorithm == QLatin1String("thickness_inner_surface")) {
+        aggregated->thicknessMm = kvDouble(kv, QStringLiteral("thicknessMm"));
+        aggregated->thicknessPairCount =
+            kvInt(kv, QStringLiteral("thicknessPairCount"));
+        aggregated->thicknessSuccessCount =
+            kvInt(kv, QStringLiteral("thicknessSuccessCount"));
+        aggregated->innerDiameterMm = kvDouble(kv, QStringLiteral("innerDiameterMm"));
+        aggregated->innerCircumferenceMm =
+            kvDouble(kv, QStringLiteral("innerCircumferenceMm"));
+        aggregated->innerRoundness = kvDouble(kv, QStringLiteral("innerRoundness"));
+        aggregated->volumeLiters = kvDouble(kv, QStringLiteral("volumeLiters"));
+        aggregated->volumeRadiusMm = kvDouble(kv, QStringLiteral("volumeRadiusMm"));
+        aggregated->innerSurfacePairCount =
+            kvInt(kv, QStringLiteral("innerSurfacePairCount"));
+        aggregated->innerSurfaceSuccessCount =
+            kvInt(kv, QStringLiteral("innerSurfaceSuccessCount"));
+        const double lengthMm = kvDouble(kv, QStringLiteral("lengthMm"));
+        if (lengthMm != 0.0) {
+            aggregated->lengthMm = lengthMm;
+        }
+        return;
+    }
+
+    if (algorithm == QLatin1String("code_read")) {
+        const QString codeValue = kv.value(QStringLiteral("codeValue")).trimmed();
+        if (!codeValue.isEmpty()) {
+            aggregated->codeValue = codeValue;
+        }
+    }
+}
+
+InspectionMeasurement aggregateMeasurementFromResultBody(const QString& body)
+{
+    InspectionMeasurement aggregated;
+    const QStringList lines = body.split(QLatin1Char('\n'));
+    QString currentAlgorithm;
+    QHash<QString, QString> currentKv;
+    bool inBlock = false;
+
+    auto flushBlock = [&]() {
+        if (!inBlock) {
+            return;
+        }
+        if (kvInt(currentKv, QStringLiteral("resultCode")) == 1) {
+            mergeSuccessfulPathBlock(&aggregated, currentAlgorithm, currentKv);
+        }
+        currentAlgorithm.clear();
+        currentKv.clear();
+        inBlock = false;
+    };
+
+    for (const QString& rawLine : lines) {
+        const QString line = rawLine.trimmed();
+        if (line.startsWith(QStringLiteral("========")) &&
+            line.contains(QStringLiteral("pathId="))) {
+            flushBlock();
+            currentAlgorithm = algorithmFromBannerLine(line);
+            inBlock = true;
+            continue;
+        }
+        if (!inBlock || line.isEmpty()) {
+            continue;
+        }
+        const int eq = line.indexOf(QLatin1Char('='));
+        if (eq <= 0) {
+            continue;
+        }
+        currentKv.insert(line.left(eq).trimmed(), line.mid(eq + 1).trimmed());
+    }
+    flushBlock();
+    return aggregated;
+}
+
+bool readEntireTextFile(const QString& filePath, QString* content, QString* errorMessage)
+{
+    QFile file(filePath);
+    if (!file.exists() || file.size() == 0) {
+        if (content != nullptr) {
+            content->clear();
+        }
+        return true;
+    }
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("无法读取 %1：%2")
+                                .arg(filePath, file.errorString());
+        }
+        return false;
+    }
+    QTextStream stream(&file);
+    stream.setCodec("UTF-8");
+    if (content != nullptr) {
+        *content = stream.readAll();
+    }
+    return true;
+}
+
+bool writeEntireTextFile(const QString& filePath, const QString& content, QString* errorMessage)
+{
+    QFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("无法写入 %1：%2")
+                                .arg(filePath, file.errorString());
+        }
+        return false;
+    }
+    QTextStream stream(&file);
+    stream.setCodec("UTF-8");
+    stream << content;
+    stream.flush();
+    if (stream.status() != QTextStream::Ok) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("写入 %1 失败。").arg(filePath);
+        }
+        return false;
+    }
+    return true;
 }
 
 }  // namespace
@@ -194,45 +424,21 @@ bool appendInspectionResultToRunFile(
 
     const QString filePath = QDir(root).absoluteFilePath(QStringLiteral("result.txt"));
     // 与 path_{id}/ 并列：output/run_*/result.txt
-    QFile file(filePath);
-    const bool needsHeader = !file.exists() || file.size() == 0;
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
-        if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral("无法打开 %1：%2")
-                                .arg(filePath, file.errorString());
-        }
+    // 每次追加后按全部成功 path 块重写 12 项汇总头，避免首条焊缝结果把 7–12 永久写成 0。
+    QString existing;
+    if (!readEntireTextFile(filePath, &existing, errorMessage)) {
         return false;
     }
 
-    QTextStream stream(&file);
-    stream.setCodec("UTF-8");
-    if (needsHeader) {
-        const auto& m = result.measurement;
-        stream << QStringLiteral("测试目标指标（12项，左右侧咬边合并计项）:\n")
-               << QStringLiteral("1. 焊缝错边量 = ") << m.mismatchMm << QStringLiteral(" mm\n")
-               << QStringLiteral("2. 焊缝余高 = ") << m.reinforcementMm << QStringLiteral(" mm\n")
-               << QStringLiteral("3. 母材拟合线夹角 = ") << m.includedAngleDeg << QStringLiteral(" deg\n")
-               << QStringLiteral("4. 棱角度 = ") << m.angularityMm << QStringLiteral(" mm\n")
-               << QStringLiteral("5. 左右咬边深度 = 左 ") << m.leftUndercutMm
-               << QStringLiteral(" mm，右 ") << m.rightUndercutMm << QStringLiteral(" mm\n")
-               << QStringLiteral("6. 左右咬边长度 = 左 ") << m.leftUndercutLengthMm
-               << QStringLiteral(" mm，右 ") << m.rightUndercutLengthMm << QStringLiteral(" mm\n")
-               << QStringLiteral("7. 筒体焊缝附近平均厚度 = ") << m.thicknessMm << QStringLiteral(" mm\n")
-               << QStringLiteral("8. 内径 = ") << m.innerDiameterMm << QStringLiteral(" mm\n")
-               << QStringLiteral("9. 内周长 = ") << m.innerCircumferenceMm << QStringLiteral(" mm\n")
-               << QStringLiteral("10. 内表面圆度 = ") << m.innerRoundness << QStringLiteral(" mm\n")
-               << QStringLiteral("11. 筒体总长 = ") << m.lengthMm << QStringLiteral(" mm\n")
-               << QStringLiteral("12. 容积 = ") << m.volumeLiters << QStringLiteral(" L\n\n");
+    QString body = stripTwelveMetricHeader(existing);
+    if (!body.isEmpty() && !body.endsWith(QLatin1Char('\n'))) {
+        body += QLatin1Char('\n');
     }
-    stream << formatInspectionResultTextBlock(result);
-    stream.flush();
-    if (stream.status() != QTextStream::Ok) {
-        if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral("写入 %1 失败。").arg(filePath);
-        }
-        return false;
-    }
-    return true;
+    body += formatInspectionResultTextBlock(result);
+
+    const InspectionMeasurement aggregated = aggregateMeasurementFromResultBody(body);
+    const QString rewritten = formatTwelveMetricHeader(aggregated) + body;
+    return writeEntireTextFile(filePath, rewritten, errorMessage);
 }
 
 }  // namespace flow_control

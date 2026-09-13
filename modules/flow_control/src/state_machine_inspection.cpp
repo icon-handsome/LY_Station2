@@ -192,7 +192,7 @@ void StateMachine::saveInspectionResultTxt(
         return;
     }
     qInfo(LOG_ALGORITHM).noquote()
-        << QStringLiteral("已追加路径算法结果到 result.txt pathId=") << result.pathId
+        << QStringLiteral("已追加并聚合更新 result.txt pathId=") << result.pathId
         << QStringLiteral(" algorithm=") << result.algorithm
         << QStringLiteral(" runRoot=") << runRoot;
 }
@@ -531,7 +531,7 @@ void StateMachine::startBackgroundInspectionSolve(
                                 << QStringLiteral(" runRoot=") << runCaptureRoot;
                         } else {
                             qInfo(LOG_ALGORITHM).noquote()
-                                << QStringLiteral("已追加路径算法结果到 result.txt pathId=")
+                                << QStringLiteral("已追加并聚合更新 result.txt pathId=")
                                 << result.pathId
                                 << QStringLiteral(" algorithm=") << result.algorithm
                                 << QStringLiteral(" runRoot=") << runCaptureRoot;

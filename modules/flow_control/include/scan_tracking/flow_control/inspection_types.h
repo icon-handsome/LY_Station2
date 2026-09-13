@@ -69,6 +69,7 @@ void appendInspectionMeasurementFields(
 QString formatInspectionResultTextBlock(const InspectionResult& result);
 
 /// 追加写入 <runCaptureRoot>/result.txt；目录不存在时尝试创建。
+/// 每次追加后会按文件内全部成功 path 块重写顶部 12 项汇总头（跨路径聚合）。
 /// @return 是否写入成功
 bool appendInspectionResultToRunFile(
     const QString& runCaptureRoot,

@@ -884,7 +884,7 @@ bool selectInnerSurfaceTwoEnds(
                           .arg((*outFrame2)->localIndex);
         } else {
             *detail = QStringLiteral(
-                          "源码要求 exactly 2 帧：从 %1 个 inner_surface 点取两端 localIndex=%2,%3")
+                          "要求 exactly 2 帧：从 %1 个 inner_surface 点取两端 localIndex=%2,%3")
                           .arg(frames.size())
                           .arg((*outFrame1)->localIndex)
                           .arg((*outFrame2)->localIndex);
@@ -1030,7 +1030,7 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
             scan_tracking::thickness_measure_v2::ThicknessV2PairClouds cloudsView;
             cloudsView.inner.xyz = pair.inner->xyz.data();
             cloudsView.inner.pointCount = static_cast<size_t>(pair.inner->finiteCount);
-            cloudsView.outer.xyz = pair.outer->xyz.da2.ta();
+            cloudsView.outer.xyz = pair.outer->xyz.data();
             cloudsView.outer.pointCount = static_cast<size_t>(pair.outer->finiteCount);
             pairClouds.push_back(cloudsView);
             qInfo(LOG_STATION2_INSPECTION)
