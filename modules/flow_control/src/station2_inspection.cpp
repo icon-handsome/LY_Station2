@@ -1225,7 +1225,7 @@ bool ensureContainerTotalLengthReady(QString* errorMessage)
 }
 
 /// path3 专用：校验 LB 后把各臂段有限点直接写入 mergedXyz，避免「每段临时向量 → 再合并」二次拷贝。
-/// 段顺序与 loadQuotaSegmentClouds 一致（按 localIndex 升序），保证送入 DLL 的点序不变。
+/// 段顺序与 loadQuotaSegmentClouds 一致（按 localIndex 升序），保证送入 worker 的点序不变。
 bool mergeArmLengthVolumeClouds(
     const ScanSegmentCache& cache,
     const InspectionQuota& quota,
@@ -1384,15 +1384,18 @@ InspectionResult evaluateLengthVolumeInspection(
         result.measureItemCount = 1;
         result.message = QStringLiteral(
                              "pathId=%1 筒体总长测量初始化失败：%2"
-                             "（请确认 config/container_total_length/config.ini 与 Data/sample_cylinder.pcd）")
+                             "（请确认 config/container_total_length/config.ini、"
+                             "Data 模板、以及 workers/container_total_length/ 下的 worker）")
                              .arg(quota.pathId)
                              .arg(initError);
         return result;
     }
 
-    // 对照源码：ctl_create_from_ini + 一次 ctl_measure(合并外表面云)；path3 只报长度，容积由 path4 内表面算。
+    // path3：out-of-process worker 加载 ContainerTotalLength.dll；
+    // 主进程只合并外表面云并收结果（create/measure 在 container-total-length-worker.exe）。
+    // path3 只报长度，容积由 path4 内表面算。
     qInfo(LOG_STATION2_INSPECTION).noquote()
-        << QStringLiteral("开始筒体总长测量 pathId=") << quota.pathId
+        << QStringLiteral("开始筒体总长测量(path3 worker) pathId=") << quota.pathId
         << QStringLiteral(" name=") << quota.pathName
         << QStringLiteral(" 段数=") << segmentCount
         << QStringLiteral(" 合并点数=") << static_cast<qulonglong>(mergedCount);

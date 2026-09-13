@@ -8,7 +8,9 @@
 
 namespace scan_tracking::container_total_length_measure {
 
-/// Thin façade over ContainerTotalLength.dll (C API). Calls are serialized per instance.
+/// Thin façade over ContainerTotalLength via an out-of-process worker.
+/// Host never loads ContainerTotalLength.dll; create/measure/destroy run in
+/// container-total-length-worker.exe. Calls are serialized per instance.
 class ContainerTotalLengthService {
 public:
     ContainerTotalLengthService();
@@ -23,7 +25,7 @@ public:
     bool isReady() const;
     QString configPath() const;
 
-    /// Load template + params from config.ini (inputCloud ignored; scans come from memory APIs).
+    /// Validates config + worker presence. Template load runs inside the worker.
     bool initializeFromIni(const QString& configPath = QString(), ContainerTotalLengthError* error = nullptr);
 
     void shutdown();

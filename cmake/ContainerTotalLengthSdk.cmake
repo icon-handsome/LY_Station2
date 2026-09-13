@@ -34,6 +34,9 @@ set(_SCAN_TRACKING_CONTAINER_TOTAL_LENGTH_PCL_DLLS
     pcl_octree.dll
 )
 
+# Private runtime dir beside the host exe (DLL + PCL 1.12 live here only).
+set(SCAN_TRACKING_CONTAINER_TOTAL_LENGTH_WORKER_RELDIR "workers/container_total_length")
+
 function(scan_tracking_require_container_total_length_sdk)
     if(TARGET ContainerTotalLengthSdk::Api)
         return()
@@ -94,17 +97,13 @@ function(scan_tracking_require_container_total_length_sdk)
     set_property(GLOBAL PROPERTY SCAN_TRACKING_CONTAINER_TOTAL_LENGTH_DLL_DEBUG "${_debug_dll}")
 endfunction()
 
+# Host-side config/templates only. DLL + PCL stay in the private worker dir
+# (see scan_tracking_deploy_container_total_length_worker) so the main process
+# never loads ContainerTotalLength.dll / PCL 1.12.
 function(scan_tracking_deploy_container_total_length_runtime target_name)
     scan_tracking_require_container_total_length_sdk()
 
     get_property(_sdk_dir GLOBAL PROPERTY SCAN_TRACKING_CONTAINER_TOTAL_LENGTH_SDK_DIR)
-    get_property(_dll_release GLOBAL PROPERTY SCAN_TRACKING_CONTAINER_TOTAL_LENGTH_DLL_RELEASE)
-    get_property(_dll_debug GLOBAL PROPERTY SCAN_TRACKING_CONTAINER_TOTAL_LENGTH_DLL_DEBUG)
-    set(_bin_release "${_sdk_dir}/bin/Release")
-    set(_bin_debug "${_sdk_dir}/bin/Debug")
-    if(NOT EXISTS "${_bin_debug}/ContainerTotalLength.dll")
-        set(_bin_debug "${_bin_release}")
-    endif()
 
     set(_config_dir "${CMAKE_SOURCE_DIR}/config/container_total_length")
     if(SCAN_TRACKING_USE_CONTAINER_TOTAL_LENGTH_V22)
@@ -119,23 +118,12 @@ function(scan_tracking_deploy_container_total_length_runtime target_name)
     endif()
 
     set(_copy_cmds
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "$<IF:$<CONFIG:Debug>,${_dll_debug},${_dll_release}>"
-            "$<TARGET_FILE_DIR:${target_name}>"
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:${target_name}>/config/container_total_length"
     )
-
-    foreach(_pcl_dll IN LISTS _SCAN_TRACKING_CONTAINER_TOTAL_LENGTH_PCL_DLLS)
-        list(APPEND _copy_cmds
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "$<IF:$<CONFIG:Debug>,${_bin_debug}/${_pcl_dll},${_bin_release}/${_pcl_dll}>"
-                "$<TARGET_FILE_DIR:${target_name}>"
-        )
-    endforeach()
 
     if(EXISTS "${_config_ini}")
         list(APPEND _copy_cmds
-            COMMAND ${CMAKE_COMMAND} -E make_directory
-                "$<TARGET_FILE_DIR:${target_name}>/config/container_total_length"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${_config_ini}"
                 "$<TARGET_FILE_DIR:${target_name}>/config/container_total_length/config.ini"
@@ -164,13 +152,6 @@ function(scan_tracking_deploy_container_total_length_runtime target_name)
 
     add_custom_command(TARGET ${target_name} POST_BUILD
         ${_copy_cmds}
-        COMMENT "Deploying ContainerTotalLength SDK runtime"
+        COMMENT "Deploying ContainerTotalLength config/templates (DLL lives with worker)"
     )
-
-    if(MSVC)
-        set_property(TARGET ${target_name} APPEND PROPERTY
-            VS_DEBUGGER_ENVIRONMENT
-            "PATH=${_sdk_dir}/bin/Release;${_sdk_dir}/bin/Debug;%PATH%"
-        )
-    endif()
 endfunction()

@@ -97,6 +97,12 @@ set_target_properties(scan_tracking_path3_offline PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/app"
 )
 
+# path3 offline uses ContainerTotalLengthService → out-of-process worker.
+if(TARGET container_total_length_worker)
+    scan_tracking_deploy_container_total_length_runtime(scan_tracking_path3_offline)
+    scan_tracking_deploy_container_total_length_worker(scan_tracking_path3_offline)
+endif()
+
 add_executable(scan_tracking_path4_offline
     tests/path4_offline_runner.cpp
 )

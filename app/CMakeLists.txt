@@ -61,7 +61,6 @@ if(MSVC)
         /DELAYLOAD:WeldMeasure.dll
         /DELAYLOAD:InnerSurfaceMeasure.dll
         /DELAYLOAD:UndercutLengthMeasure.dll
-        /DELAYLOAD:ContainerTotalLength.dll
         /DELAYLOAD:CollisionDetection.dll
         /DELAYLOAD:opencv_world343.dll
     )
@@ -99,7 +98,9 @@ scan_tracking_deploy_thickness_measure_v3_worker(scan_tracking)
 scan_tracking_deploy_thickness_measure_v3_1_worker(scan_tracking)
 scan_tracking_deploy_inner_surface_measure_runtime(scan_tracking)
 scan_tracking_deploy_undercut_length_measure_runtime(scan_tracking)
+# path3 ContainerTotalLength runs in container-total-length-worker.exe (process isolation).
 scan_tracking_deploy_container_total_length_runtime(scan_tracking)
+scan_tracking_deploy_container_total_length_worker(scan_tracking)
 if(SCAN_TRACKING_ENABLE_LB_POSE_DETECTION)
     scan_tracking_deploy_opencv_runtime(scan_tracking)
     scan_tracking_deploy_lb_pose_runtime(scan_tracking)
