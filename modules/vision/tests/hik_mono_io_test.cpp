@@ -32,7 +32,12 @@ void HikMonoIoTest::roundTripSaveBmp()
         buildSegmentHikMonoPath(tempDir.path(), 1, QStringLiteral("arm"), 2, QStringLiteral("hikA"));
     QVERIFY(path.contains(QStringLiteral("path_1")));
     QVERIFY(path.contains(QStringLiteral("arm")));
-    QVERIFY(path.endsWith(QStringLiteral("Path1_Arm_hikA_2.bmp")));
+    QVERIFY(path.endsWith(QStringLiteral("Path1_Arm_CXPA_2.bmp")));
+
+    const QString pathB =
+        buildSegmentHikMonoPath(tempDir.path(), 1, QStringLiteral("arm"), 2, QStringLiteral("hikB"));
+    QVERIFY(pathB.endsWith(QStringLiteral("Path1_Arm_CXPB_2.bmp")));
+
     QVERIFY(saveHikMonoFrameToBmp(frame, path));
     QVERIFY(QFile::exists(path));
 

@@ -1,20 +1,33 @@
-路径状态交互（Core → Qt，对齐第一工位；第二工位已迁移）
+第二工位 HMI 交互指令（Core → Qt）
+版本：2026-09-13 / 第二轮联调
 
-一、初始化（连接后）
-  cmd.get_config → payload.config.scanPaths
-    activePathId / activePathName / activePathAlgorithm
-    paths[]：pathId, pathName, inspectionType(=algorithm), totalPoints, enabled
-  status.system → payload.scanPathProgress（断线恢复 / 基础显示）
+一、连接与初始化
+  TCP 连接成功后，Core 发送 core.hello、四类 status.* 以及 event.inspection.finished（等待检测占位帧）。
+  Qt 可发送 cmd.get_status 获取完整状态，发送 cmd.get_config 获取路径配置。
+  状态消息按内容去重，Qt 以最后一次收到的消息为准，不依赖固定周期。
+  端口 9900，协议版本 1.0。
 
-二、状态快照 status.system.scanPathProgress
+二、相机状态 status.camera
+  固定键：mechEyeTelescopic、mechEyeArm、cxpCameraA、cxpCameraB、hikC、hikCTelescopic、hikCArm、pipeline。
+  服务未初始化时仍保留相机键并发送 connected=false。
+  相机对象：connected(bool)、roleName、state（Mech-Eye 状态整数）、ipAddress（有配置时提供）。
+  海康相机主要使用 connected 判断连接状态；pipeline 当前提供 state。
+  cmd.get_config 返回的 config.vision 使用 cxpCameraA/cxpCameraB 表示 CXP 双目配置；
+  hikC/hikCTelescopic/hikCArm 仅表示海康智能相机，不与 CXP 混用。
+
+三、当前路径进度 status.system.scanPathProgress
   enabledPathIds[]    本次启用路径（不含 self_check）
   currentPathId       进行中路径；全部完成时为 0
   currentPathName     进行中路径名
+  currentPathIndex     进行中路径序号，从 1 开始；无当前路径为 0
+  currentPathAlgorithm 当前路径算法标识；无当前路径为空
   completedPathIds[]  已完成路径
   pathCount           启用路径总数
   allPathsComplete    是否全部完成
+  路径序号按 enabledPathIds 的业务顺序计算，不是 PLC 段号。
+  当前第二工位不启用断点续跑；重启/复位后以新的快照为准。
 
-三、事件（按 type 订阅）
+四、路径事件（按 type 订阅）
   event.path.started
     pathId, pathName, pathIndex, pathCount, inspectionType, algorithm, totalPoints
     触发：首段扫描开始，或切路后立即推送
@@ -29,7 +42,39 @@
   event.path.progress_reset
     reason（如 result_reset，state_machine.start）
 
-四、UI 逻辑
+五、第二工位路径与算法
+  pathId/pathName/algorithm 以 Core 报文为准，不能套用第一工位坡口路径定义。
+  常见 algorithm：weld_section、thickness_inner_surface、length_volume、self_check。
+  self_check 不进入 enabledPathIds 的 HMI 路径进度。
+  实际路径以 cmd.get_config 返回的 config.scanPaths.paths[] 为准。
+
+六、算法结果 event.inspection.finished
+  基础字段：resultCode、ngReasonWord0、ngReasonWord1、measureItemCount、sourcePointCount、
+  pathId、pathName、algorithm、message、elapsedSeconds（秒）。
+  指标同时位于 headMetrics 和 algorithmMetrics，内容完全相同；Qt 新代码优先使用 algorithmMetrics。
+  通用：qualityCode。
+  weld_section：mismatchMm、reinforcementMm、angularityMm、includedAngleDeg、leftUndercutMm、
+    rightUndercutMm、maxUndercutMm、leftUndercutLengthMm、rightUndercutLengthMm、measuredSegmentCount。
+  thickness_inner_surface：thicknessMm、thicknessPairCount、thicknessSuccessCount、innerDiameterMm、
+    innerCircumferenceMm、innerRoundness、innerSurfacePairCount、innerSurfaceSuccessCount。
+  length_volume（Path3）：仅 lengthMm（兼容别名 length_mm）。
+  thickness_inner_surface（Path4）：厚度、内表面、长度及容积字段。
+  有条码时提供 codeValue；不存在当前算法的指标键不会上报。
+
+七、Qt 端不要依赖的第一工位字段
+  第二工位不支持 expected_bevel_type、expected_angle_deg、expected_length、has_hole、
+  angle_tol_deg、length_tol_mm、cmd.set_bevel_recipe。
+  第二工位不提供 loadVisionStatusCode、unloadNgAreaFull、unloadOkAreaFull、
+  plcUnloadNgAreaCount、plcUnloadOkAreaCount、loadProcessStatus、unloadProcessStatus。
+
+八、Qt 推荐绑定
+  status.camera.connected → 各相机在线灯（CXP 使用 cxpCameraA/cxpCameraB）
+  status.system.scanPathProgress → 当前第几条路径/名称/算法
+  event.path.started / event.path.finished → 路径进行中/已完成
+  event.inspection.finished.algorithmMetrics → 算法结果页面
+  event.path.progress_reset → 清空路径完成标记和旧结果展示
+
+九、原有 UI 逻辑补充
   started → 进行中；finished → 已完成；progress_reset → 全重置
   基础显示优先读 scanPathProgress.currentPathId / currentPathName
   勿用 event.scan.* 的 segmentIndex 推断路径（每路径段号从 1 重计）

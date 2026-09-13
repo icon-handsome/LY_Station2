@@ -30,49 +30,52 @@ void appendKeyValue(QString* out, const QString& key, double value)
 
 }  // namespace
 
-void appendInspectionMeasurementFields(QJsonObject& payload, const InspectionMeasurement& measurement)
+void appendInspectionMeasurementFields(
+    QJsonObject& payload,
+    const InspectionMeasurement& measurement,
+    const QString& algorithm)
 {
     QJsonObject headMetrics;
     headMetrics[QStringLiteral("qualityCode")] = measurement.qualityCode;
-    headMetrics[QStringLiteral("mismatchMm")] = measurement.mismatchMm;
-    headMetrics[QStringLiteral("reinforcementMm")] = measurement.reinforcementMm;
-    headMetrics[QStringLiteral("angularityMm")] = measurement.angularityMm;
-    headMetrics[QStringLiteral("includedAngleDeg")] = measurement.includedAngleDeg;
-    headMetrics[QStringLiteral("leftUndercutMm")] = measurement.leftUndercutMm;
-    headMetrics[QStringLiteral("rightUndercutMm")] = measurement.rightUndercutMm;
-    headMetrics[QStringLiteral("maxUndercutMm")] = measurement.maxUndercutMm;
-    headMetrics[QStringLiteral("leftUndercutLengthMm")] = measurement.leftUndercutLengthMm;
-    headMetrics[QStringLiteral("rightUndercutLengthMm")] = measurement.rightUndercutLengthMm;
-    headMetrics[QStringLiteral("measuredSegmentCount")] = measurement.measuredSegmentCount;
-    headMetrics[QStringLiteral("thicknessMm")] = measurement.thicknessMm;
-    headMetrics[QStringLiteral("thickness_mm")] = measurement.thicknessMm;
-    headMetrics[QStringLiteral("thicknessPairCount")] = measurement.thicknessPairCount;
-    headMetrics[QStringLiteral("thicknessSuccessCount")] = measurement.thicknessSuccessCount;
-    headMetrics[QStringLiteral("innerDiameterMm")] = measurement.innerDiameterMm;
-    headMetrics[QStringLiteral("inner_diameter_mm")] = measurement.innerDiameterMm;
-    headMetrics[QStringLiteral("innerCircumferenceMm")] = measurement.innerCircumferenceMm;
-    headMetrics[QStringLiteral("inner_circumference_mm")] = measurement.innerCircumferenceMm;
-    headMetrics[QStringLiteral("innerRoundness")] = measurement.innerRoundness;
-    headMetrics[QStringLiteral("roundness_tol")] = measurement.innerRoundness;
-    headMetrics[QStringLiteral("innerSurfacePairCount")] = measurement.innerSurfacePairCount;
-    headMetrics[QStringLiteral("innerSurfaceSuccessCount")] = measurement.innerSurfaceSuccessCount;
-    headMetrics[QStringLiteral("lengthMm")] = measurement.lengthMm;
-    headMetrics[QStringLiteral("length_mm")] = measurement.lengthMm;
-    headMetrics[QStringLiteral("volumeLiters")] = measurement.volumeLiters;
-    headMetrics[QStringLiteral("volume_liters")] = measurement.volumeLiters;
-    headMetrics[QStringLiteral("volumeRadiusMm")] = measurement.volumeRadiusMm;
-    headMetrics[QStringLiteral("volume_radius_mm")] = measurement.volumeRadiusMm;
-    headMetrics[QStringLiteral("fittedOuterRadiusMm")] = measurement.fittedOuterRadiusMm;
-    headMetrics[QStringLiteral("fitted_outer_radius_mm")] = measurement.fittedOuterRadiusMm;
-    headMetrics[QStringLiteral("containerLeftEndPositionMm")] =
-        measurement.containerLeftEndPositionMm;
-    headMetrics[QStringLiteral("containerRightEndPositionMm")] =
-        measurement.containerRightEndPositionMm;
-    headMetrics[QStringLiteral("containerIcpFitness")] = measurement.containerIcpFitness;
-    headMetrics[QStringLiteral("containerFittedRadiusMm")] = measurement.containerFittedRadiusMm;
-    headMetrics[QStringLiteral("containerIcpConverged")] = measurement.containerIcpConverged;
-    if (!measurement.codeValue.isEmpty()) {
-        headMetrics[QStringLiteral("codeValue")] = measurement.codeValue;
+    const QString normalizedAlgorithm = algorithm.trimmed().toLower();
+
+    if (normalizedAlgorithm == QLatin1String("weld_section")) {
+        headMetrics[QStringLiteral("mismatchMm")] = measurement.mismatchMm;
+        headMetrics[QStringLiteral("reinforcementMm")] = measurement.reinforcementMm;
+        headMetrics[QStringLiteral("angularityMm")] = measurement.angularityMm;
+        headMetrics[QStringLiteral("includedAngleDeg")] = measurement.includedAngleDeg;
+        headMetrics[QStringLiteral("leftUndercutMm")] = measurement.leftUndercutMm;
+        headMetrics[QStringLiteral("rightUndercutMm")] = measurement.rightUndercutMm;
+        headMetrics[QStringLiteral("maxUndercutMm")] = measurement.maxUndercutMm;
+        headMetrics[QStringLiteral("leftUndercutLengthMm")] = measurement.leftUndercutLengthMm;
+        headMetrics[QStringLiteral("rightUndercutLengthMm")] = measurement.rightUndercutLengthMm;
+        headMetrics[QStringLiteral("measuredSegmentCount")] = measurement.measuredSegmentCount;
+    } else if (normalizedAlgorithm == QLatin1String("thickness_inner_surface")) {
+        headMetrics[QStringLiteral("thicknessMm")] = measurement.thicknessMm;
+        headMetrics[QStringLiteral("thickness_mm")] = measurement.thicknessMm;
+        headMetrics[QStringLiteral("thicknessPairCount")] = measurement.thicknessPairCount;
+        headMetrics[QStringLiteral("thicknessSuccessCount")] = measurement.thicknessSuccessCount;
+        headMetrics[QStringLiteral("innerDiameterMm")] = measurement.innerDiameterMm;
+        headMetrics[QStringLiteral("inner_diameter_mm")] = measurement.innerDiameterMm;
+        headMetrics[QStringLiteral("innerCircumferenceMm")] = measurement.innerCircumferenceMm;
+        headMetrics[QStringLiteral("inner_circumference_mm")] = measurement.innerCircumferenceMm;
+        headMetrics[QStringLiteral("innerRoundness")] = measurement.innerRoundness;
+        headMetrics[QStringLiteral("roundness_tol")] = measurement.innerRoundness;
+        headMetrics[QStringLiteral("innerSurfacePairCount")] = measurement.innerSurfacePairCount;
+        headMetrics[QStringLiteral("innerSurfaceSuccessCount")] = measurement.innerSurfaceSuccessCount;
+        headMetrics[QStringLiteral("lengthMm")] = measurement.lengthMm;
+        headMetrics[QStringLiteral("length_mm")] = measurement.lengthMm;
+        headMetrics[QStringLiteral("volumeLiters")] = measurement.volumeLiters;
+        headMetrics[QStringLiteral("volume_liters")] = measurement.volumeLiters;
+        headMetrics[QStringLiteral("volumeRadiusMm")] = measurement.volumeRadiusMm;
+        headMetrics[QStringLiteral("volume_radius_mm")] = measurement.volumeRadiusMm;
+    } else if (normalizedAlgorithm == QLatin1String("length_volume")) {
+        headMetrics[QStringLiteral("lengthMm")] = measurement.lengthMm;
+        headMetrics[QStringLiteral("length_mm")] = measurement.lengthMm;
+    } else if (normalizedAlgorithm == QLatin1String("code_read")) {
+        if (!measurement.codeValue.isEmpty()) {
+            headMetrics[QStringLiteral("codeValue")] = measurement.codeValue;
+        }
     }
     payload[QStringLiteral("headMetrics")] = headMetrics;
 }
@@ -140,20 +143,8 @@ QString formatInspectionResultTextBlock(const InspectionResult& result)
         appendKeyValue(&text, QStringLiteral("innerSurfaceSuccessCount"),
                        static_cast<qint64>(m.innerSurfaceSuccessCount));
     } else if (algorithm == QLatin1String("length_volume")) {
-        // path3：仅落盘长度及相关拟合信息，容积改由 path4 内表面结果给出。
+        // path3 只负责筒体长度检测；其它拟合字段不写入结果文本。
         appendKeyValue(&text, QStringLiteral("lengthMm"), m.lengthMm);
-        appendKeyValue(&text, QStringLiteral("fittedOuterRadiusMm"), m.fittedOuterRadiusMm);
-        appendKeyValue(&text, QStringLiteral("containerLeftEndPositionMm"),
-                       m.containerLeftEndPositionMm);
-        appendKeyValue(&text, QStringLiteral("containerRightEndPositionMm"),
-                       m.containerRightEndPositionMm);
-        appendKeyValue(&text, QStringLiteral("containerIcpFitness"), m.containerIcpFitness);
-        appendKeyValue(&text, QStringLiteral("containerFittedRadiusMm"),
-                       m.containerFittedRadiusMm);
-        appendKeyValue(&text, QStringLiteral("containerIcpConverged"),
-                       static_cast<qint64>(m.containerIcpConverged ? 1 : 0));
-        appendKeyValue(&text, QStringLiteral("measuredSegmentCount"),
-                       static_cast<qint64>(m.measuredSegmentCount));
     } else if (algorithm == QLatin1String("code_read") && !m.codeValue.isEmpty()) {
         appendKeyValue(&text, QStringLiteral("codeValue"), m.codeValue);
     } else {

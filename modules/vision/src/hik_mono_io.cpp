@@ -48,9 +48,9 @@ QString buildSegmentHikMonoPath(
     if (fileStem.isEmpty()) {
         fileStem = QStringLiteral("hik");
     } else if (fileStem == QLatin1String("hika")) {
-        fileStem = QStringLiteral("hikA");
+        fileStem = QStringLiteral("CXPA");
     } else if (fileStem == QLatin1String("hikb")) {
-        fileStem = QStringLiteral("hikB");
+        fileStem = QStringLiteral("CXPB");
     } else if (fileStem.startsWith(QLatin1String("hikc"))) {
         fileStem = QStringLiteral("hikC");
     }

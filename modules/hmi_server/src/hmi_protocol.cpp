@@ -91,15 +91,15 @@ QString summarizeHmiTracePayload(const QString& type, const QJsonObject& payload
                          .arg(mechEye.value(QLatin1String("state")).toInt(-1))
                          .arg(mechEye.value(QLatin1String("connected")).toBool() ? 1 : 0);
         }
-        const QJsonObject hikA = payload.value(QLatin1String("hikA")).toObject();
-        if (!hikA.isEmpty()) {
-            parts << QStringLiteral("hikA(conn=%1)")
-                         .arg(hikA.value(QLatin1String("connected")).toBool() ? 1 : 0);
+        const QJsonObject cxpA = payload.value(QLatin1String("cxpCameraA")).toObject();
+        if (!cxpA.isEmpty()) {
+            parts << QStringLiteral("cxpCameraA(conn=%1)")
+                         .arg(cxpA.value(QLatin1String("connected")).toBool() ? 1 : 0);
         }
-        const QJsonObject hikB = payload.value(QLatin1String("hikB")).toObject();
-        if (!hikB.isEmpty()) {
-            parts << QStringLiteral("hikB(conn=%1)")
-                         .arg(hikB.value(QLatin1String("connected")).toBool() ? 1 : 0);
+        const QJsonObject cxpB = payload.value(QLatin1String("cxpCameraB")).toObject();
+        if (!cxpB.isEmpty()) {
+            parts << QStringLiteral("cxpCameraB(conn=%1)")
+                         .arg(cxpB.value(QLatin1String("connected")).toBool() ? 1 : 0);
         }
         const QJsonObject hikC = payload.value(QLatin1String("hikC")).toObject();
         if (!hikC.isEmpty()) {

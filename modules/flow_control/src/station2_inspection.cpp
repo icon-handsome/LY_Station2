@@ -1030,7 +1030,7 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
             scan_tracking::thickness_measure_v2::ThicknessV2PairClouds cloudsView;
             cloudsView.inner.xyz = pair.inner->xyz.data();
             cloudsView.inner.pointCount = static_cast<size_t>(pair.inner->finiteCount);
-            cloudsView.outer.xyz = pair.outer->xyz.data();
+            cloudsView.outer.xyz = pair.outer->xyz.da2.ta();
             cloudsView.outer.pointCount = static_cast<size_t>(pair.outer->finiteCount);
             pairClouds.push_back(cloudsView);
             qInfo(LOG_STATION2_INSPECTION)
@@ -1087,7 +1087,7 @@ InspectionResult evaluateThicknessInnerSurfaceInspection(
             result.measurement.innerSurfaceSuccessCount = 0;
             result.message = QStringLiteral(
                 "pathId=%1 内表面容积缺少 path3 实测筒体长度（lengthSource 不可用）。"
-                "请先完成 path3/length_volume 测量；禁止使用 config.ini 兜底长度。 "
+                "请先完成 path3/length_volume 测量。 "
                 "taskId=%2 runRoot=%3")
                                  .arg(quota.pathId)
                                  .arg(taskId)
@@ -1428,13 +1428,9 @@ InspectionResult evaluateLengthVolumeInspection(
     result.measurement.containerIcpFitness = measurement.icpFitness;
     result.measurement.containerFittedRadiusMm = static_cast<double>(measurement.fittedRadiusMm);
     result.measurement.containerIcpConverged = measurement.icpConverged;
-    result.message = QStringLiteral(
-                         "pathId=%1 筒体总长 OK：length=%2 mm, "
-                         "fittedOuter=%3 mm, segments=%4")
+    result.message = QStringLiteral("pathId=%1 筒体总长 OK：length=%2 mm")
                          .arg(quota.pathId)
-                         .arg(measurement.lengthMm, 0, 'f', 3)
-                         .arg(measurement.fittedRadiusMm, 0, 'f', 3)
-                         .arg(segmentCount);
+                         .arg(measurement.lengthMm, 0, 'f', 3);
     qInfo(LOG_STATION2_INSPECTION).noquote() << result.message;
     return result;
 }

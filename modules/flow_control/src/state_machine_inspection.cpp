@@ -154,18 +154,26 @@ void StateMachine::publishInspectionOutcomeToHmiOnly(
 
     emit inspectionResultReady(result);
 
-    qInfo(LOG_ALGORITHM).noquote()
-        << triggerLabel << QStringLiteral("：后台真结果（仅 HMI/内存） Res=")
-        << result.resultCode
-        << QStringLiteral(" pathId=") << result.pathId
-        << QStringLiteral(" pathName=") << result.pathName
-        << QStringLiteral(" algorithm=") << result.algorithm
-        << QStringLiteral(" qualityCode=") << result.measurement.qualityCode
-        << QStringLiteral(" lengthMm=") << result.measurement.lengthMm
-        << QStringLiteral(" volumeL=") << result.measurement.volumeLiters
-        << QStringLiteral(" thicknessMm=") << result.measurement.thicknessMm
-        << QStringLiteral(" segments=") << result.sourcePointCount
-        << QStringLiteral(" message=") << result.message;
+    if (result.algorithm == QLatin1String("length_volume")) {
+        qInfo(LOG_ALGORITHM).noquote()
+            << triggerLabel << QStringLiteral("：Path3 长度结果（仅 HMI/内存） Res=")
+            << result.resultCode
+            << QStringLiteral(" lengthMm=") << result.measurement.lengthMm
+            << QStringLiteral(" message=") << result.message;
+    } else {
+        qInfo(LOG_ALGORITHM).noquote()
+            << triggerLabel << QStringLiteral("：后台真结果（仅 HMI/内存） Res=")
+            << result.resultCode
+            << QStringLiteral(" pathId=") << result.pathId
+            << QStringLiteral(" pathName=") << result.pathName
+            << QStringLiteral(" algorithm=") << result.algorithm
+            << QStringLiteral(" qualityCode=") << result.measurement.qualityCode
+            << QStringLiteral(" lengthMm=") << result.measurement.lengthMm
+            << QStringLiteral(" volumeL=") << result.measurement.volumeLiters
+            << QStringLiteral(" thicknessMm=") << result.measurement.thicknessMm
+            << QStringLiteral(" segments=") << result.sourcePointCount
+            << QStringLiteral(" message=") << result.message;
+    }
 }
 
 void StateMachine::saveInspectionResultTxt(
@@ -710,17 +718,24 @@ void StateMachine::publishInspectionOutcome(
 
     emit inspectionResultReady(result);
 
-    qInfo(LOG_ALGORITHM).noquote()
-        << triggerLabel << QStringLiteral("：已完成 Res=") << result.resultCode
-        << QStringLiteral(" pathId=") << result.pathId
-        << QStringLiteral(" pathName=") << result.pathName
-        << QStringLiteral(" algorithm=") << result.algorithm
-        << QStringLiteral(" qualityCode=") << result.measurement.qualityCode
-        << QStringLiteral(" lengthMm=") << result.measurement.lengthMm
-        << QStringLiteral(" volumeL=") << result.measurement.volumeLiters
-        << QStringLiteral(" thicknessMm=") << result.measurement.thicknessMm
-        << QStringLiteral(" segments=") << result.sourcePointCount
-        << QStringLiteral(" message=") << result.message;
+    if (result.algorithm == QLatin1String("length_volume")) {
+        qInfo(LOG_ALGORITHM).noquote()
+            << triggerLabel << QStringLiteral("：Path3 长度结果 Res=") << result.resultCode
+            << QStringLiteral(" lengthMm=") << result.measurement.lengthMm
+            << QStringLiteral(" message=") << result.message;
+    } else {
+        qInfo(LOG_ALGORITHM).noquote()
+            << triggerLabel << QStringLiteral("：已完成 Res=") << result.resultCode
+            << QStringLiteral(" pathId=") << result.pathId
+            << QStringLiteral(" pathName=") << result.pathName
+            << QStringLiteral(" algorithm=") << result.algorithm
+            << QStringLiteral(" qualityCode=") << result.measurement.qualityCode
+            << QStringLiteral(" lengthMm=") << result.measurement.lengthMm
+            << QStringLiteral(" volumeL=") << result.measurement.volumeLiters
+            << QStringLiteral(" thicknessMm=") << result.measurement.thicknessMm
+            << QStringLiteral(" segments=") << result.sourcePointCount
+            << QStringLiteral(" message=") << result.message;
+    }
 
     saveInspectionResultTxt(result);
 }

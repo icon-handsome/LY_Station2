@@ -590,7 +590,7 @@ void HmiTcpServer::handleCmdGetConfig(const QJsonObject& message)
     hikAObj[QLatin1String("ipAddress")] = cfgMgr->visionConfig().hikCxpCameraA.ipAddress;
     hikAObj[QLatin1String("serialNumber")] = cfgMgr->visionConfig().hikCxpCameraA.serialNumber;
     hikAObj[QLatin1String("cameraType")] = QStringLiteral("cxp");
-    visionObj[QLatin1String("hikCameraA")] = hikAObj;
+    visionObj[QLatin1String("cxpCameraA")] = hikAObj;
 
     QJsonObject hikBObj;
     hikBObj[QLatin1String("logicalName")] = cfgMgr->visionConfig().hikCxpCameraB.logicalName;
@@ -598,7 +598,7 @@ void HmiTcpServer::handleCmdGetConfig(const QJsonObject& message)
     hikBObj[QLatin1String("ipAddress")] = cfgMgr->visionConfig().hikCxpCameraB.ipAddress;
     hikBObj[QLatin1String("serialNumber")] = cfgMgr->visionConfig().hikCxpCameraB.serialNumber;
     hikBObj[QLatin1String("cameraType")] = QStringLiteral("cxp");
-    visionObj[QLatin1String("hikCameraB")] = hikBObj;
+    visionObj[QLatin1String("cxpCameraB")] = hikBObj;
 
     QJsonObject hikCObj;
     hikCObj[QLatin1String("logicalName")] = cfgMgr->visionConfig().hikCameraC.logicalName;
@@ -1068,6 +1068,19 @@ QJsonObject HmiTcpServer::buildScanPathProgressPayload() const
     obj[QLatin1String("completedPathIds")] = completedPathIds;
     obj[QLatin1String("pathCount")] = snapshot.pathCount;
     obj[QLatin1String("allPathsComplete")] = snapshot.allPathsComplete;
+
+    int currentPathIndex = 0;
+    QString currentPathAlgorithm;
+    if (snapshot.currentPathId > 0) {
+        currentPathIndex = snapshot.enabledPathIds.indexOf(snapshot.currentPathId) + 1;
+        if (const auto* cfgMgr = common::ConfigManager::instance()) {
+            if (const auto* path = cfgMgr->findScanPathById(snapshot.currentPathId)) {
+                currentPathAlgorithm = common::ConfigManager::resolvePathAlgorithm(*path);
+            }
+        }
+    }
+    obj[QLatin1String("currentPathIndex")] = currentPathIndex;
+    obj[QLatin1String("currentPathAlgorithm")] = currentPathAlgorithm;
     return obj;
 }
 
@@ -1385,10 +1398,13 @@ void HmiTcpServer::checkCameraConnectivityEdges()
 QJsonObject HmiTcpServer::buildCameraStatusPayload() const
 {
     QJsonObject payload;
+    const auto* configMgr = scan_tracking::common::ConfigManager::instance();
 
     const auto buildMechObj = [this](const mech_eye::MechEyeService* service) {
         QJsonObject mechEyeObj;
         if (service == nullptr) {
+            mechEyeObj[QLatin1String("roleName")] = QStringLiteral("unavailable");
+            mechEyeObj[QLatin1String("state")] = -1;
             mechEyeObj[QLatin1String("connected")] = false;
             return mechEyeObj;
         }
@@ -1404,43 +1420,64 @@ QJsonObject HmiTcpServer::buildCameraStatusPayload() const
         payload[QLatin1String("mechEye")] = buildMechObj(m_mechEyeTelescopic);
     }
     
-    if (m_hikCameraA) {
+    {
         QJsonObject hikAObj;
-        hikAObj[QLatin1String("roleName")] = m_hikCameraA->roleName();
-        hikAObj[QLatin1String("connected")] = m_hikCameraA->isConnected();
-        payload[QLatin1String("hikA")] = hikAObj;
-    }
-    
-    if (m_hikCameraB) {
-        QJsonObject hikBObj;
-        hikBObj[QLatin1String("roleName")] = m_hikCameraB->roleName();
-        hikBObj[QLatin1String("connected")] = m_hikCameraB->isConnected();
-        payload[QLatin1String("hikB")] = hikBObj;
+        hikAObj[QLatin1String("roleName")] = m_hikCameraA
+            ? m_hikCameraA->roleName() : QStringLiteral("CXP-A");
+        hikAObj[QLatin1String("connected")] = m_hikCameraA && m_hikCameraA->isConnected();
+        if (configMgr != nullptr) {
+            hikAObj[QLatin1String("ipAddress")] =
+                configMgr->visionConfig().hikCxpCameraA.ipAddress;
+        }
+        payload[QLatin1String("cxpCameraA")] = hikAObj;
     }
 
-    if (m_hikCameraC) {
+    {
+        QJsonObject hikBObj;
+        hikBObj[QLatin1String("roleName")] = m_hikCameraB
+            ? m_hikCameraB->roleName() : QStringLiteral("CXP-B");
+        hikBObj[QLatin1String("connected")] = m_hikCameraB && m_hikCameraB->isConnected();
+        if (configMgr != nullptr) {
+            hikBObj[QLatin1String("ipAddress")] =
+                configMgr->visionConfig().hikCxpCameraB.ipAddress;
+        }
+        payload[QLatin1String("cxpCameraB")] = hikBObj;
+    }
+
+    {
         QJsonObject hikCObj;
-        hikCObj[QLatin1String("roleName")] = m_hikCameraC->roleName();
+        hikCObj[QLatin1String("roleName")] = m_hikCameraC
+            ? m_hikCameraC->roleName() : QStringLiteral("Hik-C");
         hikCObj[QLatin1String("connected")] = hikCameraCConnected();
+        if (configMgr != nullptr) {
+            hikCObj[QLatin1String("ipAddress")] =
+                configMgr->visionConfig().hikCameraC.ipAddress;
+        }
         payload[QLatin1String("hikC")] = hikCObj;
     }
 
-    const auto* configMgr = scan_tracking::common::ConfigManager::instance();
-    if (configMgr != nullptr && m_hikCameraCController) {
+    QJsonObject hikCTelescopicObj;
+    QJsonObject hikCArmObj;
+    if (configMgr != nullptr) {
         const auto& visionConfig = configMgr->visionConfig();
-        QJsonObject hikCTelescopicObj;
         hikCTelescopicObj[QLatin1String("ipAddress")] =
             visionConfig.telescopicGroup.hikCameraC.ipAddress;
-        hikCTelescopicObj[QLatin1String("connected")] = hikCameraCConnected(
-            visionConfig.telescopicGroup.hikCameraC.ipAddress);
-        payload[QLatin1String("hikCTelescopic")] = hikCTelescopicObj;
-
-        QJsonObject hikCArmObj;
         hikCArmObj[QLatin1String("ipAddress")] = visionConfig.armGroup.hikCameraC.ipAddress;
-        hikCArmObj[QLatin1String("connected")] =
-            hikCameraCConnected(visionConfig.armGroup.hikCameraC.ipAddress);
-        payload[QLatin1String("hikCArm")] = hikCArmObj;
+        if (m_hikCameraCController != nullptr) {
+            hikCTelescopicObj[QLatin1String("connected")] = hikCameraCConnected(
+                visionConfig.telescopicGroup.hikCameraC.ipAddress);
+            hikCArmObj[QLatin1String("connected")] = hikCameraCConnected(
+                visionConfig.armGroup.hikCameraC.ipAddress);
+        }
     }
+    if (!hikCTelescopicObj.contains(QLatin1String("connected"))) {
+        hikCTelescopicObj[QLatin1String("connected")] = false;
+    }
+    if (!hikCArmObj.contains(QLatin1String("connected"))) {
+        hikCArmObj[QLatin1String("connected")] = false;
+    }
+    payload[QLatin1String("hikCTelescopic")] = hikCTelescopicObj;
+    payload[QLatin1String("hikCArm")] = hikCArmObj;
     
     if (m_visionPipeline) {
         QJsonObject pipelineObj;
@@ -1919,8 +1956,8 @@ void HmiTcpServer::connectVisionPipelineSignals()
         payload[QLatin1String("segmentIndex")] = bundle.request.segmentIndex;
         payload[QLatin1String("taskId")] = static_cast<int>(bundle.request.taskId);
         payload[QLatin1String("mechOk")] = bundle.mechEyeResult.success();
-        payload[QLatin1String("hikAOk")] = bundle.hikCameraAResult.success();
-        payload[QLatin1String("hikBOk")] = bundle.hikCameraBResult.success();
+        payload[QLatin1String("cxpCameraAOk")] = bundle.hikCameraAResult.success();
+        payload[QLatin1String("cxpCameraBOk")] = bundle.hikCameraBResult.success();
         sendToClient(buildEnvelope(QLatin1String(msg_type::kEventBundleCaptured), nextEventId(), payload));
     });
 }
@@ -1988,7 +2025,10 @@ QJsonObject HmiTcpServer::buildInspectionFinishedPayload(const flow_control::Ins
     payload[QLatin1String("ngReasonWord0")] = result.ngReasonWord0;
     payload[QLatin1String("ngReasonWord1")] = result.ngReasonWord1;
     payload[QLatin1String("measureItemCount")] = result.measureItemCount;
-    flow_control::appendInspectionMeasurementFields(payload, result.measurement);
+    flow_control::appendInspectionMeasurementFields(payload, result.measurement, result.algorithm);
+    payload[QLatin1String("elapsedSeconds")] = result.elapsedSeconds;
+    // 明确的算法指标对象，保留 headMetrics 作为现有 Qt 客户端兼容字段。
+    payload[QLatin1String("algorithmMetrics")] = payload.value(QLatin1String("headMetrics"));
     payload[QLatin1String("message")] = result.message;
     payload[QLatin1String("sourcePointCount")] = result.sourcePointCount;
     payload[QLatin1String("pathId")] = result.pathId;

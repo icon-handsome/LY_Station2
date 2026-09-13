@@ -59,7 +59,11 @@ struct InspectionResult {
     double elapsedSeconds = 0.0;
 };
 
-void appendInspectionMeasurementFields(QJsonObject& payload, const InspectionMeasurement& measurement);
+/// 按算法写入该路径实际产出的 HMI 指标，避免把其它路径的零值字段一并上报。
+void appendInspectionMeasurementFields(
+    QJsonObject& payload,
+    const InspectionMeasurement& measurement,
+    const QString& algorithm);
 
 /// 将单条路径检测结果格式化为可追加写入 result.txt 的文本块。
 QString formatInspectionResultTextBlock(const InspectionResult& result);

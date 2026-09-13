@@ -148,11 +148,12 @@ TCP 是流式协议，为解决粘包和半包问题，采用长度前缀的帧�
   - `message` (string)
   - `headMetrics` (object)：见下
 
-- **`headMetrics` 主要字段**（按算法路径填充，未测项可为 0）：
+- **`headMetrics` 主要字段**（只发送当前算法路径实际产出的指标，不发送其它路径字段）：
   - `qualityCode` (int): 1=通过，2=不通过/无效
   - 焊缝：`mismatchMm` / `reinforcementMm` / `angularityMm` / `includedAngleDeg` / `leftUndercutMm` / `rightUndercutMm` / `maxUndercutMm` / `measuredSegmentCount`
   - 厚度/内表面：`thicknessMm` / `thicknessPairCount` / `thicknessSuccessCount` / `innerDiameterMm` / `innerCircumferenceMm` / `innerRoundness` / …
-  - 长度容积：`lengthMm` / `volumeLiters` / `volumeRadiusMm` / `fittedOuterRadiusMm`
+  - Path3 长度：`lengthMm`（兼容别名 `length_mm`）
+  - Path4 厚度/内表面：同时包含长度和容积字段：`lengthMm` / `volumeLiters` / `volumeRadiusMm`
   - 部分字段同时带 snake_case 别名（如 `thickness_mm`），便于旧绑定迁移
 
 ### 2.7 其他检测校验完成 (`event.xxx.finished`)
