@@ -169,9 +169,19 @@ TCP 是流式协议，为解决粘包和半包问题，采用长度前缀的帧�
 - `event.code_read.finished`: `{ resultCode, codeValue(string) }`
 - `event.result_reset.finished`: `{ resultCode }`
 
-### 2.7.1 吊装辅助结果（Core → Qt，边沿触发）
+### 2.7.1 吊装辅助（显控启动 + Core 结果边沿）
 
-需 `config.ini` 中 `enableHoistAssist=true`，且 Core 已启动吊装辅助融合服务。**当前成败只看双 TF**（TF1 `>235cm` 且 TF2 `170~190cm`）；Mid360 / 海康 C 仍出现在 payload 中，暂不参与判定。**状态从「等待」进入成功/失败时各推一次**，回到等待后再进入会再次推送。
+需 `config.ini` 中 `enableHoistAssist=true`。Core **仅创建服务，不开判定**；须显控先发 `cmd.start_hoist_assist`。**当前成败只看双 TF**（TF1 `>235cm` 且 TF2 `170~190cm`）；Mid360 / 海康 C 仍可出现在结果 payload 中，暂不参与判定。
+
+#### 显控开始：`cmd.start_hoist_assist`
+- request：`payload` 可为 `{}`
+- response：`{ success, message }`；失败常见原因：功能未启用
+- 成功后 Core 另推 `event.hoist_assist.started`：`{ message }`
+- 重复下发 = 新开一轮（清空缓存后重新判定）
+
+#### 显控停止（可选）：`cmd.stop_hoist_assist`
+- request：`payload` 可为 `{}`
+- response：`{ success, message }`
 
 #### 成功：`event.hoist_assist.passed`
 ```json
@@ -223,8 +233,8 @@ TCP 是流式协议，为解决粘包和半包问题，采用长度前缀的帧�
 
 - `reason` 当前：`""`（成功）、`"tf"`（双 TF 均有效但不满足阈值）。`"collision"` / `"hik"` 为预留码，现不用于成败事件。
 - `collisionLevel` / `hikPassed`：监视字段，不改变本事件的成功/失败。
-- Qt **无需回执**；按 `type` 分发到 UI（成功提示 / 失败报警）即可
-
+- 结果事件 **无需回执**；按 `type` 分发到 UI 即可
+- 未收到 `cmd.start_hoist_assist` 前，不推送 passed/failed
 ### 2.8 报警与日志
 - `event.alarm`: `{ level, code, message, timestamp }` (单向发送，无需回执)
 - **辅机 PLC 报警 code（920 段，与 Modbus 900 段、相机 910 段区分）**：
@@ -261,6 +271,8 @@ Qt 发送 request（附带不重复的 `msgId`），Core 执行后返回对应 `
 | `cmd.refresh_camera` | `{}` | - | 刷新相机连接状态 |
 | `cmd.modbus_connect` | `{}` | - | 重连 PLC Modbus |
 | `cmd.modbus_disconnect` | `{}` | - | 断开 PLC Modbus |
+| `cmd.start_hoist_assist` | `{}` | - | 开始本轮吊装辅助（须 `enableHoistAssist=true`）；成功后另推 `event.hoist_assist.started` |
+| `cmd.stop_hoist_assist` | `{}` | - | 停止本轮吊装辅助（可选） |
 
 > **备注**：不需要支持 `cmd.set_config`（热修改配置），不涉及直接控制 PLC 寄存器的命令（Qt 不直接控制 PLC）。  
 > **`cmd.trigger_*` 与 `cmd.debug_trigger_inspection` 区别**：除 `cmd.trigger_self_check`（仅接收应答，执行待完善）外，其余 `cmd.trigger_*` 一律拒绝（防撞机）；`cmd.debug_trigger_inspection` 为联调入口，不写 PLC。

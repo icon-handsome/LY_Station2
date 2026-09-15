@@ -33,13 +33,15 @@ HoistAssistService::HoistAssistService(QObject* parent)
 
 void HoistAssistService::start()
 {
-    if (m_running) {
-        return;
-    }
+    // 允许显控重复下发「开始吊装」：每轮都清空缓存，重新边沿判定。
     m_clock.start();
-    resetInputs();
+    m_result = HoistAssistResult{};
+    m_tf1LastUpdateMs = -1;
+    m_tf2LastUpdateMs = -1;
+    m_lastOutcome = Outcome::None;
     m_running = true;
     publishState(HoistAssistState::Running, QStringLiteral("吊装辅助已启动，等待双 TF 定位结果"));
+    emit resultChanged(m_result);
     recompute();
 }
 

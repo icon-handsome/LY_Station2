@@ -24,7 +24,8 @@ class HoistAssistService final : public QObject {
 public:
     explicit HoistAssistService(QObject* parent = nullptr);
 
-    /// 启动吊装辅助：复位输入并进入 Running，等待双 TF 结果。
+    /// 启动本轮吊装辅助：清空输入并进入 Running，等待双 TF。
+    /// 可重复调用（显控每次「开始吊装」开新一轮）。须由 HMI cmd.start_hoist_assist 触发，勿开机自启。
     void start();
     /// 停止吊装辅助：进入 Stopped，不再根据输入切换 Unsafe/Running。
     void stop();

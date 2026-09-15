@@ -251,8 +251,9 @@ void ConsoleRuntime::runDeferredStartupTasks()
             << QStringLiteral("[%1] service started.").arg(label);
     }
     if (hoistAssistService_) {
-        hoistAssistService_->start();
-        qInfo(appLog) << QStringLiteral("[HoistAssist] service started.");
+        // 服务已创建，但须等显控 cmd.start_hoist_assist 后再 start() 进入判定。
+        qInfo(appLog) << QStringLiteral(
+            "[HoistAssist] ready; waiting for HMI cmd.start_hoist_assist.");
     }
 
     // 给后台异步 Open 一点时间，再串行预热 A/B，避免 path3 首点才第一次连 CXP。

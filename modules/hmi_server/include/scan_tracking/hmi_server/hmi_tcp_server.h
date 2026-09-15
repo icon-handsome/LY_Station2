@@ -204,6 +204,11 @@ private:
     void handleCmdSetBevelRecipe(const QJsonObject& message);
     void handleCmdDebugTriggerInspection(const QJsonObject& message);
 
+    /// 显控请求开始本轮吊装辅助（TF 成败判定）
+    void handleCmdStartHoistAssist(const QJsonObject& message);
+    /// 显控请求停止本轮吊装辅助
+    void handleCmdStopHoistAssist(const QJsonObject& message);
+
 
     // --- 状态推送函数 ---
     

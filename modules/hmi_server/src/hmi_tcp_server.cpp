@@ -412,6 +412,11 @@ void HmiTcpServer::initializeMessageHandlers()
     // 兼容显控侧 zone 误拼为 zome
     m_messageHandlers[QString::fromLatin1(msg_type::kCmdReportPersonZoneAlarmTypo)] =
         &HmiTcpServer::handleCmdReportPersonZoneAlarm;
+
+    m_messageHandlers[QString::fromLatin1(msg_type::kCmdStartHoistAssist)] =
+        &HmiTcpServer::handleCmdStartHoistAssist;
+    m_messageHandlers[QString::fromLatin1(msg_type::kCmdStopHoistAssist)] =
+        &HmiTcpServer::handleCmdStopHoistAssist;
 }
 
 // 处理接收到的客户端消息，根据 type 字段分发到不同的处理函数
@@ -1019,6 +1024,58 @@ void HmiTcpServer::handleCmdDebugTriggerInspection(const QJsonObject& message)
         msgId,
         success,
         result.message);
+}
+
+void HmiTcpServer::handleCmdStartHoistAssist(const QJsonObject& message)
+{
+    const QString msgId = message.value(QLatin1String("msgId")).toString();
+    if (m_hoistAssistService == nullptr) {
+        sendResponse(
+            QLatin1String(msg_type::kCmdStartHoistAssist),
+            msgId,
+            false,
+            QStringLiteral("吊装辅助未启用（请设 enableHoistAssist=true）"));
+        return;
+    }
+
+    m_hoistAssistService->start();
+    sendResponse(
+        QLatin1String(msg_type::kCmdStartHoistAssist),
+        msgId,
+        true,
+        QStringLiteral("吊装辅助已开始，等待双 TF 定位结果"));
+
+    QJsonObject eventPayload;
+    eventPayload[QLatin1String("message")] =
+        QStringLiteral("吊装辅助已开始，等待双 TF 定位结果");
+    sendToClient(buildEnvelope(
+        QLatin1String(msg_type::kEventHoistAssistStarted),
+        nextEventId(),
+        eventPayload));
+    qInfo(LOG_HMI_SERVER).noquote()
+        << QStringLiteral("[TCPIP] 已应答 cmd.start_hoist_assist 并推送 event.hoist_assist.started");
+}
+
+void HmiTcpServer::handleCmdStopHoistAssist(const QJsonObject& message)
+{
+    const QString msgId = message.value(QLatin1String("msgId")).toString();
+    if (m_hoistAssistService == nullptr) {
+        sendResponse(
+            QLatin1String(msg_type::kCmdStopHoistAssist),
+            msgId,
+            false,
+            QStringLiteral("吊装辅助未启用（请设 enableHoistAssist=true）"));
+        return;
+    }
+
+    m_hoistAssistService->stop();
+    sendResponse(
+        QLatin1String(msg_type::kCmdStopHoistAssist),
+        msgId,
+        true,
+        QStringLiteral("吊装辅助已停止"));
+    qInfo(LOG_HMI_SERVER).noquote()
+        << QStringLiteral("[TCPIP] 已应答 cmd.stop_hoist_assist");
 }
 
 // --- 状态推送实现 ---

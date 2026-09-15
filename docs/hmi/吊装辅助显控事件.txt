@@ -1,43 +1,68 @@
 # 吊装辅助 → Qt 显控事件（交接摘要）
 
-Core 在 `enableHoistAssist=true` 时，对吊装结果做**边沿推送**（进入成功/失败各发一次）。
+Core 在 `enableHoistAssist=true` 时创建吊装服务，但**不会自动开判定**。  
+须由显控先发 `cmd.start_hoist_assist`，IPC 才进入本轮双 TF 成败流程。
 
-**当前成败只看双 TF**（TF1 `>235cm` 且 TF2 `170~190cm`）。海康 C / Mid360 仍会填入 payload，**不参与** passed/failed。
+**当前成败只看双 TF**（TF1 `>235cm` 且 TF2 `170~190cm`）。海康 C / Mid360 仅监视。
 
-| type | 含义 | Qt 建议动作 |
-|------|------|-------------|
-| `event.hoist_assist.passed` | 双 TF 定位通过 | 绿灯 / 成功提示 |
-| `event.hoist_assist.failed` | 双 TF 均有效但不满足阈值 | 红灯 / 报警，`payload.reason` 当前为 `"tf"` |
+## 1. 显控 → Core（开始/停止）
 
-## payload 字段
+### 开始吊装（必发）
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `success` | bool | passed=true，failed=false |
-| `message` | string | 中文说明 |
-| `reason` | string | 当前：`""`（成功）或 `"tf"`（失败）；`collision`/`hik` 预留 |
-| `tfPassed` | bool | 双 TF 是否满足阈值 |
-| `tf1DistanceCm` / `tf1Valid` | int / bool | TF1 |
-| `tf2DistanceCm` / `tf2Valid` | int / bool | TF2 |
-| `collisionSafe` | bool | Mid360 是否安全（仅监视，不参与成败） |
-| `collisionLevel` | int | 碰撞告警等级（仅监视） |
-| `hikPassed` / `hikResultReceived` | bool | 海康 C ROI（仅监视） |
-
-## Qt 侧伪代码
-
-```cpp
-void onHmiEvent(const QString& type, const QJsonObject& payload) {
-    if (type == "event.hoist_assist.passed") {
-        showHoistOk(payload.value("message").toString());
-        return;
-    }
-    if (type == "event.hoist_assist.failed") {
-        const QString reason = payload.value("reason").toString(); // 当前为 tf
-        showHoistAlarm(payload.value("message").toString(), reason);
-        return;
-    }
+```json
+{
+  "version": "1.0",
+  "msgId": "req-hoist-1",
+  "type": "cmd.start_hoist_assist",
+  "timestamp": 1710000000000,
+  "payload": {}
 }
 ```
 
-完整样例见：`docs/protocols/封头检测工位_TCP_IP显控通信协议_v1.0.md` §2.7.1  
-无需回执；帧格式仍为 `[4B BE 长度][UTF-8 JSON]`。
+成功应答（同 `msgId`）：
+
+```json
+{
+  "type": "cmd.start_hoist_assist",
+  "msgId": "req-hoist-1",
+  "payload": {
+    "success": true,
+    "message": "吊装辅助已开始，等待双 TF 定位结果"
+  }
+}
+```
+
+失败常见：`enableHoistAssist=false` → `success=false`，文案含「吊装辅助未启用」。  
+重复下发会重新开一轮（清空缓存，重新边沿判定）。
+
+### 停止吊装（可选）
+
+```json
+{
+  "type": "cmd.stop_hoist_assist",
+  "msgId": "req-hoist-2",
+  "payload": {}
+}
+```
+
+## 2. Core → 显控（事件）
+
+| type | 含义 | Qt 建议动作 |
+|------|------|-------------|
+| `event.hoist_assist.started` | 已开始本轮判定 | 切到「等待定位」UI |
+| `event.hoist_assist.passed` | 双 TF 定位通过 | 绿灯 / 成功提示 |
+| `event.hoist_assist.failed` | 双 TF 均有效但不满足阈值 | 红灯 / 报警，`reason` 当前为 `"tf"` |
+
+## 3. 推荐时序
+
+```text
+显控连上 TCP
+  → 操作员点「开始吊装」
+  → 发 cmd.start_hoist_assist
+  → 收应答 success=true + event.hoist_assist.started
+  → 等待 event.hoist_assist.passed 或 .failed
+  → （可选）下一件再发 cmd.start_hoist_assist
+```
+
+完整协议见：`docs/protocols/封头检测工位_TCP_IP显控通信协议_v1.0.md` §2.7.1 / 命令表  
+帧格式：`[4B BE 长度][UTF-8 JSON]`。

@@ -61,9 +61,11 @@ inline constexpr const char* kEventPathStarted          = "event.path.started";
 inline constexpr const char* kEventPathFinished         = "event.path.finished";
 inline constexpr const char* kEventScanPathsAllFinished = "event.scan_paths.all_finished";
 inline constexpr const char* kEventPathProgressReset    = "event.path.progress_reset";
-/// 吊装辅助三类检查全部通过（Core → Qt，边沿触发）
+/// 吊装辅助已按显控指令开始本轮判定（Core → Qt）
+inline constexpr const char* kEventHoistAssistStarted   = "event.hoist_assist.started";
+/// 双 TF 定位通过（Core → Qt，边沿触发）
 inline constexpr const char* kEventHoistAssistPassed    = "event.hoist_assist.passed";
-/// 吊装辅助明确失败（Core → Qt，边沿触发）
+/// 吊装辅助明确失败（Core → Qt，边沿触发；当前主要为 TF）
 inline constexpr const char* kEventHoistAssistFailed    = "event.hoist_assist.failed";
 inline constexpr const char* kEventAlarm             = "event.alarm";
 inline constexpr const char* kEventLog               = "event.log";
@@ -97,6 +99,11 @@ inline constexpr const char* kCmdReportPersonZoneAlarm = "cmd.report_person_zone
 
 /// 显控早期拼写别名（zome → zone），与 kCmdReportPersonZoneAlarm 同义
 inline constexpr const char* kCmdReportPersonZoneAlarmTypo = "cmd.report_person_zome_alarm";
+
+/// 显控请求开始本轮吊装辅助判定（收到后 IPC 才进入 TF 成败流程）
+inline constexpr const char* kCmdStartHoistAssist = "cmd.start_hoist_assist";
+/// 显控请求停止本轮吊装辅助判定（可选；再次开始前不必先 stop）
+inline constexpr const char* kCmdStopHoistAssist = "cmd.stop_hoist_assist";
 
 }  // namespace msg_type
 
