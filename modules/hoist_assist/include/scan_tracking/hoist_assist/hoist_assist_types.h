@@ -51,7 +51,8 @@ struct HoistAssistResult {
     bool hikResultReceived = false;  // 是否已收到海康相机判定结果
     bool hikPassed = false;          // 海康 C 焊缝/ROI 模型判定是否通过
 
-    bool allChecksPassed = false;  // TF、碰撞、海康三类检查全部通过
+    // 当前对外成败只认双 TF；碰撞/海康仍缓存，后续可重新计入判定。
+    bool allChecksPassed = false;
     HoistAssistFailReason failReason = HoistAssistFailReason::None;
     QString message;               // 面向界面/日志的状态说明
 };

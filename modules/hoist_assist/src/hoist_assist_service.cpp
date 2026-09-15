@@ -19,6 +19,9 @@ bool tf2Passes(const TfDistanceSample& sample)
 // TF 采样超时阈值：超时后将该路 valid 置为 false，避免断线仍沿用旧帧通过检查
 constexpr qint64 kTfSampleTimeoutMs = 1500;
 
+// 后续若要把碰撞 / 海康重新计入成败，改为 true 即可，输入更新逻辑无需改。
+constexpr bool kJudgeCollisionAndHik = false;
+
 }  // namespace
 
 HoistAssistService::HoistAssistService(QObject* parent)
@@ -36,7 +39,7 @@ void HoistAssistService::start()
     m_clock.start();
     resetInputs();
     m_running = true;
-    publishState(HoistAssistState::Running, QStringLiteral("吊装辅助已启动，等待三类传感器结果"));
+    publishState(HoistAssistState::Running, QStringLiteral("吊装辅助已启动，等待双 TF 定位结果"));
     recompute();
 }
 
@@ -122,7 +125,9 @@ void HoistAssistService::recompute()
         }
     }
     m_result.tfPassed = tf1Passes(m_result.tf1) && tf2Passes(m_result.tf2);
-    m_result.allChecksPassed = m_result.tfPassed && m_result.collisionSafe && m_result.hikPassed;
+    m_result.allChecksPassed = kJudgeCollisionAndHik
+        ? (m_result.tfPassed && m_result.collisionSafe && m_result.hikPassed)
+        : m_result.tfPassed;
     m_result.failReason = HoistAssistFailReason::None;
 
     if (!m_running) {
@@ -130,8 +135,8 @@ void HoistAssistService::recompute()
         return;
     }
 
-    // 判定优先级：碰撞 → TF 定位（双路均有效才明确失败）→ 海康 ROI（需 TF+碰撞已过）→ 全部通过 → 等待
-    if (m_result.collisionResultReceived && !m_result.collisionSafe) {
+    // 碰撞 / 海康分支保留：kJudgeCollisionAndHik=true 时重新计入成败。
+    if (kJudgeCollisionAndHik && m_result.collisionResultReceived && !m_result.collisionSafe) {
         m_result.failReason = HoistAssistFailReason::Collision;
         m_result.message = QStringLiteral("Mid360 碰撞检测未通过");
         publishState(HoistAssistState::Unsafe, m_result.message);
@@ -142,18 +147,18 @@ void HoistAssistService::recompute()
             "TF 定位约束未通过（TF1>235cm 且 TF2 在 170~190cm）");
         publishState(HoistAssistState::Unsafe, m_result.message);
         publishOutcome(Outcome::Failed);
-    } else if (m_result.tfPassed && m_result.collisionSafe && m_result.hikResultReceived
-               && !m_result.hikPassed) {
+    } else if (kJudgeCollisionAndHik && m_result.tfPassed && m_result.collisionSafe
+               && m_result.hikResultReceived && !m_result.hikPassed) {
         m_result.failReason = HoistAssistFailReason::HikRoi;
         m_result.message = QStringLiteral("海康 C 焊缝/ROI 判定未通过");
         publishState(HoistAssistState::Unsafe, m_result.message);
         publishOutcome(Outcome::Failed);
     } else if (m_result.allChecksPassed) {
-        m_result.message = QStringLiteral("吊装辅助检查全部通过");
+        m_result.message = QStringLiteral("吊装辅助 TF 定位通过");
         publishState(HoistAssistState::Running, m_result.message);
         publishOutcome(Outcome::Passed);
     } else {
-        m_result.message = QStringLiteral("等待吊装辅助检查结果");
+        m_result.message = QStringLiteral("等待吊装辅助 TF 定位结果");
         publishState(HoistAssistState::Running, m_result.message);
         // 回到等待态，允许随后再次边沿触发成功/失败
         m_lastOutcome = Outcome::None;

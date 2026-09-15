@@ -1,11 +1,13 @@
 # 吊装辅助 → Qt 显控事件（交接摘要）
 
-Core 在 `enableHoistAssist=true` 时，对吊装三类检查结果做**边沿推送**（进入成功/失败各发一次）。
+Core 在 `enableHoistAssist=true` 时，对吊装结果做**边沿推送**（进入成功/失败各发一次）。
+
+**当前成败只看双 TF**（TF1 `>235cm` 且 TF2 `170~190cm`）。海康 C / Mid360 仍会填入 payload，**不参与** passed/failed。
 
 | type | 含义 | Qt 建议动作 |
 |------|------|-------------|
-| `event.hoist_assist.passed` | 吊装检查全部通过 | 绿灯 / 成功提示 |
-| `event.hoist_assist.failed` | 明确失败 | 红灯 / 报警，可读 `payload.reason` |
+| `event.hoist_assist.passed` | 双 TF 定位通过 | 绿灯 / 成功提示 |
+| `event.hoist_assist.failed` | 双 TF 均有效但不满足阈值 | 红灯 / 报警，`payload.reason` 当前为 `"tf"` |
 
 ## payload 字段
 
@@ -13,13 +15,13 @@ Core 在 `enableHoistAssist=true` 时，对吊装三类检查结果做**边沿�
 |------|------|------|
 | `success` | bool | passed=true，failed=false |
 | `message` | string | 中文说明 |
-| `reason` | string | `""` / `collision` / `tf` / `hik` |
+| `reason` | string | 当前：`""`（成功）或 `"tf"`（失败）；`collision`/`hik` 预留 |
 | `tfPassed` | bool | 双 TF 是否满足阈值 |
 | `tf1DistanceCm` / `tf1Valid` | int / bool | TF1 |
 | `tf2DistanceCm` / `tf2Valid` | int / bool | TF2 |
-| `collisionSafe` | bool | Mid360 是否安全 |
-| `collisionLevel` | int | 碰撞告警等级 |
-| `hikPassed` / `hikResultReceived` | bool | 海康 C ROI |
+| `collisionSafe` | bool | Mid360 是否安全（仅监视，不参与成败） |
+| `collisionLevel` | int | 碰撞告警等级（仅监视） |
+| `hikPassed` / `hikResultReceived` | bool | 海康 C ROI（仅监视） |
 
 ## Qt 侧伪代码
 
@@ -30,7 +32,7 @@ void onHmiEvent(const QString& type, const QJsonObject& payload) {
         return;
     }
     if (type == "event.hoist_assist.failed") {
-        const QString reason = payload.value("reason").toString(); // collision|tf|hik
+        const QString reason = payload.value("reason").toString(); // 当前为 tf
         showHoistAlarm(payload.value("message").toString(), reason);
         return;
     }

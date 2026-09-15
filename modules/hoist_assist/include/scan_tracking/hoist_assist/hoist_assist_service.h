@@ -8,12 +8,14 @@
 
 namespace scan_tracking::hoist_assist {
 
-// 吊装辅助服务：汇总 TF 测距、Mid360 碰撞检测、海康 C 焊缝/ROI 三类结果并输出状态
+// 吊装辅助服务：缓存 TF / Mid360 碰撞 / 海康 C，并输出状态
+//
+// 当前对外成败只认双 TF（碰撞与海康仍采集、缓存，暂不参与判定，开关见 kJudgeCollisionAndHik）。
 //
 // 职责：
 // - 缓存各路传感器最新输入，并按周期重新判定
 // - TF 采样超时后自动失效，避免断线后仍沿用旧数据通过检查
-// - 明确失败 → Unsafe + checkFailed；全部通过 → checkPassed（边沿触发，避免刷屏）
+// - TF 明确失败 → Unsafe + checkFailed；双 TF 通过 → checkPassed（边沿触发）
 //
 // 典型流程：start → 持续 update* / evaluate → stop
 class HoistAssistService final : public QObject {
@@ -22,7 +24,7 @@ class HoistAssistService final : public QObject {
 public:
     explicit HoistAssistService(QObject* parent = nullptr);
 
-    /// 启动吊装辅助：复位输入并进入 Running，等待三类传感器结果。
+    /// 启动吊装辅助：复位输入并进入 Running，等待双 TF 结果。
     void start();
     /// 停止吊装辅助：进入 Stopped，不再根据输入切换 Unsafe/Running。
     void stop();
@@ -56,7 +58,7 @@ signals:
     void stateChanged(scan_tracking::hoist_assist::HoistAssistState state, QString message);
     /// 综合结果刷新时发出（含未运行时的输入更新）。
     void resultChanged(scan_tracking::hoist_assist::HoistAssistResult result);
-    /// 三类检查首次（或再次）全部通过时发出，供 HMI 绿灯/成功提示。
+    /// 双 TF 首次（或再次）通过时发出，供 HMI 绿灯/成功提示。
     void checkPassed(scan_tracking::hoist_assist::HoistAssistResult result);
     /// 明确失败时发出（边沿），供 HMI 报警/失败提示。
     void checkFailed(scan_tracking::hoist_assist::HoistAssistResult result);

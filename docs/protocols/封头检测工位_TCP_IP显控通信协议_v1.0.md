@@ -171,7 +171,7 @@ TCP 是流式协议，为解决粘包和半包问题，采用长度前缀的帧�
 
 ### 2.7.1 吊装辅助结果（Core → Qt，边沿触发）
 
-需 `config.ini` 中 `enableHoistAssist=true`，且 Core 已启动吊装辅助融合服务。判定由双 TF + Mid360 碰撞 + 第三路海康 C 汇总；**状态从「等待」进入成功/失败时各推一次**，回到等待后再进入会再次推送。
+需 `config.ini` 中 `enableHoistAssist=true`，且 Core 已启动吊装辅助融合服务。**当前成败只看双 TF**（TF1 `>235cm` 且 TF2 `170~190cm`）；Mid360 / 海康 C 仍出现在 payload 中，暂不参与判定。**状态从「等待」进入成功/失败时各推一次**，回到等待后再进入会再次推送。
 
 #### 成功：`event.hoist_assist.passed`
 ```json
@@ -182,7 +182,7 @@ TCP 是流式协议，为解决粘包和半包问题，采用长度前缀的帧�
   "timestamp": 1710000000000,
   "payload": {
     "success": true,
-    "message": "吊装辅助检查全部通过",
+    "message": "吊装辅助 TF 定位通过",
     "reason": "",
     "tfPassed": true,
     "tf1DistanceCm": 240,
@@ -206,23 +206,23 @@ TCP 是流式协议，为解决粘包和半包问题，采用长度前缀的帧�
   "timestamp": 1710000000000,
   "payload": {
     "success": false,
-    "message": "Mid360 碰撞检测未通过",
-    "reason": "collision",
+    "message": "TF 定位约束未通过（TF1>235cm 且 TF2 在 170~190cm）",
+    "reason": "tf",
     "tfPassed": false,
-    "tf1DistanceCm": 250,
+    "tf1DistanceCm": 200,
     "tf1Valid": true,
     "tf2DistanceCm": 180,
     "tf2Valid": true,
-    "collisionSafe": false,
-    "collisionLevel": 2,
+    "collisionSafe": true,
+    "collisionLevel": 0,
     "hikPassed": false,
     "hikResultReceived": false
   }
 }
 ```
 
-- `reason` 取值：`""`（成功）、`"collision"`（Mid360）、`"tf"`（双 TF 定位约束）、`"hik"`（海康焊缝/ROI）
-- `collisionLevel`：与碰撞监控告警等级一致（0=None，其余为告警）
+- `reason` 当前：`""`（成功）、`"tf"`（双 TF 均有效但不满足阈值）。`"collision"` / `"hik"` 为预留码，现不用于成败事件。
+- `collisionLevel` / `hikPassed`：监视字段，不改变本事件的成功/失败。
 - Qt **无需回执**；按 `type` 分发到 UI（成功提示 / 失败报警）即可
 
 ### 2.8 报警与日志
