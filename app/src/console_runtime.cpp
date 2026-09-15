@@ -892,6 +892,7 @@ void ConsoleRuntime::initModules()
 
     if (hoistAssistService_ && !visionConfig.hikCameraCThird.ipAddress.trimmed().isEmpty()) {
         const QString thirdCameraIp = visionConfig.hikCameraCThird.ipAddress.trimmed();
+        // 保留结果缓存接线，便于日后把海康重新计入吊装判定；当前成败只看 TF，不周期采第三路。
         QObject::connect(
             hikCameraCController_.get(),
             &scan_tracking::vision::HikCameraCController::inspectionResultReceived,
@@ -903,30 +904,10 @@ void ConsoleRuntime::initModules()
                 }
             },
             Qt::QueuedConnection);
-
-        hoistAssistCycleTimer_ = std::make_unique<QTimer>(this);
-        hoistAssistCycleTimer_->setInterval(500);
-        QObject::connect(
-            hoistAssistCycleTimer_.get(),
-            &QTimer::timeout,
-            this,
-            [this, thirdCameraIp]() {
-                if (!hoistAssistService_ || !hikCameraCController_) {
-                    return;
-                }
-                // 仅周期采图 + 超时评估；不在此处清空海康结果，避免把上一帧 PASS 冲掉。
-                // 海康结果由 inspectionResultReceived → updateHikCameraResult 边沿刷新。
-                if (hikCameraCController_->isCameraConnected(thirdCameraIp)) {
-                    hikCameraCController_->requestCapture(
-                        scan_tracking::vision::CaptureType::WeldDefect,
-                        thirdCameraIp);
-                }
-                hoistAssistService_->evaluate();
-            });
-        // 延后到 StateMachine::start 之后再开周期采图，避免启动期与梅卡/状态机并发。
-        qInfo(appLog) << QStringLiteral(
-            "[HoistAssist] third Hik C periodic capture armed (start after StateMachine): 500ms, ip=")
-                      << thirdCameraIp;
+        qInfo(appLog).noquote()
+            << QStringLiteral(
+                   "[HoistAssist] third Hik C armed for cache only (no periodic capture), ip=")
+            << thirdCameraIp;
     }
 
 
@@ -966,6 +947,7 @@ void ConsoleRuntime::initModules()
         mechEyeArmService_.get(),
         visionPipelineService_.get(),
         hikCameraCController_.get());
+    stateMachine_->setHoistAssistService(hoistAssistService_.get());
 
     // HMI：先注入依赖；bind/listen 延后到事件循环，避免与 MechEye/视觉 worker 启动期竞态崩溃。
     const auto& hmiConfig = scan_tracking::common::ConfigManager::instance()->hmiConfig();
@@ -987,12 +969,6 @@ void ConsoleRuntime::initModules()
 
     stateMachine_->start();
     qInfo(appLog) << QStringLiteral("状态机已启动。");
-
-    if (hoistAssistCycleTimer_ != nullptr && !hoistAssistCycleTimer_->isActive()) {
-        hoistAssistCycleTimer_->start();
-        qInfo(appLog) << QStringLiteral(
-            "[HoistAssist] third Hik C periodic capture/evaluation started after StateMachine.");
-    }
 
     // StateMachine 启动完成后再拉起 CXP SDK 枚举/连接，降低启动期进程闪退概率。
     if (visionConfig.hikCxpEnabled && hikCxpCameraAService_ && hikCxpCameraBService_) {

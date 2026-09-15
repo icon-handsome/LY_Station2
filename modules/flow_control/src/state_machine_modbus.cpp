@@ -4,6 +4,7 @@
 
 #include "scan_tracking/common/config_manager.h"
 #include "scan_tracking/flow_control/station_trigger_policy.h"
+#include "scan_tracking/hoist_assist/hoist_assist_service.h"
 #include "scan_tracking/mech_eye/mech_eye_service.h"
 #include "scan_tracking/vision/hik_camera_c_controller.h"
 
@@ -464,6 +465,16 @@ void StateMachine::processTrigger(const protocol::TriggerDefinition& trigger, co
                                      << protocol::triggerName(trigger);
         sendRes(trigger, 9);
         sendAck(trigger, protocol::AckState::Failed);
+        return;
+    }
+
+    // 吊装辅助启用时：段扫/伸缩杆扫等拍照流程须先吊装通过，否则拒应答（Res=8 / Ack=Failed）。
+    if (isScanCaptureStage(trigger.stage) && m_hoistAssistService != nullptr &&
+        !m_hoistAssistService->result().allChecksPassed) {
+        rejectPathFlowTrigger(
+            trigger,
+            8,
+            QStringLiteral("吊装辅助未通过，拒绝拍照流程"));
         return;
     }
 

@@ -26,7 +26,8 @@ bool isTriggerEnabledForProfile(const common::StationProfile& profile, const cha
     }
 
     // Stage 2 only gates the three first-station-only triggers above.
-    // enableTelescopicScan / enableHoistAssist / enableCollisionMonitor are stage3+ switches.
+    // enableTelescopicScan：伸缩杆扫触发开关。
+    // enableHoistAssist：由 StateMachine 注入 HoistAssistService 后拦截拍照类 Trig（非本函数）。
     return true;
 }
 

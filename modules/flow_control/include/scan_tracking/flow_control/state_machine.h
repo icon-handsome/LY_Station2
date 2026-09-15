@@ -35,6 +35,9 @@ namespace vision {
 class VisionPipelineService;
 class HikCameraCController;
 }
+namespace hoist_assist {
+class HoistAssistService;
+}
 namespace flow_control {
 
 class TaskHandlerRegistry;
@@ -115,7 +118,11 @@ public:
     quint16 robotStatusWord() const;
 
     void setAlarm(quint16 level, quint16 code, const QString& message);
+    /// 显控上报监控区域有无人员（写 IPC_SafetyAction_Word 停 PLC）。
     bool reportPersonZoneAlarm(bool alarm);
+
+    /// 注入吊装辅助：非空且 enableHoistAssist 时，拍照类 Trig（段扫/伸缩杆扫）须吊装已通过。
+    void setHoistAssistService(hoist_assist::HoistAssistService* svc);
 
     /// 基于当前段缓存同步评估。主线程走 try_lock（繁忙立即返回），避免卡死 GUI/Modbus。
     InspectionResult evaluateCachedInspection(quint32 taskId = 0) const;
@@ -400,6 +407,7 @@ private:
     mech_eye::MechEyeService* m_mechEyeArm = nullptr;
     vision::VisionPipelineService* m_visionPipeline = nullptr;
     vision::HikCameraCController* m_hikCameraCController = nullptr;
+    hoist_assist::HoistAssistService* m_hoistAssistService = nullptr;
     QTimer* m_pollTimer = nullptr;
     QTimer* m_heartbeatTimer = nullptr;
     QTimer* m_timeoutTimer = nullptr;

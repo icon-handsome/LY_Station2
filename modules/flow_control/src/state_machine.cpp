@@ -8,6 +8,7 @@
 #include "scan_tracking/mech_eye/mech_eye_service.h"
 #include "scan_tracking/vision/hik_camera_c_controller.h"
 #include "scan_tracking/vision/vision_pipeline_service.h"
+#include "scan_tracking/hoist_assist/hoist_assist_service.h"
 
 #include <chrono>
 
@@ -316,6 +317,11 @@ vision::VisionPipelineService* StateMachine::visionPipelineService() const
 vision::HikCameraCController* StateMachine::hikCameraCController() const
 {
     return m_hikCameraCController;
+}
+
+void StateMachine::setHoistAssistService(hoist_assist::HoistAssistService* svc)
+{
+    m_hoistAssistService = svc;
 }
 
 AppState StateMachine::currentState() const
