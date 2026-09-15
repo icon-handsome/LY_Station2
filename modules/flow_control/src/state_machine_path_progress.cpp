@@ -18,7 +18,55 @@ bool isHmiTrackedPath(int pathId, const common::ScanPathConfig* path)
     return algorithm != QLatin1String("self_check");
 }
 
+QString pathAlgorithmOrEmpty(int pathId)
+{
+    const auto* cfgMgr = common::ConfigManager::instance();
+    if (cfgMgr == nullptr) {
+        return {};
+    }
+    const common::ScanPathConfig* path = cfgMgr->findScanPathById(pathId);
+    if (path == nullptr) {
+        return {};
+    }
+    return common::ConfigManager::resolvePathAlgorithm(*path).trimmed();
+}
+
 }  // namespace
+
+bool StateMachine::isPathCodeReadOnly(int pathId) const
+{
+    return pathAlgorithmOrEmpty(pathId) == QLatin1String("code_read");
+}
+
+bool StateMachine::isPathCompleteForProgress(int pathId) const
+{
+    if (pathId <= 0) {
+        return false;
+    }
+    const auto* cfgMgr = common::ConfigManager::instance();
+    if (cfgMgr == nullptr) {
+        return false;
+    }
+
+    // code_read：对齐 S1，扫齐不够，须识别/检测成功（m_lastInspectedPathId）。
+    if (isPathCodeReadOnly(pathId)) {
+        if (m_lastInspectedPathId != pathId) {
+            return false;
+        }
+        if (cfgMgr->activePathId() == pathId) {
+            const int expected =
+                cfgMgr->enabledArmPointCount() + cfgMgr->enabledTelescopicPointCount();
+            // 段扫兼编号：齐套后才算完；纯 Trig_CodeRead（无段缓存）仅凭识别成功放行。
+            if (expected > 0 && m_scanSegmentCache.cachedSegmentCount() > 0) {
+                return isActivePathQuotaComplete();
+            }
+        }
+        return true;
+    }
+
+    // 普通测量路径：对齐 S1「路径扫完」——活跃路径配额齐套即完成。
+    return cfgMgr->activePathId() == pathId && isActivePathQuotaComplete();
+}
 
 ScanPathEventInfo StateMachine::buildScanPathEventInfo(int pathId, quint16 resultCode) const
 {
@@ -79,7 +127,8 @@ void StateMachine::maybeEmitPathFinished(int pathId, quint16 resultCode)
     if (!isHmiTrackedPath(pathId, path)) {
         return;
     }
-    if (m_emittedPathFinished.contains(pathId)) {
+    // 对齐 S1：每段扫完都会调到此处，仅在路径真正齐套（code_read 另加识别完成）时发出。
+    if (!isPathCompleteForProgress(pathId) || m_emittedPathFinished.contains(pathId)) {
         return;
     }
 

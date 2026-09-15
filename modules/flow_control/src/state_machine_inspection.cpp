@@ -896,17 +896,19 @@ void StateMachine::prepareNextScanPathAfterSuccess()
     // 故意保留本次 Inspection 结果寄存器，供 PLC/HMI 读取。
     maybeAutoRunInspectionBeforeLeavingPath();
 
-    clearScanSegmentCacheForPathSwitch();
-    if (isModbusConnected()) {
-        clearScanSegmentDoneRegisters();
-    }
-
     auto* cfgMgr = common::ConfigManager::instance();
     if (cfgMgr == nullptr) {
         return;
     }
 
     const int fromPathId = cfgMgr->activePathId();
+    // 切路前再补一次：扫齐路径通常已在末段发出；code_read / 漏发场景在此兜底。
+    maybeEmitPathFinished(fromPathId, 1);
+
+    clearScanSegmentCacheForPathSwitch();
+    if (isModbusConnected()) {
+        clearScanSegmentDoneRegisters();
+    }
     const QString fromName = cfgMgr->activePathName();
     const int toPathId = cfgMgr->advanceToNextEnabledPath();
     if (toPathId <= 0) {
@@ -1283,6 +1285,8 @@ void StateMachine::finishCodeRead(quint16 resultCode, const QString& codeValue, 
                     << (configMgr != nullptr ? configMgr->activePathId() : 0)
                     << QStringLiteral(" 编号段扫齐套（Done/Ack/Res 保持至 PLC 拉低 Trig"
                                       "；超时将强制释放）。");
+                // 对齐 S1 code_read：齐套且识别成功才算路径完成。
+                markCurrentPathInspectionDone();
             }
         }
 
@@ -1347,6 +1351,7 @@ void StateMachine::finishCodeRead(quint16 resultCode, const QString& codeValue, 
         << QStringLiteral(" message=") << effectiveMessage;
 
     if (resultCode == 1) {
+        markCurrentPathInspectionDone();
         if (const auto* cfgMgr = common::ConfigManager::instance()) {
             maybeEmitPathFinished(cfgMgr->activePathId(), resultCode);
         }

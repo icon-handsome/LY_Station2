@@ -205,7 +205,7 @@ signals:
 
     /// 当前扫描路径开始（首段采集或切路后），供 HMI 高亮进行中路径
     void pathStarted(const ScanPathEventInfo& info);
-    /// 当前扫描路径完成（检测成功并即将/已经切走）
+    /// 当前扫描路径完成（对齐 S1：扫齐即发；code_read 须再等识别/检测成功）
     void pathFinished(const ScanPathEventInfo& info);
     /// 全部启用路径均已完成
     void scanPathsAllFinished(const QVector<int>& completedPathIds, int pathCount);
@@ -349,6 +349,10 @@ private:
                             bool onlyOnChange = false);
 
     ScanPathEventInfo buildScanPathEventInfo(int pathId, quint16 resultCode = 0) const;
+    /// 对齐 S1：code_read 仅扫段不算完，须识别/检测成功。
+    bool isPathCodeReadOnly(int pathId) const;
+    /// 对齐 S1 isPathCompleteForProgress：普通路径扫齐；code_read=扫齐+已识别。
+    bool isPathCompleteForProgress(int pathId) const;
     void maybeEmitPathStarted(int pathId);
     void maybeEmitPathFinished(int pathId, quint16 resultCode = 1);
     void clearPathProgressTracking(const QString& resetReason);

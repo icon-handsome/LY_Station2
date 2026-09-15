@@ -200,6 +200,11 @@ void StateMachine::completeScanSegmentCapture(
     }
     completeActiveTask(resultCode, finalAckState, dataValid);
     emit scanFinished(segmentIndex, resultCode, imageCount, cloudFrameCount);
+
+    // 对齐 S1：每段成功收尾后尝试推送路径结束；未齐套时 isPathCompleteForProgress 会拦住。
+    if (resultCode == 1 && pathId > 0) {
+        maybeEmitPathFinished(pathId, resultCode);
+    }
 }
 
 common::ScanDeviceKind StateMachine::activeScanDeviceKind() const

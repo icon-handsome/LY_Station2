@@ -32,9 +32,10 @@
     pathId, pathName, pathIndex, pathCount, inspectionType, algorithm, totalPoints
     触发：首段扫描开始，或切路后立即推送
 
-  event.path.finished
+  event.path.finished（路径扫完，UI 标 ✓；对齐第一工位）
     同上 + resultCode=1
-    触发：检测成功（Trig_Inspection / 自动检测）
+    触发：普通路径=配额扫齐（末段采集成功）；code_read=扫齐且识别/检测成功
+    说明：检测成功 / 切路前仍会再调一次（已发过则幂等）
 
   event.scan_paths.all_finished
     completedPathIds[], pathCount
