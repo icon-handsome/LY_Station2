@@ -894,6 +894,10 @@ void StateMachine::prepareNextScanPathAfterSuccess()
 {
     // PLC 不做 ResultReset：检测成功 / 开下一路时 IPC 自行清段缓存与扫描完成寄存器，再切路径。
     // 故意保留本次 Inspection 结果寄存器，供 PLC/HMI 读取。
+    if (m_workpieceComplete) {
+        qInfo(LOG_FLOW) << QStringLiteral("当前工件已完成，忽略重复的自动切路径请求。");
+        return;
+    }
     maybeAutoRunInspectionBeforeLeavingPath();
 
     auto* cfgMgr = common::ConfigManager::instance();
@@ -912,7 +916,30 @@ void StateMachine::prepareNextScanPathAfterSuccess()
     const QString fromName = cfgMgr->activePathName();
     const int toPathId = cfgMgr->advanceToNextEnabledPath();
     if (toPathId <= 0) {
-        qWarning(LOG_FLOW) << QStringLiteral("已清缓存，但无下一条启用路径可切换。");
+        const QVector<int> enabledPathIds = cfgMgr->enabledPathIds();
+        const bool isLastEnabledPath =
+            !enabledPathIds.isEmpty() && enabledPathIds.back() == fromPathId;
+        if (isLastEnabledPath && m_emittedPathFinished.contains(fromPathId)) {
+            // 最后一条有效路径成功后结束当前工件。保持 activePathId 供 HMI/PLC 查询，
+            // 但不再回环到 path1；下一件必须由 PLC Trig_ResultReset 开始。
+            m_workpieceComplete = true;
+            m_advancePathAfterTriggerRelease = false;
+            if (m_activeTask.definition == nullptr) {
+                m_ipcState = protocol::IpcState::Ready;
+                m_currentStage = protocol::Stage::Idle;
+                m_progress = 0;
+                setState(AppState::Ready);
+            }
+            publishIpcStatus();
+            qInfo(LOG_FLOW).noquote()
+                << QStringLiteral("当前工件全部有效路径已完成：最后路径 pathId=")
+                << fromPathId << QStringLiteral("(") << fromName
+                << QStringLiteral(")；等待 PLC Trig_ResultReset 开始下一件。");
+        } else {
+            qWarning(LOG_FLOW).noquote()
+                << QStringLiteral("已清缓存，但无下一条有效路径可切换；未标记工件完成。")
+                << QStringLiteral(" fromPathId=") << fromPathId;
+        }
         return;
     }
 
@@ -959,6 +986,11 @@ bool StateMachine::applyPlcScanPathId(
 
     auto* cfgMgr = common::ConfigManager::instance();
     if (cfgMgr == nullptr) {
+        return false;
+    }
+
+    if (m_workpieceComplete) {
+        qWarning(LOG_FLOW) << QStringLiteral("工件已完成，忽略 PLC ScanPathId 切换；等待 ResultReset。");
         return false;
     }
 

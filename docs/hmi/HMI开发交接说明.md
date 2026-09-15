@@ -1,11 +1,12 @@
 # HMI 显控 TCP 开发交接说明
 
-**文档版本**: v1.7  
-**最后更新**: 2026-07-22  
+**文档版本**: v1.8
+**最后更新**: 2026-09-15
 **适用范围**: 本仓库（IPC_Station2，第二工位专用）— **仅 TCP Server 端**；麒麟 OS Qt 显控为独立 Client 工程。
 
 > **v1.7 变更**：清理第一工位坡口 / Tracking 文案与协议样例；`cmd.get_config` 配置节改为 `scanPaths`；`event.inspection.finished` 以 `headMetrics`（含 `qualityCode`）为准；`cmd.set_bevel_recipe` 仍识别但固定失败。  
 > **v1.6 变更**：`cmd.debug_trigger_inspection` 接入缓存评估 + `publishInspectionResult`（不写 PLC）。
+> **v1.8 变更**：增加 `cmd.set_head_type`；无封头运行时跳过环缝 `path5`；最后有效路径检测成功后保持工件结束态，等待 PLC `Trig_ResultReset`。
 
 > **新接手请先读**：本文 → [`checklists/现场联调_阶段0-1.md`](./checklists/现场联调_阶段0-1.md) → [`封头检测工位_TCP_IP显控通信协议_v1.0.md`](../protocols/封头检测工位_TCP_IP显控通信协议_v1.0.md)
 
@@ -79,6 +80,7 @@ Trig_Inspection（PLC）或 cmd.debug_trigger_inspection（显控）
 
 - [x] `cmd.start` / `cmd.stop` / `cmd.reset` / `cmd.clear_alarm`
 - [x] `cmd.get_status` / `cmd.get_config`（含 `scanPaths`）
+- [x] `cmd.set_head_type`（单封头 / 无封头；无封头跳过环缝 `path5`）
 - [x] `cmd.modbus_connect` / `cmd.modbus_disconnect`
 - [x] `cmd.capture_mech_eye` / `cmd.capture_bundle` / `cmd.refresh_camera`
 - [x] `cmd.debug_trigger_inspection`
@@ -88,6 +90,24 @@ Trig_Inspection（PLC）或 cmd.debug_trigger_inspection（显控）
 ### 3.4 检测测量结构化
 
 - [x] `event.inspection.finished`：`resultCode`、`ngReasonWord*`、`pathId`/`algorithm`、`headMetrics.*`、`message`
+
+### 3.5 封头类型与路径流程
+
+显控在新工件开始前发送：
+
+```json
+{
+  "type": "cmd.set_head_type",
+  "msgId": "req-head-1",
+  "payload": { "headType": "single_endcap" }
+}
+```
+
+- `single_endcap`（也可传 `single` / `单封头`）：执行全部有效路径，包含环缝 `path5`。
+- `none`（也可传 `no_endcap` / `无封头`）：运行时跳过 `path5`，不会采集、检测或计入路径总数。
+- 选择只能在当前工件尚未开始时修改；已有任务、缓存、路径进度或后台算法时 Core 返回失败。
+- 最后一条有效路径检测成功后 Core 不再回到 `path1`，`status.system.workpieceComplete=true`；下一件必须等待 PLC `Trig_ResultReset`。
+- `cmd.get_config` 的 `config.workpiece` / `config.scanPaths`，以及 `status.system` / `status.plc` 会回显 `headType` 与 `runtimeSkippedPathIds`。路径项另含 `runtimeEnabled`、`runtimeSkipped`。
 
 ---
 

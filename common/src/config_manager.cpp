@@ -171,6 +171,47 @@ void applyStationSettings(QSettings& settings, StationProfile& profile, QString*
 
 }  // namespace
 
+QString workpieceHeadTypeToString(WorkpieceHeadType type)
+{
+    switch (type) {
+    case WorkpieceHeadType::NoEndCap:
+        return QStringLiteral("none");
+    case WorkpieceHeadType::SingleEndCap:
+    default:
+        return QStringLiteral("single_endcap");
+    }
+}
+
+bool parseWorkpieceHeadType(const QString& text, WorkpieceHeadType* out)
+{
+    const QString normalized = text.trimmed().toLower();
+    WorkpieceHeadType type;
+    if (normalized == QLatin1String("single_endcap") ||
+        normalized == QLatin1String("single_end_cap") ||
+        normalized == QLatin1String("single-endcap") ||
+        normalized == QLatin1String("single") ||
+        normalized == QLatin1String("with_endcap") ||
+        normalized == QLatin1String("with_head") ||
+        normalized == QStringLiteral("单封头")) {
+        type = WorkpieceHeadType::SingleEndCap;
+    } else if (normalized == QLatin1String("none") ||
+               normalized == QLatin1String("no_endcap") ||
+               normalized == QLatin1String("no_end_cap") ||
+               normalized == QLatin1String("no-endcap") ||
+               normalized == QLatin1String("without_endcap") ||
+               normalized == QLatin1String("without_head") ||
+               normalized == QStringLiteral("无封头")) {
+        type = WorkpieceHeadType::NoEndCap;
+    } else {
+        return false;
+    }
+
+    if (out != nullptr) {
+        *out = type;
+    }
+    return true;
+}
+
 void ConfigManager::initialize()
 {
     // 幂等：多次调用仅首次分配单例；构造函数内完成 load + loadScanPathsConfig
@@ -225,6 +266,70 @@ const HmiConfig& ConfigManager::hmiConfig() const { return m_hmiConfig; }
 const ScanPathsConfig& ConfigManager::scanPathsConfig() const { return m_scanPathsConfig; }
 const StationProfile& ConfigManager::stationProfile() const { return m_stationProfile; }
 
+WorkpieceHeadType ConfigManager::workpieceHeadType() const
+{
+    return m_workpieceHeadType;
+}
+
+QString ConfigManager::workpieceHeadTypeName() const
+{
+    return workpieceHeadTypeToString(m_workpieceHeadType);
+}
+
+QSet<int> ConfigManager::runtimeSkippedPathIds() const
+{
+    return m_runtimeSkippedPathIds;
+}
+
+bool ConfigManager::isPathEnabledForRuntime(int pathId) const
+{
+    if (pathId <= 0 || m_runtimeSkippedPathIds.contains(pathId)) {
+        return false;
+    }
+    const ScanPathConfig* path = findScanPathById(pathId);
+    return path != nullptr && path->enabled;
+}
+
+void ConfigManager::setRuntimeSkippedPaths(const QSet<int>& pathIds)
+{
+    QSet<int> filtered;
+    for (int pathId : pathIds) {
+        if (pathId > 0 && findScanPathById(pathId) != nullptr) {
+            filtered.insert(pathId);
+        }
+    }
+    m_runtimeSkippedPathIds = filtered;
+
+    // 避免当前 activePathId 指向运行时已跳过/配置禁用的路径。
+    if (m_scanPathsConfig.activePathId > 0 &&
+        !isPathEnabledForRuntime(m_scanPathsConfig.activePathId)) {
+        const QVector<int> ids = enabledPathIds();
+        m_scanPathsConfig.activePathId = ids.isEmpty() ? 0 : ids.front();
+    }
+}
+
+bool ConfigManager::setWorkpieceHeadType(WorkpieceHeadType type)
+{
+    m_workpieceHeadType = type;
+    QSet<int> skipped;
+    if (type == WorkpieceHeadType::NoEndCap) {
+        // path5 在 station2_cylinder_semi.json 中固定表示环缝检测。
+        skipped.insert(5);
+    }
+    setRuntimeSkippedPaths(skipped);
+    QStringList skippedText;
+    for (int pathId : m_runtimeSkippedPathIds) {
+        skippedText.append(QString::number(pathId));
+    }
+    qInfo(LOG_CONFIG).noquote()
+        << QStringLiteral("工件封头类型已设置：") << workpieceHeadTypeToString(type)
+        << QStringLiteral("，运行时跳过路径=")
+        << (skippedText.isEmpty() ? QStringLiteral("[]")
+                                   : QStringLiteral("[") + skippedText.join(QLatin1Char(','))
+                                         + QLatin1Char(']'));
+    return true;
+}
+
 const ScanPathConfig* ConfigManager::findScanPathById(int pathId) const
 {
     if (pathId <= 0) {
@@ -242,11 +347,13 @@ const ScanPathConfig* ConfigManager::activeScanPath() const
 {
     if (m_scanPathsConfig.activePathId > 0) {
         if (const ScanPathConfig* byId = findScanPathById(m_scanPathsConfig.activePathId)) {
-            return byId;
+            if (isPathEnabledForRuntime(byId->pathId)) {
+                return byId;
+            }
         }
     }
     for (const auto& path : m_scanPathsConfig.scanPaths) {
-        if (path.enabled) {
+        if (isPathEnabledForRuntime(path.pathId)) {
             return &path;
         }
     }
@@ -266,7 +373,7 @@ QVector<int> ConfigManager::enabledPathIds() const
     QVector<int> ids;
     ids.reserve(static_cast<int>(m_scanPathsConfig.scanPaths.size()));
     for (const auto& path : m_scanPathsConfig.scanPaths) {
-        if (path.enabled && path.pathId > 0) {
+        if (isPathEnabledForRuntime(path.pathId)) {
             ids.push_back(path.pathId);
         }
     }
@@ -280,10 +387,10 @@ bool ConfigManager::setActivePathId(int pathId)
             << QStringLiteral("setActivePathId：非法 pathId=") << pathId;
         return false;
     }
-    if (findScanPathById(pathId) == nullptr) {
+    if (!isPathEnabledForRuntime(pathId)) {
         qWarning(LOG_CONFIG).noquote()
             << QStringLiteral("setActivePathId：pathId=") << pathId
-            << QStringLiteral(" 不在 scanPaths 中");
+            << QStringLiteral(" 不存在、已禁用或被运行时跳过");
         return false;
     }
 
@@ -321,7 +428,12 @@ int ConfigManager::advanceToNextEnabledPath()
         return ids.front();
     }
 
-    const int nextId = ids.at((currentIndex + 1) % ids.size());
+    if (currentIndex + 1 >= ids.size()) {
+        // 到最后一条有效路径后不回环；由 StateMachine 结束当前工件。
+        return 0;
+    }
+
+    const int nextId = ids.at(currentIndex + 1);
     if (!setActivePathId(nextId)) {
         return 0;
     }
@@ -476,7 +588,7 @@ const ScanPointConfig* ConfigManager::findScanPointByIndex(int segmentIndex) con
     }
 
     for (const auto& path : m_scanPathsConfig.scanPaths) {
-        if (!path.enabled) {
+        if (!isPathEnabledForRuntime(path.pathId)) {
             continue;
         }
         for (const auto& point : path.points) {
@@ -510,7 +622,7 @@ QString ConfigManager::segmentKindForPointIndex(int segmentIndex) const
     }
 
     for (const auto& path : m_scanPathsConfig.scanPaths) {
-        if (!path.enabled) {
+        if (!isPathEnabledForRuntime(path.pathId)) {
             continue;
         }
         for (const auto& point : path.points) {
@@ -525,7 +637,7 @@ QString ConfigManager::segmentKindForPointIndex(int segmentIndex) const
 int ConfigManager::enabledScanPointCount() const
 {
     if (m_scanPathsConfig.activePathId > 0) {
-        if (const ScanPathConfig* active = findScanPathById(m_scanPathsConfig.activePathId)) {
+        if (const ScanPathConfig* active = activeScanPath()) {
             const int fromQuota = active->armPointCount + active->telescopicPointCount;
             if (fromQuota > 0) {
                 return fromQuota;
@@ -537,7 +649,7 @@ int ConfigManager::enabledScanPointCount() const
 
     int total = 0;
     for (const auto& path : m_scanPathsConfig.scanPaths) {
-        if (!path.enabled) {
+        if (!isPathEnabledForRuntime(path.pathId)) {
             continue;
         }
         const int fromQuota = path.armPointCount + path.telescopicPointCount;
@@ -553,7 +665,7 @@ int ConfigManager::enabledScanPointCount() const
 int ConfigManager::enabledArmPointCount() const
 {
     if (m_scanPathsConfig.activePathId > 0) {
-        if (const ScanPathConfig* active = findScanPathById(m_scanPathsConfig.activePathId)) {
+        if (const ScanPathConfig* active = activeScanPath()) {
             return active->armPointCount;
         }
         return 0;
@@ -561,7 +673,7 @@ int ConfigManager::enabledArmPointCount() const
 
     int total = 0;
     for (const auto& path : m_scanPathsConfig.scanPaths) {
-        if (path.enabled) {
+        if (isPathEnabledForRuntime(path.pathId)) {
             total += path.armPointCount;
         }
     }
@@ -571,7 +683,7 @@ int ConfigManager::enabledArmPointCount() const
 int ConfigManager::enabledTelescopicPointCount() const
 {
     if (m_scanPathsConfig.activePathId > 0) {
-        if (const ScanPathConfig* active = findScanPathById(m_scanPathsConfig.activePathId)) {
+        if (const ScanPathConfig* active = activeScanPath()) {
             return active->telescopicPointCount;
         }
         return 0;
@@ -579,7 +691,7 @@ int ConfigManager::enabledTelescopicPointCount() const
 
     int total = 0;
     for (const auto& path : m_scanPathsConfig.scanPaths) {
-        if (path.enabled) {
+        if (isPathEnabledForRuntime(path.pathId)) {
             total += path.telescopicPointCount;
         }
     }

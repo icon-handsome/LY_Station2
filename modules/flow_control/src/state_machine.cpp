@@ -9,6 +9,8 @@
 #include "scan_tracking/vision/hik_camera_c_controller.h"
 #include "scan_tracking/vision/vision_pipeline_service.h"
 
+#include <chrono>
+
 namespace scan_tracking::flow_control {
 
 StateMachine::StateMachine(
@@ -156,6 +158,7 @@ void StateMachine::start()
     bumpWorkpieceGeneration(QStringLiteral("state_machine.start"));
     qInfo(LOG_FLOW).noquote() << QStringLiteral("状态机启动：WorkpieceGen 完成");
     clearTransientWorkpieceRuntimeState();
+    m_workpieceComplete = false;
     qInfo(LOG_FLOW).noquote() << QStringLiteral("状态机启动：临时运行态已清理");
     resetScanSegmentCache();
     resetActivePathToFirstEnabled();
@@ -350,6 +353,103 @@ quint16 StateMachine::progress() const
     return m_progress;
 }
 
+bool StateMachine::setWorkpieceHeadType(
+    common::WorkpieceHeadType type,
+    QString* errorMessage)
+{
+    const auto fail = [errorMessage](const QString& reason) {
+        if (errorMessage != nullptr) {
+            *errorMessage = reason;
+        }
+        return false;
+    };
+
+    if (type != common::WorkpieceHeadType::SingleEndCap &&
+        type != common::WorkpieceHeadType::NoEndCap) {
+        return fail(QStringLiteral("不支持的封头类型"));
+    }
+
+    auto* cfgMgr = common::ConfigManager::instance();
+    if (cfgMgr == nullptr) {
+        return fail(QStringLiteral("配置管理器未初始化"));
+    }
+
+    // 头型决定本件的有效路径集合。工件开始后再改会使已采集数据与路径配额不一致，
+    // 因此必须在无任务、无缓存、无异步消费者且尚未完成本件时设置。
+    if (m_workpieceComplete) {
+        return fail(QStringLiteral("当前工件已完成，请先等待 PLC ResultReset 后再选择封头类型"));
+    }
+    if (m_activeTask.definition != nullptr || m_codeReadPending || m_codeReadSoftPending ||
+        m_scanSegmentCache.cachedSegmentCount() > 0 ||
+        !m_scanSegmentCache.runCaptureRoot().isEmpty() ||
+        m_scanSegmentCache.runTaskId() != 0 ||
+        !m_emittedPathStarted.isEmpty() || !m_emittedPathFinished.isEmpty() ||
+        m_lastInspectedPathId > 0 ||
+        m_state == AppState::Scanning || m_ipcState == protocol::IpcState::Busy) {
+        return fail(QStringLiteral("当前工件已开始或仍有任务，不能切换封头类型"));
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(m_bgSolveThreadsMutex);
+        if (m_bgSolveWorkerBusy || !m_bgSolvePending.empty()) {
+            return fail(QStringLiteral("后台检测任务尚未结束，暂不能切换封头类型"));
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(m_incrementalWeldMutex);
+        if (!m_incrementalWeldTasks.empty()) {
+            return fail(QStringLiteral("逐段焊缝检测任务尚未结束，暂不能切换封头类型"));
+        }
+        for (const auto& retired : m_retiredIncrementalWeldTasks) {
+            if (retired.valid() &&
+                retired.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+                return fail(QStringLiteral("后台焊缝检测任务尚未结束，暂不能切换封头类型"));
+            }
+        }
+    }
+    if (m_latestScanPersistBarrier.valid() &&
+        m_latestScanPersistBarrier.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+        return fail(QStringLiteral("扫描数据仍在落盘，暂不能切换封头类型"));
+    }
+
+    if (cfgMgr->workpieceHeadType() == type) {
+        return true;
+    }
+
+    const common::WorkpieceHeadType previousType = cfgMgr->workpieceHeadType();
+    cfgMgr->setWorkpieceHeadType(type);
+    if (cfgMgr->enabledPathIds().isEmpty()) {
+        cfgMgr->setWorkpieceHeadType(previousType);
+        return fail(QStringLiteral("所选封头类型没有可执行的扫描路径"));
+    }
+
+    // 类型切换视为下一件的起点：丢弃旧路径进度/运行目录绑定，并让迟到回调失效。
+    bumpWorkpieceGeneration(QStringLiteral("hmi.set_head_type"));
+    clearTransientWorkpieceRuntimeState();
+    resetScanSegmentCache();
+    resetActivePathToFirstEnabled();
+    clearPathProgressTracking(QStringLiteral("hmi.set_head_type"));
+    publishIpcStatus();
+
+    qInfo(LOG_FLOW).noquote()
+        << QStringLiteral("HMI 已设置工件封头类型：") << cfgMgr->workpieceHeadTypeName()
+        << QStringLiteral("，有效路径数=") << cfgMgr->enabledPathIds().size();
+    return true;
+}
+
+bool StateMachine::isWorkpieceComplete() const
+{
+    return m_workpieceComplete;
+}
+
+bool StateMachine::isPathFlowTrigger(protocol::Stage stage) const
+{
+    // Trig_CodeRead 与 Trig_Inspection 共用 Stage::Inspection；两者都属于当前路径流程。
+    return stage == protocol::Stage::ScanSegment ||
+           stage == protocol::Stage::TelescopicScan ||
+           stage == protocol::Stage::Inspection;
+}
+
 const QVector<quint16>& StateMachine::lastCommandBlock() const
 {
     return m_lastCommandBlock;
@@ -459,6 +559,7 @@ void StateMachine::executeResultResetTask()
     resetSafetyInterlockState();
     bumpWorkpieceGeneration(QStringLiteral("result_reset"));
     clearTransientWorkpieceRuntimeState();
+    m_workpieceComplete = false;
     resetScanSegmentCache();
     const int toPathId = resetActivePathToFirstEnabled();
     clearPathProgressTracking(QStringLiteral("result_reset"));

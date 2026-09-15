@@ -378,10 +378,61 @@ void StateMachine::processTrigger(const protocol::TriggerDefinition& trigger, co
         return;
     }
 
-    // Trig 前以 PLC ScanPathId 为准（同一次轮询写 path 再置 Trig 也能生效）。
-    applyPlcScanPathId(commandBlock);
+    auto* configMgr = common::ConfigManager::instance();
+    const int requestedPathId =
+        commandBlock.size() > protocol::registers::kScanPathId
+            ? static_cast<int>(protocol::registers::plcAnalogToUInt16(
+                  commandBlock.value(protocol::registers::kScanPathId), 0))
+            : 0;
 
-    if (const auto* configMgr = common::ConfigManager::instance()) {
+    // 全部有效路径完成后，当前工件保持结束态；只有 ResultReset 能开启下一件。
+    // 先拦截再处理 ScanPathId，避免误发路径号触发切路副作用。
+    if (isPathFlowTrigger(trigger.stage)) {
+        if (m_workpieceComplete) {
+            rejectPathFlowTrigger(
+                trigger,
+                8,
+                QStringLiteral("当前工件已完成，请先由 PLC 触发 ResultReset"));
+            return;
+        }
+        if (configMgr != nullptr) {
+            if (requestedPathId > 0 && !configMgr->isPathEnabledForRuntime(requestedPathId)) {
+                rejectPathFlowTrigger(
+                    trigger,
+                    8,
+                    QStringLiteral("PLC 请求的 ScanPathId=%1 不存在、已禁用或被当前封头类型跳过")
+                        .arg(requestedPathId));
+                return;
+            }
+            if (configMgr->activePathId() <= 0) {
+                rejectPathFlowTrigger(
+                    trigger,
+                    8,
+                    QStringLiteral("当前没有可执行的扫描路径"));
+                return;
+            }
+        }
+    }
+
+    // Trig 前以 PLC ScanPathId 为准（同一次轮询写 path 再置 Trig 也能生效）。
+    // ResultReset 是新工件边界，不用它携带的旧路径号切换 active path。
+    if (trigger.stage != protocol::Stage::ResultReset) {
+        applyPlcScanPathId(commandBlock);
+    }
+
+    // applyPlcScanPathId() 只用 bool 表示“是否发生切换”；再次核对目标路径，
+    // 防止并发配置变化或写入失败后仍按旧 active path 接受本次触发。
+    if (isPathFlowTrigger(trigger.stage) && configMgr != nullptr && requestedPathId > 0 &&
+        configMgr->activePathId() != requestedPathId) {
+        rejectPathFlowTrigger(
+            trigger,
+            8,
+            QStringLiteral("未能切换到 PLC 请求的 ScanPathId=%1，已拒绝本次触发")
+                .arg(requestedPathId));
+        return;
+    }
+
+    if (configMgr != nullptr) {
         const auto& profile = configMgr->stationProfile();
         if (!isTriggerEnabledForProfile(profile, trigger.trigOffset)) {
             rejectDisabledTrigger(trigger);
@@ -519,6 +570,23 @@ void StateMachine::rejectDisabledTrigger(const protocol::TriggerDefinition& trig
         sendAck(trigger, protocol::AckState::Running);
     }
     sendRes(trigger, 8);
+    sendAck(trigger, protocol::AckState::Failed);
+}
+
+void StateMachine::rejectPathFlowTrigger(
+    const protocol::TriggerDefinition& trigger,
+    quint16 resultCode,
+    const QString& reason)
+{
+    qWarning(LOG_FLOW).noquote()
+        << QStringLiteral("拒绝路径流程触发 ") << protocol::triggerName(trigger)
+        << QStringLiteral("：") << reason
+        << QStringLiteral("，Res=") << resultCode;
+    // 段扫保持简化握手，不额外写 Ack=Running；其它阶段沿用 Running→Failed。
+    if (!isScanCaptureStage(trigger.stage)) {
+        sendAck(trigger, protocol::AckState::Running);
+    }
+    sendRes(trigger, resultCode);
     sendAck(trigger, protocol::AckState::Failed);
 }
 

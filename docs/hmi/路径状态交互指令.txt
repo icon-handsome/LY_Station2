@@ -4,6 +4,10 @@
 一、连接与初始化
   TCP 连接成功后，Core 发送 core.hello、四类 status.* 以及 event.inspection.finished（等待检测占位帧）。
   Qt 可发送 cmd.get_status 获取完整状态，发送 cmd.get_config 获取路径配置。
+  新工件开始前可发送 cmd.set_head_type 选择封头类型：
+    {"type":"cmd.set_head_type","payload":{"headType":"single_endcap"}}
+    headType=single_endcap（单封头）执行环缝 path5；headType=none（无封头）跳过 path5。
+  选择成功响应会带 headType 和 runtimeSkippedPathIds；选择必须在工件尚未开始时完成。
   状态消息按内容去重，Qt 以最后一次收到的消息为准，不依赖固定周期。
   端口 9900，协议版本 1.0。
 
@@ -71,6 +75,8 @@
 八、Qt 推荐绑定
   status.camera.connected → 各相机在线灯（CXP 使用 cxpCameraA/cxpCameraB）
   status.system.scanPathProgress → 当前第几条路径/名称/算法
+  status.system.headType / runtimeSkippedPathIds → 当前封头类型与被跳过路径
+  status.system.workpieceComplete → 最后一条有效路径检测成功；为 true 时等待 PLC Trig_ResultReset
   event.path.started / event.path.finished → 路径进行中/已完成
   event.inspection.finished.algorithmMetrics → 算法结果页面
   event.path.progress_reset → 清空路径完成标记和旧结果展示
@@ -80,3 +86,10 @@
   基础显示优先读 scanPathProgress.currentPathId / currentPathName
   勿用 event.scan.* 的 segmentIndex 推断路径（每路径段号从 1 重计）
   status.plc.activePath* 仍推送，可与 scanPathProgress 交叉校验
+
+十、工件结束与 ResultReset
+  单封头有效路径为配置启用路径（包含 path5 环缝）；无封头有效路径自动排除 path5。
+  最后一条有效路径检测成功后，Core 不回环到 path1，发送 event.scan_paths.all_finished，并将
+  status.system.workpieceComplete 置 true。PLC 必须将 Trig_ResultReset 置 1；复位完成后
+  工件结束门闩清除、路径进度清零并回到首条有效路径，才能开始下一件。
+  即使 PLC 错误请求被跳过的 path5，Core 也会拒绝该路径触发并返回 Res=8/Ack=3。

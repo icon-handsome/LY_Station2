@@ -65,6 +65,9 @@ TCP 是流式协议，为解决粘包和半包问题，采用长度前缀的帧�
   - `ipcReady` (int): 0/1
   - `progress` (int): 0~100
   - `stationId` / `stationName` / `workMode`(string，工位 profile) / `enabledTriggers`
+  - `headType` (string): 当前工件类型，`single_endcap`=单封头，`none`=无封头
+  - `runtimeSkippedPathIds` (array[int]): 当前类型运行时跳过的路径；无封头时固定包含 `5`
+  - `workpieceComplete` (bool): 最后一条有效路径检测成功后为 `true`，直到 `Trig_ResultReset`
   - `scanPathProgress` (object)：当前路径基础显示，见 §2.5 / `docs/hmi/路径状态交互指令.txt`
 
 ### 2.3 PLC 状态 (`status.plc`)
@@ -87,6 +90,8 @@ TCP 是流式协议，为解决粘包和半包问题，采用长度前缀的帧�
   - `estopButtonStatus` (int): 急停按钮，0=断开(未按下), 1=按下（PLC 40045）
   - `modbusConnected` (bool)
   - `stationId` / `stationName` / `stationWorkMode`
+  - `headType` / `runtimeSkippedPathIds`
+  - `workpieceComplete` (bool)
 
 > **辅机字段**：无 PLC 数据时缺省为 0。`telescopicRodStatus` 或 `electromagnetStatus` 变为 **2** 时，Core 向显控推送 `event.alarm`（`level=2`，`code` 920/921，见 §2.8）。
 
@@ -127,7 +132,7 @@ TCP 是流式协议，为解决粘包和半包问题，采用长度前缀的帧�
 - `event.scan_paths.all_finished` / `event.path.progress_reset`
 - `event.task.*`：协议保留，当前 Core 未推送
 
-`status.system` 另含 `scanPathProgress`：`currentPathId` / `currentPathName` / `enabledPathIds` / `completedPathIds` / `pathCount` / `allPathsComplete`。
+`status.system` 另含 `scanPathProgress`：`currentPathId` / `currentPathName` / `enabledPathIds` / `completedPathIds` / `pathCount` / `allPathsComplete`。`allPathsComplete` 表示路径进度集合已完成；工件是否真正结束以同级 `workpieceComplete` 为准（最终检测成功后才置 true）。
 
 ### 2.6 检测结果 (`event.inspection.finished`)
 
@@ -185,7 +190,8 @@ Qt 发送 request（附带不重复的 `msgId`），Core 执行后返回对应 `
 | `cmd.reset` | `{}` | - | 重置状态 |
 | `cmd.clear_alarm` | `{}` | - | 清除当前报警记录 |
 | `cmd.get_status` | `{}` | `system`, `plc`, `camera`, `device` 全量状态对象 | 主动拉取全量状态 |
-| `cmd.get_config` | `{ "section": "..." }` | 全量 JSON：`app`/`logger`/`modbus`/`camera`/`vision`/`flowControl`/`scanPaths`/`hmi`（无坡口配方） | 获取 Core 侧配置 |
+| `cmd.get_config` | `{ "section": "..." }` | 全量 JSON：`app`/`logger`/`modbus`/`camera`/`vision`/`flowControl`/`scanPaths`/`workpiece`/`hmi`（无坡口配方） | 获取 Core 侧配置；路径项含 `runtimeEnabled`/`runtimeSkipped` |
+| `cmd.set_head_type` | `{ "headType": "single_endcap" }` | `headType`、`runtimeSkippedPathIds` | 新工件开始前选择单封头或无封头；无封头跳过环缝 `path5` |
 | `cmd.set_bevel_recipe` | （任意） | - | **废弃**：固定返回失败（第二工位无坡口配方） |
 | `cmd.trigger_scan` | `{ "segmentIndex": 1, "taskId": 123 }` | - | 触发单段扫描（**Core 拒绝**，须 PLC） |
 | `cmd.trigger_inspection` | `{ "taskId": 123 }` | - | 触发综合检测（**Core 拒绝**，须 PLC） |
@@ -202,6 +208,39 @@ Qt 发送 request（附带不重复的 `msgId`），Core 执行后返回对应 `
 
 > **备注**：不需要支持 `cmd.set_config`（热修改配置），不涉及直接控制 PLC 寄存器的命令（Qt 不直接控制 PLC）。  
 > **`cmd.trigger_*` 与 `cmd.debug_trigger_inspection` 区别**：除 `cmd.trigger_self_check`（仅接收应答，执行待完善）外，其余 `cmd.trigger_*` 一律拒绝（防撞机）；`cmd.debug_trigger_inspection` 为联调入口，不写 PLC。
+
+### 3.1.1 `cmd.set_head_type` 示例
+
+**Qt 请求：**
+
+```json
+{
+  "version": "1.0",
+  "msgId": "req-head-1",
+  "type": "cmd.set_head_type",
+  "timestamp": 1710000000000,
+  "payload": { "headType": "none" }
+}
+```
+
+**Core 成功响应：**
+
+```json
+{
+  "version": "1.0",
+  "msgId": "req-head-1",
+  "type": "cmd.set_head_type",
+  "timestamp": 1710000000050,
+  "payload": {
+    "success": true,
+    "message": "已选择无封头，环缝路径 path5 将跳过",
+    "headType": "none",
+    "runtimeSkippedPathIds": [5]
+  }
+}
+```
+
+选择失败时 `success=false`；工件已开始、已完成或仍有任务/缓存/后台算法时不会修改当前类型。PLC 若仍请求被跳过的 `ScanPathId=5`，对应路径触发返回 `Res=8`、`Ack=3`，不会按旧路径继续采集。
 
 ---
 

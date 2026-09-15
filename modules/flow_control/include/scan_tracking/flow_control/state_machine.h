@@ -103,6 +103,13 @@ public:
     quint16 warnCode() const;
     quint16 progress() const;
 
+    /// HMI 在新工件开始前设置封头类型；运行中或当前工件已结束时拒绝切换。
+    bool setWorkpieceHeadType(
+        common::WorkpieceHeadType type,
+        QString* errorMessage = nullptr);
+    /// 当前工件的全部有效路径已完成，等待 PLC 的 ResultReset 开始下一件。
+    bool isWorkpieceComplete() const;
+
     const QVector<quint16>& lastCommandBlock() const;
     protocol::registers::Pose6f robotTcpPose() const;
     quint16 robotStatusWord() const;
@@ -237,6 +244,10 @@ private:
     void setState(AppState newState);
     void processTrigger(const protocol::TriggerDefinition& trigger, const QVector<quint16>& commandBlock);
     void rejectDisabledTrigger(const protocol::TriggerDefinition& trigger);
+    void rejectPathFlowTrigger(
+        const protocol::TriggerDefinition& trigger,
+        quint16 resultCode,
+        const QString& reason);
     void executeActiveTask();
 
     void sendAck(const protocol::TriggerDefinition& definition, protocol::AckState ackState);
@@ -362,6 +373,8 @@ private:
     int resetActivePathToFirstEnabled();
     /// 当前活动段扫对应的设备组（臂 / 伸缩杆）。
     common::ScanDeviceKind activeScanDeviceKind() const;
+    /// 当前工件结束后禁止再次进入路径相关触发，直到 ResultReset。
+    bool isPathFlowTrigger(protocol::Stage stage) const;
     /// 读取配置的扫描失败清理策略（segment / path / workpiece）。
     QString currentScanFailurePolicy() const;
     /// 对齐工位1：Res>=5 / 段扫超时后按策略清理缓存。
@@ -454,6 +467,8 @@ private:
     std::shared_future<IncrementalWeldSegmentResult> m_incrementalWeldTelescopicTail;
     /// 切路/重置时接管仍在运行的 async shared state，避免其析构阻塞采集线程。
     std::vector<std::shared_future<IncrementalWeldSegmentResult>> m_retiredIncrementalWeldTasks;
+    /// 全部有效路径完成后的工件结束门闩；ResultReset/start 才会清除。
+    bool m_workpieceComplete = false;
 };
 
 }  // namespace flow_control

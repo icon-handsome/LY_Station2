@@ -19,6 +19,7 @@
 #include "scan_tracking/flow_control/inspection_types.h"
 #include "scan_tracking/common/config_manager.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include <QtNetwork/QTcpServer>
@@ -32,6 +33,7 @@
 #include <QtCore/QJsonDocument>
 #include <QtCore/QUuid>
 #include <QtCore/QPointer>
+#include <QtCore/QSet>
 #include <qdatetime.h>
 
 namespace scan_tracking {
@@ -87,6 +89,25 @@ constexpr int kAlarmCodeHikConnect = 912;
 constexpr int kAlarmCodeHikDisconnect = 913;
 constexpr int kAlarmCodeTelescopicRodFault = 920;
 constexpr int kAlarmCodeElectromagnetFault = 921;
+
+QJsonArray runtimeSkippedPathIdsJson(const common::ConfigManager* configMgr)
+{
+    QJsonArray result;
+    if (configMgr == nullptr) {
+        return result;
+    }
+    QVector<int> ids;
+    const QSet<int> skipped = configMgr->runtimeSkippedPathIds();
+    ids.reserve(skipped.size());
+    for (int pathId : skipped) {
+        ids.append(pathId);
+    }
+    std::sort(ids.begin(), ids.end());
+    for (int pathId : ids) {
+        result.append(pathId);
+    }
+    return result;
+}
 
 bool shouldForwardLogToHmi(QtMsgType type, const QString& category, const QString& msg)
 {
@@ -349,6 +370,7 @@ void HmiTcpServer::initializeMessageHandlers()
     m_messageHandlers[QString::fromLatin1(msg_type::kCmdClearAlarm)]  = &HmiTcpServer::handleCmdClearAlarm;  // 清除报警
     m_messageHandlers[QString::fromLatin1(msg_type::kCmdGetStatus)]   = &HmiTcpServer::handleCmdGetStatus;  // 获取状态
     m_messageHandlers[QString::fromLatin1(msg_type::kCmdGetConfig)]   = &HmiTcpServer::handleCmdGetConfig;  // 获取配置
+    m_messageHandlers[QString::fromLatin1(msg_type::kCmdSetHeadType)] = &HmiTcpServer::handleCmdSetHeadType; // 选择封头类型
     
     // Modbus 控制命令
     m_messageHandlers[QString::fromLatin1(msg_type::kCmdModbusConnect)]    = &HmiTcpServer::handleCmdModbusConnect;  // 连接 Modbus
@@ -622,9 +644,12 @@ void HmiTcpServer::handleCmdGetConfig(const QJsonObject& message)
     QJsonObject scanPathsObj;
     {
         const int scanPointTotal = cfgMgr->enabledScanPointCount();
+        const QJsonArray skippedPathIds = runtimeSkippedPathIdsJson(cfgMgr);
         scanPathsObj[QLatin1String("scanSegmentTotal")] = scanPointTotal > 0
             ? scanPointTotal
             : cfgMgr->trackingConfig().scanSegmentTotal;
+        scanPathsObj[QLatin1String("headType")] = cfgMgr->workpieceHeadTypeName();
+        scanPathsObj[QLatin1String("runtimeSkippedPathIds")] = skippedPathIds;
         scanPathsObj[QLatin1String("activePathId")] = cfgMgr->activePathId();
         scanPathsObj[QLatin1String("activePathName")] = cfgMgr->activePathName();
         scanPathsObj[QLatin1String("activePathAlgorithm")] = cfgMgr->activePathAlgorithm();
@@ -650,11 +675,19 @@ void HmiTcpServer::handleCmdGetConfig(const QJsonObject& message)
                 ? path.totalPoints
                 : (path.armPointCount + path.telescopicPointCount);
             pathObj[QLatin1String("enabled")] = path.enabled;
+            const bool runtimeEnabled = cfgMgr->isPathEnabledForRuntime(path.pathId);
+            pathObj[QLatin1String("runtimeEnabled")] = runtimeEnabled;
+            pathObj[QLatin1String("runtimeSkipped")] = path.enabled && !runtimeEnabled;
             pathsArray.append(pathObj);
         }
         scanPathsObj[QLatin1String("paths")] = pathsArray;
     }
     configPayload[QLatin1String("scanPaths")] = scanPathsObj;
+
+    QJsonObject workpieceObj;
+    workpieceObj[QLatin1String("headType")] = cfgMgr->workpieceHeadTypeName();
+    workpieceObj[QLatin1String("runtimeSkippedPathIds")] = runtimeSkippedPathIdsJson(cfgMgr);
+    configPayload[QLatin1String("workpiece")] = workpieceObj;
 
     QJsonObject hmiObj;
     hmiObj[QLatin1String("enabled")] = cfgMgr->hmiConfig().enabled;
@@ -671,6 +704,59 @@ void HmiTcpServer::handleCmdGetConfig(const QJsonObject& message)
     envelope[QStringLiteral("timestamp")] = QDateTime::currentMSecsSinceEpoch();
     envelope[QStringLiteral("payload")]   = payload;
     sendToClient(envelope);
+}
+
+void HmiTcpServer::handleCmdSetHeadType(const QJsonObject& message)
+{
+    const QString msgId = message.value(QLatin1String("msgId")).toString();
+    const QJsonObject requestPayload = message.value(QLatin1String("payload")).toObject();
+    const QJsonValue rawHeadType = requestPayload.value(QLatin1String("headType"));
+
+    common::WorkpieceHeadType headType = common::WorkpieceHeadType::SingleEndCap;
+    bool parsed = false;
+    if (rawHeadType.isString()) {
+        parsed = common::parseWorkpieceHeadType(rawHeadType.toString(), &headType);
+    } else if (rawHeadType.isDouble()) {
+        const int value = rawHeadType.toInt(-1);
+        if (value == static_cast<int>(common::WorkpieceHeadType::SingleEndCap)) {
+            headType = common::WorkpieceHeadType::SingleEndCap;
+            parsed = true;
+        } else if (value == static_cast<int>(common::WorkpieceHeadType::NoEndCap)) {
+            headType = common::WorkpieceHeadType::NoEndCap;
+            parsed = true;
+        }
+    }
+
+    bool success = false;
+    QString responseMessage;
+    if (!parsed) {
+        responseMessage = QStringLiteral(
+            "headType 无效，应为 single_endcap（单封头）或 none（无封头）");
+    } else if (m_stateMachine == nullptr) {
+        responseMessage = QStringLiteral("状态机不可用");
+    } else {
+        success = m_stateMachine->setWorkpieceHeadType(headType, &responseMessage);
+        if (success) {
+            responseMessage = headType == common::WorkpieceHeadType::NoEndCap
+                ? QStringLiteral("已选择无封头，环缝路径 path5 将跳过")
+                : QStringLiteral("已选择单封头，将执行环缝路径 path5");
+        }
+    }
+
+    QJsonObject payload = buildResponsePayload(success, responseMessage);
+    if (const auto* cfgMgr = common::ConfigManager::instance()) {
+        payload[QLatin1String("headType")] = cfgMgr->workpieceHeadTypeName();
+        payload[QLatin1String("runtimeSkippedPathIds")] = runtimeSkippedPathIdsJson(cfgMgr);
+    }
+
+    sendToClient(buildEnvelope(
+        QLatin1String(msg_type::kCmdSetHeadType), msgId, payload));
+
+    if (success) {
+        // 路径配额/activePathId 已变化，立即让显控刷新，不等待下一个 500ms 周期。
+        pushSystemStatus();
+        pushPlcStatus();
+    }
 }
 
 void HmiTcpServer::handleCmdModbusConnect(const QJsonObject& message)
@@ -1026,12 +1112,15 @@ QJsonObject HmiTcpServer::buildSystemStatusPayload() const
     payload[QLatin1String("warnCode")] = static_cast<int>(m_stateMachine->warnCode());
     payload[QLatin1String("ipcReady")] = (m_stateMachine->currentState() == flow_control::AppState::Ready) ? 1 : 0;
     payload[QLatin1String("progress")] = progress;
+    payload[QLatin1String("workpieceComplete")] = m_stateMachine->isWorkpieceComplete();
     if (const auto* cfgMgr = scan_tracking::common::ConfigManager::instance()) {
         const auto& profile = cfgMgr->stationProfile();
         payload[QLatin1String("stationId")] = scan_tracking::common::stationIdToInt(profile.stationId);
         payload[QLatin1String("stationName")] = profile.stationName;
         payload[QLatin1String("workMode")] =
             scan_tracking::common::workModeIdToString(profile.defaultWorkMode);
+        payload[QLatin1String("headType")] = cfgMgr->workpieceHeadTypeName();
+        payload[QLatin1String("runtimeSkippedPathIds")] = runtimeSkippedPathIdsJson(cfgMgr);
         QJsonArray enabledTriggers;
         for (const auto& trigger : scan_tracking::flow_control::protocol::triggerDefinitions()) {
             if (scan_tracking::flow_control::isTriggerEnabledForProfile(profile, trigger.trigOffset)) {
@@ -1100,12 +1189,15 @@ QJsonObject HmiTcpServer::buildPlcStatusPayload() const
         payload[QLatin1String("stationName")] = profile.stationName;
         payload[QLatin1String("stationWorkMode")] =
             scan_tracking::common::workModeIdToString(profile.defaultWorkMode);
+        payload[QLatin1String("headType")] = cfgMgr->workpieceHeadTypeName();
+        payload[QLatin1String("runtimeSkippedPathIds")] = runtimeSkippedPathIdsJson(cfgMgr);
     }
     if (!m_modbusService) {
         return payload;
     }
 
     if (m_stateMachine) {
+        payload[QLatin1String("workpieceComplete")] = m_stateMachine->isWorkpieceComplete();
         namespace regs = flow_control::protocol::registers;
         const auto& cb = m_stateMachine->lastCommandBlock();
         if (cb.size() > regs::kArmScanSegmentIndex) {

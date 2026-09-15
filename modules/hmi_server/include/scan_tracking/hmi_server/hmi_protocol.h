@@ -71,6 +71,7 @@ inline constexpr const char* kCmdReset               = "cmd.reset";
 inline constexpr const char* kCmdClearAlarm          = "cmd.clear_alarm";
 inline constexpr const char* kCmdGetStatus           = "cmd.get_status";
 inline constexpr const char* kCmdGetConfig           = "cmd.get_config";
+inline constexpr const char* kCmdSetHeadType         = "cmd.set_head_type";
 inline constexpr const char* kCmdTriggerScan         = "cmd.trigger_scan";
 inline constexpr const char* kCmdTriggerInspection   = "cmd.trigger_inspection";
 inline constexpr const char* kCmdTriggerSelfCheck    = "cmd.trigger_self_check";

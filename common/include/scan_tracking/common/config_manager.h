@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QSettings>
+#include <QSet>
 #include <QString>
 #include <QVector>
 #include <QtCore/QtGlobal>
@@ -173,6 +174,16 @@ enum class ScanDeviceKind {
     Telescopic = 1,  ///< Trig_TelescopicScan → 伸缩杆相机组
 };
 
+/// 当前工件的封头类型。该选择由 HMI 在新工件开始前设置，运行期间只影响有效扫描路径。
+enum class WorkpieceHeadType {
+    SingleEndCap = 0,  ///< 单封头：包含环缝 path5
+    NoEndCap = 1,      ///< 无封头：跳过环缝 path5
+};
+
+/// 封头类型的协议字符串转换与解析。解析同时兼容英文别名和中文显示值。
+QString workpieceHeadTypeToString(WorkpieceHeadType type);
+bool parseWorkpieceHeadType(const QString& text, WorkpieceHeadType* out);
+
 /// 扫描路径中的单个点位定义（旧版 points[]；新版可省略，改用设备配额）。
 struct ScanPointConfig {
     int pointIndex = 0;           ///< 设备内本地段号（1..N）；臂读 AO47/40015，伸缩杆读 AO48/40016
@@ -279,20 +290,34 @@ public:
     /// 按 pathId 查找路径；未找到返回 nullptr。
     const ScanPathConfig* findScanPathById(int pathId) const;
 
-    /// 当前活跃路径：优先 JSON activePathId；未配置或找不到时回退第一条 enabled 路径。
+    /// 当前活跃路径：优先 JSON activePathId；若路径被禁用/运行时跳过则回退第一条有效路径。
     const ScanPathConfig* activeScanPath() const;
 
     /// 活跃路径 pathId；无可用路径时返回 0。
     int activePathId() const;
 
-    /// 运行时切换活跃路径（不改 JSON 文件）。pathId 须存在于 scanPaths；成功返回 true。
+    /// 运行时切换活跃路径（不改 JSON 文件）。pathId 须存在且未被运行时跳过；成功返回 true。
     bool setActivePathId(int pathId);
 
-    /// 按 JSON 顺序切到下一条 enabled 路径（到末尾则回到第一条）。返回新 pathId；无可切路径返回 0。
+    /// 按 JSON 顺序切到下一条有效路径。到末尾返回 0，不回环；无可切路径返回 0。
     int advanceToNextEnabledPath();
 
-    /// 按 JSON 顺序收集全部 enabled 路径的 pathId。
+    /// 按 JSON 顺序收集当前运行时有效路径的 pathId。
     QVector<int> enabledPathIds() const;
+
+    /// 当前工件封头类型及其运行时跳过路径集合。
+    WorkpieceHeadType workpieceHeadType() const;
+    QString workpieceHeadTypeName() const;
+    QSet<int> runtimeSkippedPathIds() const;
+
+    /// 设置运行时跳过路径。调用方应在工件空闲时使用；非法/不存在的 pathId 会被忽略。
+    void setRuntimeSkippedPaths(const QSet<int>& pathIds);
+
+    /// 设置当前工件封头类型；无封头模式默认跳过 path5 环缝。
+    bool setWorkpieceHeadType(WorkpieceHeadType type);
+
+    /// 判断路径是否同时满足 JSON enabled 与运行时选择条件。
+    bool isPathEnabledForRuntime(int pathId) const;
 
     /// 活跃路径 name；无则空串。
     QString activePathName() const;
@@ -376,6 +401,8 @@ private:
     HmiConfig m_hmiConfig;
     StationProfile m_stationProfile;
     ScanPathsConfig m_scanPathsConfig;
+    WorkpieceHeadType m_workpieceHeadType = WorkpieceHeadType::SingleEndCap;
+    QSet<int> m_runtimeSkippedPathIds;
 };
 
 }  // namespace common
