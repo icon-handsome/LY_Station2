@@ -1,0 +1,41 @@
+# 吊装辅助 → Qt 显控事件（交接摘要）
+
+Core 在 `enableHoistAssist=true` 时，对吊装三类检查结果做**边沿推送**（进入成功/失败各发一次）。
+
+| type | 含义 | Qt 建议动作 |
+|------|------|-------------|
+| `event.hoist_assist.passed` | 吊装检查全部通过 | 绿灯 / 成功提示 |
+| `event.hoist_assist.failed` | 明确失败 | 红灯 / 报警，可读 `payload.reason` |
+
+## payload 字段
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `success` | bool | passed=true，failed=false |
+| `message` | string | 中文说明 |
+| `reason` | string | `""` / `collision` / `tf` / `hik` |
+| `tfPassed` | bool | 双 TF 是否满足阈值 |
+| `tf1DistanceCm` / `tf1Valid` | int / bool | TF1 |
+| `tf2DistanceCm` / `tf2Valid` | int / bool | TF2 |
+| `collisionSafe` | bool | Mid360 是否安全 |
+| `collisionLevel` | int | 碰撞告警等级 |
+| `hikPassed` / `hikResultReceived` | bool | 海康 C ROI |
+
+## Qt 侧伪代码
+
+```cpp
+void onHmiEvent(const QString& type, const QJsonObject& payload) {
+    if (type == "event.hoist_assist.passed") {
+        showHoistOk(payload.value("message").toString());
+        return;
+    }
+    if (type == "event.hoist_assist.failed") {
+        const QString reason = payload.value("reason").toString(); // collision|tf|hik
+        showHoistAlarm(payload.value("message").toString(), reason);
+        return;
+    }
+}
+```
+
+完整样例见：`docs/protocols/封头检测工位_TCP_IP显控通信协议_v1.0.md` §2.7.1  
+无需回执；帧格式仍为 `[4B BE 长度][UTF-8 JSON]`。

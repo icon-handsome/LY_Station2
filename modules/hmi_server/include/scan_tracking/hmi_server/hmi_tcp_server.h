@@ -30,6 +30,10 @@ namespace scan_tracking {
 namespace modbus { class ModbusService; }
 namespace mech_eye { class MechEyeService; }
 namespace flow_control { class StateMachine; }
+namespace hoist_assist {
+class HoistAssistService;
+struct HoistAssistResult;
+}
 namespace vision {
 class HikCxpCameraService;
 class HikCameraService;
@@ -80,6 +84,18 @@ public:
      */
     void publishInspectionResult(const flow_control::InspectionResult& result);
 
+    /**
+     * @brief 推送吊装辅助成功（`event.hoist_assist.passed`）
+     * @note 边沿触发；无客户端时当前不缓存。
+     */
+    void publishHoistAssistPassed(const hoist_assist::HoistAssistResult& result);
+
+    /**
+     * @brief 推送吊装辅助失败（`event.hoist_assist.failed`）
+     * @note 边沿触发；无客户端时当前不缓存。
+     */
+    void publishHoistAssistFailed(const hoist_assist::HoistAssistResult& result);
+
     // --- 设置服务依赖（在 start() 之前调用） ---
     void setStateMachine(flow_control::StateMachine* sm);
     void setModbusService(modbus::ModbusService* svc);
@@ -89,6 +105,7 @@ public:
     void setHikCameraServices(vision::HikCxpCameraService* hikA, vision::HikCxpCameraService* hikB,
                               vision::HikCameraService* hikC = nullptr);
     void setHikCameraCController(vision::HikCameraCController* controller);
+    void setHoistAssistService(hoist_assist::HoistAssistService* svc);
 
 private slots:
     /// 处理新的客户端连接
@@ -264,6 +281,9 @@ private:
     /// 绑定视觉流水线抛出的多相机 Bundle 采集完成信号
     void connectVisionPipelineSignals();
 
+    /// 绑定吊装辅助成功/失败边沿信号，组装 JSON 转发到 Qt 端
+    void connectHoistAssistSignals();
+
     /// 状态/设备变化时立即刷新 status.*（阶段 1 显控监视）
     void connectStatusRefreshSignals();
     
@@ -293,6 +313,9 @@ private:
 
     /// 由 InspectionResult 组装 event.inspection.finished 的 payload
     static QJsonObject buildInspectionFinishedPayload(const flow_control::InspectionResult& result);
+
+    /// 由 HoistAssistResult 组装吊装辅助事件 payload
+    static QJsonObject buildHoistAssistPayload(const hoist_assist::HoistAssistResult& result);
 
     /// 显控连接后一次性推送全零检测展示帧（resultCode=0，便于 UI 初始化绑定）
     void publishInitialInspectionDisplay();
@@ -344,6 +367,7 @@ private:
     vision::HikCxpCameraService* m_hikCameraB = nullptr;
     vision::HikCameraService* m_hikCameraC = nullptr;
     vision::HikCameraCController* m_hikCameraCController = nullptr;
+    hoist_assist::HoistAssistService* m_hoistAssistService = nullptr;
     
     /// 消息类型到处理函数的映射表（用于快速分发消息）
     QHash<QString, MessageHandler> m_messageHandlers;

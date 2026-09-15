@@ -23,6 +23,14 @@ enum class TfSensorId {
     Sensor2 = 1,  // TF2，对应现场 COM6
 };
 
+// 明确失败原因（供 HMI / 日志区分）
+enum class HoistAssistFailReason {
+    None = 0,
+    Collision,     // Mid360 碰撞未通过
+    TfConstraint,  // 双 TF 定位约束未通过
+    HikRoi,        // 海康 C 焊缝/ROI 未通过
+};
+
 // 单路 TF 测距采样
 struct TfDistanceSample {
     int distanceCm = 0;  // 距离（厘米）
@@ -44,12 +52,30 @@ struct HoistAssistResult {
     bool hikPassed = false;          // 海康 C 焊缝/ROI 模型判定是否通过
 
     bool allChecksPassed = false;  // TF、碰撞、海康三类检查全部通过
+    HoistAssistFailReason failReason = HoistAssistFailReason::None;
     QString message;               // 面向界面/日志的状态说明
 };
+
+/// 失败原因 → 协议/日志用短码（collision / tf / hik）
+inline QString failReasonCode(HoistAssistFailReason reason)
+{
+    switch (reason) {
+    case HoistAssistFailReason::Collision:
+        return QStringLiteral("collision");
+    case HoistAssistFailReason::TfConstraint:
+        return QStringLiteral("tf");
+    case HoistAssistFailReason::HikRoi:
+        return QStringLiteral("hik");
+    case HoistAssistFailReason::None:
+    default:
+        return QString();
+    }
+}
 
 }  // namespace scan_tracking::hoist_assist
 
 Q_DECLARE_METATYPE(scan_tracking::hoist_assist::HoistAssistState)
 Q_DECLARE_METATYPE(scan_tracking::hoist_assist::TfSensorId)
 Q_DECLARE_METATYPE(scan_tracking::hoist_assist::TfDistanceSample)
+Q_DECLARE_METATYPE(scan_tracking::hoist_assist::HoistAssistFailReason)
 Q_DECLARE_METATYPE(scan_tracking::hoist_assist::HoistAssistResult)

@@ -61,6 +61,10 @@ inline constexpr const char* kEventPathStarted          = "event.path.started";
 inline constexpr const char* kEventPathFinished         = "event.path.finished";
 inline constexpr const char* kEventScanPathsAllFinished = "event.scan_paths.all_finished";
 inline constexpr const char* kEventPathProgressReset    = "event.path.progress_reset";
+/// 吊装辅助三类检查全部通过（Core → Qt，边沿触发）
+inline constexpr const char* kEventHoistAssistPassed    = "event.hoist_assist.passed";
+/// 吊装辅助明确失败（Core → Qt，边沿触发）
+inline constexpr const char* kEventHoistAssistFailed    = "event.hoist_assist.failed";
 inline constexpr const char* kEventAlarm             = "event.alarm";
 inline constexpr const char* kEventLog               = "event.log";
 

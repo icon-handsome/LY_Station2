@@ -913,8 +913,8 @@ void ConsoleRuntime::initModules()
                 if (!hoistAssistService_ || !hikCameraCController_) {
                     return;
                 }
-                // 焊缝 ROI 相机与 TF 均按 500ms 节拍采样/判断，避免高频业务判定。
-                hoistAssistService_->updateHikCameraResult(false, false);
+                // 仅周期采图 + 超时评估；不在此处清空海康结果，避免把上一帧 PASS 冲掉。
+                // 海康结果由 inspectionResultReceived → updateHikCameraResult 边沿刷新。
                 if (hikCameraCController_->isCameraConnected(thirdCameraIp)) {
                     hikCameraCController_->requestCapture(
                         scan_tracking::vision::CaptureType::WeldDefect,
@@ -979,6 +979,7 @@ void ConsoleRuntime::initModules()
         hmiTcpServer_->setHikCameraServices(
             hikCxpCameraAService_.get(), hikCxpCameraBService_.get(), nullptr);
         hmiTcpServer_->setHikCameraCController(hikCameraCController_.get());
+        hmiTcpServer_->setHoistAssistService(hoistAssistService_.get());
     } else {
         qInfo(appLog) << "HMI TCP 服务已在 config.ini [Hmi] enabled=false 下禁用。";
     }

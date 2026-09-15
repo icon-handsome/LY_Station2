@@ -18,6 +18,8 @@
 #include "scan_tracking/vision/hik_camera_c_controller.h"
 #include "scan_tracking/flow_control/inspection_types.h"
 #include "scan_tracking/common/config_manager.h"
+#include "scan_tracking/hoist_assist/hoist_assist_service.h"
+#include "scan_tracking/hoist_assist/hoist_assist_types.h"
 
 #include <algorithm>
 #include <cmath>
@@ -223,11 +225,14 @@ void HmiTcpServer::bindServiceSignals()
         "scan_tracking::vision::MultiCameraCaptureBundle");
     qRegisterMetaType<scan_tracking::flow_control::InspectionResult>(
         "scan_tracking::flow_control::InspectionResult");
+    qRegisterMetaType<scan_tracking::hoist_assist::HoistAssistResult>(
+        "scan_tracking::hoist_assist::HoistAssistResult");
 
     connectStateMachineSignals();
     connectModbusSignals();
     connectMechEyeSignals();
     connectVisionPipelineSignals();
+    connectHoistAssistSignals();
     connectStatusRefreshSignals();
     m_serviceSignalsBound = true;
 }
@@ -251,6 +256,9 @@ void HmiTcpServer::disconnectServiceSignals()
     }
     if (m_visionPipeline) {
         disconnect(m_visionPipeline, nullptr, this, nullptr);
+    }
+    if (m_hoistAssistService) {
+        disconnect(m_hoistAssistService, nullptr, this, nullptr);
     }
     m_serviceSignalsBound = false;
 }
@@ -288,6 +296,11 @@ void HmiTcpServer::setHikCameraCController(vision::HikCameraCController* control
             },
             Qt::QueuedConnection);
     }
+}
+
+void HmiTcpServer::setHoistAssistService(hoist_assist::HoistAssistService* svc)
+{
+    m_hoistAssistService = svc;
 }
 
 void HmiTcpServer::onNewConnection()
@@ -1883,6 +1896,26 @@ void HmiTcpServer::connectStateMachineSignals()
     }, Qt::UniqueConnection);
 }
 
+void HmiTcpServer::connectHoistAssistSignals()
+{
+    if (!m_hoistAssistService) {
+        return;
+    }
+
+    connect(
+        m_hoistAssistService,
+        &hoist_assist::HoistAssistService::checkPassed,
+        this,
+        &HmiTcpServer::publishHoistAssistPassed,
+        Qt::UniqueConnection);
+    connect(
+        m_hoistAssistService,
+        &hoist_assist::HoistAssistService::checkFailed,
+        this,
+        &HmiTcpServer::publishHoistAssistFailed,
+        Qt::UniqueConnection);
+}
+
 void HmiTcpServer::connectModbusSignals()
 {
     if (!m_modbusService) return;
@@ -2181,6 +2214,58 @@ void HmiTcpServer::publishInspectionResult(const flow_control::InspectionResult&
         << QStringLiteral(" measureItems=") << result.measureItemCount
         << QStringLiteral(" qualityCode=") << result.measurement.qualityCode
         << QStringLiteral(" message=") << result.message;
+}
+
+QJsonObject HmiTcpServer::buildHoistAssistPayload(const hoist_assist::HoistAssistResult& result)
+{
+    QJsonObject payload;
+    payload[QLatin1String("success")] = result.allChecksPassed;
+    payload[QLatin1String("message")] = result.message;
+    payload[QLatin1String("reason")] = hoist_assist::failReasonCode(result.failReason);
+    payload[QLatin1String("tfPassed")] = result.tfPassed;
+    payload[QLatin1String("tf1DistanceCm")] = result.tf1.distanceCm;
+    payload[QLatin1String("tf1Valid")] = result.tf1.valid;
+    payload[QLatin1String("tf2DistanceCm")] = result.tf2.distanceCm;
+    payload[QLatin1String("tf2Valid")] = result.tf2.valid;
+    payload[QLatin1String("collisionSafe")] = result.collisionSafe;
+    payload[QLatin1String("collisionLevel")] = static_cast<int>(result.collisionLevel);
+    payload[QLatin1String("hikPassed")] = result.hikPassed;
+    payload[QLatin1String("hikResultReceived")] = result.hikResultReceived;
+    return payload;
+}
+
+void HmiTcpServer::publishHoistAssistPassed(const hoist_assist::HoistAssistResult& result)
+{
+    if (!hasClient()) {
+        qInfo(LOG_HMI_SERVER).noquote()
+            << QStringLiteral("[TCPIP] 吊装成功未推送（无显控连接）") << result.message;
+        return;
+    }
+
+    sendToClient(buildEnvelope(
+        QLatin1String(msg_type::kEventHoistAssistPassed),
+        nextEventId(),
+        buildHoistAssistPayload(result)));
+    qInfo(LOG_HMI_SERVER).noquote()
+        << QStringLiteral("[TCPIP] 已推送 event.hoist_assist.passed") << result.message;
+}
+
+void HmiTcpServer::publishHoistAssistFailed(const hoist_assist::HoistAssistResult& result)
+{
+    if (!hasClient()) {
+        qInfo(LOG_HMI_SERVER).noquote()
+            << QStringLiteral("[TCPIP] 吊装失败未推送（无显控连接）") << result.message
+            << QStringLiteral("reason=") << hoist_assist::failReasonCode(result.failReason);
+        return;
+    }
+
+    sendToClient(buildEnvelope(
+        QLatin1String(msg_type::kEventHoistAssistFailed),
+        nextEventId(),
+        buildHoistAssistPayload(result)));
+    qInfo(LOG_HMI_SERVER).noquote()
+        << QStringLiteral("[TCPIP] 已推送 event.hoist_assist.failed") << result.message
+        << QStringLiteral("reason=") << hoist_assist::failReasonCode(result.failReason);
 }
 
 // --- 辅助发送 ---

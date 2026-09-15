@@ -1,9 +1,10 @@
 # HMI 显控 TCP 开发交接说明
 
-**文档版本**: v1.8
+**文档版本**: v1.9
 **最后更新**: 2026-09-15
 **适用范围**: 本仓库（IPC_Station2，第二工位专用）— **仅 TCP Server 端**；麒麟 OS Qt 显控为独立 Client 工程。
 
+> **v1.9 变更**：新增吊装辅助边沿事件 `event.hoist_assist.passed` / `event.hoist_assist.failed`（需 `enableHoistAssist=true`）。  
 > **v1.7 变更**：清理第一工位坡口 / Tracking 文案与协议样例；`cmd.get_config` 配置节改为 `scanPaths`；`event.inspection.finished` 以 `headMetrics`（含 `qualityCode`）为准；`cmd.set_bevel_recipe` 仍识别但固定失败。  
 > **v1.6 变更**：`cmd.debug_trigger_inspection` 接入缓存评估 + `publishInspectionResult`（不写 PLC）。
 > **v1.8 变更**：增加 `cmd.set_head_type`；无封头运行时跳过环缝 `path5`；最后有效路径检测成功后保持工件结束态，等待 PLC `Trig_ResultReset`。
@@ -75,6 +76,7 @@ Trig_Inspection（PLC）或 cmd.debug_trigger_inspection（显控）
 - [x] 双 MechEye、臂/杆段进度、辅机字段与 920/921 报警
 - [x] `event.scan.*`、`event.path.*`、`event.bundle.captured`、`event.image.captured`
 - [x] `event.alarm`、业务 `event.*.finished`（绑定 StateMachine）
+- [x] `event.hoist_assist.passed` / `event.hoist_assist.failed`（绑定 HoistAssistService，边沿触发）
 
 ### 3.3 控制与调试命令
 

@@ -24,6 +24,8 @@ constexpr qint64 kTfSampleTimeoutMs = 1500;
 HoistAssistService::HoistAssistService(QObject* parent)
     : QObject(parent)
 {
+    qRegisterMetaType<HoistAssistState>("scan_tracking::hoist_assist::HoistAssistState");
+    qRegisterMetaType<HoistAssistResult>("scan_tracking::hoist_assist::HoistAssistResult");
 }
 
 void HoistAssistService::start()
@@ -49,6 +51,7 @@ void HoistAssistService::stop()
         return;
     }
     m_running = false;
+    m_lastOutcome = Outcome::None;
     publishState(HoistAssistState::Stopped, QStringLiteral("吊装辅助已停止"));
 }
 
@@ -57,6 +60,7 @@ void HoistAssistService::resetInputs()
     m_result = HoistAssistResult{};
     m_tf1LastUpdateMs = -1;
     m_tf2LastUpdateMs = -1;
+    m_lastOutcome = Outcome::None;
     if (m_running) {
         publishState(HoistAssistState::Running, QStringLiteral("吊装辅助输入已复位，等待结果"));
         emit resultChanged(m_result);
@@ -77,6 +81,9 @@ void HoistAssistService::updateTfDistance(TfSensorId sensor, int distanceCm, boo
         m_result.tf2 = sample;
         m_tf2LastUpdateMs = m_clock.isValid() ? m_clock.elapsed() : -1;
     }
+    if (m_running) {
+        recompute();
+    }
 }
 
 void HoistAssistService::updateCollisionResult(
@@ -86,12 +93,18 @@ void HoistAssistService::updateCollisionResult(
     m_result.collisionResultReceived = valid;
     m_result.collisionLevel = level;
     m_result.collisionSafe = valid && level == collision_monitor::CollisionAlertLevel::None;
+    if (m_running) {
+        recompute();
+    }
 }
 
 void HoistAssistService::updateHikCameraResult(bool ok, bool valid)
 {
     m_result.hikResultReceived = valid;
     m_result.hikPassed = valid && ok;
+    if (m_running) {
+        recompute();
+    }
 }
 
 void HoistAssistService::recompute()
@@ -110,28 +123,55 @@ void HoistAssistService::recompute()
     }
     m_result.tfPassed = tf1Passes(m_result.tf1) && tf2Passes(m_result.tf2);
     m_result.allChecksPassed = m_result.tfPassed && m_result.collisionSafe && m_result.hikPassed;
+    m_result.failReason = HoistAssistFailReason::None;
 
     if (!m_running) {
         emit resultChanged(m_result);
         return;
     }
 
-    // 判定优先级：碰撞未通过 → 海康未通过 → 全部通过 → 仍在等待
+    // 判定优先级：碰撞 → TF 定位（双路均有效才明确失败）→ 海康 ROI（需 TF+碰撞已过）→ 全部通过 → 等待
     if (m_result.collisionResultReceived && !m_result.collisionSafe) {
+        m_result.failReason = HoistAssistFailReason::Collision;
         m_result.message = QStringLiteral("Mid360 碰撞检测未通过");
         publishState(HoistAssistState::Unsafe, m_result.message);
+        publishOutcome(Outcome::Failed);
+    } else if (m_result.tf1.valid && m_result.tf2.valid && !m_result.tfPassed) {
+        m_result.failReason = HoistAssistFailReason::TfConstraint;
+        m_result.message = QStringLiteral(
+            "TF 定位约束未通过（TF1>235cm 且 TF2 在 170~190cm）");
+        publishState(HoistAssistState::Unsafe, m_result.message);
+        publishOutcome(Outcome::Failed);
     } else if (m_result.tfPassed && m_result.collisionSafe && m_result.hikResultReceived
                && !m_result.hikPassed) {
+        m_result.failReason = HoistAssistFailReason::HikRoi;
         m_result.message = QStringLiteral("海康 C 焊缝/ROI 判定未通过");
         publishState(HoistAssistState::Unsafe, m_result.message);
+        publishOutcome(Outcome::Failed);
     } else if (m_result.allChecksPassed) {
         m_result.message = QStringLiteral("吊装辅助检查全部通过");
         publishState(HoistAssistState::Running, m_result.message);
+        publishOutcome(Outcome::Passed);
     } else {
         m_result.message = QStringLiteral("等待吊装辅助检查结果");
         publishState(HoistAssistState::Running, m_result.message);
+        // 回到等待态，允许随后再次边沿触发成功/失败
+        m_lastOutcome = Outcome::None;
     }
     emit resultChanged(m_result);
+}
+
+void HoistAssistService::publishOutcome(Outcome outcome)
+{
+    if (m_lastOutcome == outcome) {
+        return;
+    }
+    m_lastOutcome = outcome;
+    if (outcome == Outcome::Passed) {
+        emit checkPassed(m_result);
+    } else if (outcome == Outcome::Failed) {
+        emit checkFailed(m_result);
+    }
 }
 
 void HoistAssistService::publishState(HoistAssistState state, const QString& message)

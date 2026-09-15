@@ -169,6 +169,62 @@ TCP 是流式协议，为解决粘包和半包问题，采用长度前缀的帧�
 - `event.code_read.finished`: `{ resultCode, codeValue(string) }`
 - `event.result_reset.finished`: `{ resultCode }`
 
+### 2.7.1 吊装辅助结果（Core → Qt，边沿触发）
+
+需 `config.ini` 中 `enableHoistAssist=true`，且 Core 已启动吊装辅助融合服务。判定由双 TF + Mid360 碰撞 + 第三路海康 C 汇总；**状态从「等待」进入成功/失败时各推一次**，回到等待后再进入会再次推送。
+
+#### 成功：`event.hoist_assist.passed`
+```json
+{
+  "version": "1.0",
+  "msgId": "evt-12",
+  "type": "event.hoist_assist.passed",
+  "timestamp": 1710000000000,
+  "payload": {
+    "success": true,
+    "message": "吊装辅助检查全部通过",
+    "reason": "",
+    "tfPassed": true,
+    "tf1DistanceCm": 240,
+    "tf1Valid": true,
+    "tf2DistanceCm": 180,
+    "tf2Valid": true,
+    "collisionSafe": true,
+    "collisionLevel": 0,
+    "hikPassed": true,
+    "hikResultReceived": true
+  }
+}
+```
+
+#### 失败：`event.hoist_assist.failed`
+```json
+{
+  "version": "1.0",
+  "msgId": "evt-13",
+  "type": "event.hoist_assist.failed",
+  "timestamp": 1710000000000,
+  "payload": {
+    "success": false,
+    "message": "Mid360 碰撞检测未通过",
+    "reason": "collision",
+    "tfPassed": false,
+    "tf1DistanceCm": 250,
+    "tf1Valid": true,
+    "tf2DistanceCm": 180,
+    "tf2Valid": true,
+    "collisionSafe": false,
+    "collisionLevel": 2,
+    "hikPassed": false,
+    "hikResultReceived": false
+  }
+}
+```
+
+- `reason` 取值：`""`（成功）、`"collision"`（Mid360）、`"tf"`（双 TF 定位约束）、`"hik"`（海康焊缝/ROI）
+- `collisionLevel`：与碰撞监控告警等级一致（0=None，其余为告警）
+- Qt **无需回执**；按 `type` 分发到 UI（成功提示 / 失败报警）即可
+
 ### 2.8 报警与日志
 - `event.alarm`: `{ level, code, message, timestamp }` (单向发送，无需回执)
 - **辅机 PLC 报警 code（920 段，与 Modbus 900 段、相机 910 段区分）**：

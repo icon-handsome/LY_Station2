@@ -13,7 +13,7 @@ namespace scan_tracking::hoist_assist {
 // 职责：
 // - 缓存各路传感器最新输入，并按周期重新判定
 // - TF 采样超时后自动失效，避免断线后仍沿用旧数据通过检查
-// - 任一类检查未通过时进入 Unsafe；全部通过则保持 Running
+// - 明确失败 → Unsafe + checkFailed；全部通过 → checkPassed（边沿触发，避免刷屏）
 //
 // 典型流程：start → 持续 update* / evaluate → stop
 class HoistAssistService final : public QObject {
@@ -56,17 +56,30 @@ signals:
     void stateChanged(scan_tracking::hoist_assist::HoistAssistState state, QString message);
     /// 综合结果刷新时发出（含未运行时的输入更新）。
     void resultChanged(scan_tracking::hoist_assist::HoistAssistResult result);
+    /// 三类检查首次（或再次）全部通过时发出，供 HMI 绿灯/成功提示。
+    void checkPassed(scan_tracking::hoist_assist::HoistAssistResult result);
+    /// 明确失败时发出（边沿），供 HMI 报警/失败提示。
+    void checkFailed(scan_tracking::hoist_assist::HoistAssistResult result);
 
 private:
+    enum class Outcome {
+        None = 0,
+        Passed,
+        Failed,
+    };
+
     /// 综合三类输入重新判定，并按需发布状态与结果信号。
     void recompute();
     /// 更新内部状态；状态变化或 message 非空时发出 stateChanged。
     void publishState(HoistAssistState state, const QString& message);
+    /// 边沿发布 checkPassed / checkFailed。
+    void publishOutcome(Outcome outcome);
 
     bool m_running = false;
     HoistAssistState m_state = HoistAssistState::Idle;
     QString m_lastStateMessage;
     HoistAssistResult m_result;
+    Outcome m_lastOutcome = Outcome::None;
     QElapsedTimer m_clock;           // 用于 TF 采样超时判定的单调时钟
     qint64 m_tf1LastUpdateMs = -1;   // TF1 最近一次更新时的 elapsed（毫秒），-1 表示尚无有效时间戳
     qint64 m_tf2LastUpdateMs = -1;   // TF2 最近一次更新时的 elapsed（毫秒），-1 表示尚无有效时间戳
