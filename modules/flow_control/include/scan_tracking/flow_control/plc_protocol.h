@@ -186,7 +186,7 @@ inline quint16 plcAnalogToUInt16(quint16 word0, quint16 word1 = 0)
 constexpr int kCommandBlockStart = 0;    ///< 命令区起始地址：PLC→IPC的控制指令区域（0 基偏移）
 constexpr int kCommandBlockSize = 51;    ///< 命令区大小：40001~40051（modbusIndex 0~50）
 constexpr int kResultBlockStart = 101;   ///< 结果区起始：40101（modbusIndex=101）
-constexpr int kResultBlockSize = 85;     ///< 结果区大小：40101~40185（含 ScanPathIdEcho）
+constexpr int kResultBlockSize = 86;     ///< 结果区大小：40101~40186（含 ScanPathIdEcho / WorkpieceHeadType）
 
 // ==================== 命令区寄存器（PLC → IPC）====================
 
@@ -340,6 +340,10 @@ constexpr int kTelescopicCloudFrameCount = modbusIndexFromPlcAddress(40184);
 
 /// IPC 当前生效扫描路径号回显（可选；供 HMI/调试，**PLC 无需读取**）。
 constexpr int kScanPathIdEcho = modbusIndexFromPlcAddress(40185);
+
+/// 工件封头类型（IPC → PLC，v0.3.1+）：
+/// 0=未选择，1=单封头（含环缝 path5），2=无封头（跳过 path5）
+constexpr int kWorkpieceHeadType = modbusIndexFromPlcAddress(40186);
 
 // --- 综合检测（Inspection）---
 constexpr int kAckInspection = modbusIndexFromPlcAddress(40140);

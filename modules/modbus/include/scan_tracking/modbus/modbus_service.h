@@ -16,8 +16,8 @@ namespace modbus {
  * 架构：
  * - IPC 作为 Modbus TCP Server（Slave），监听 502 端口
  * - PLC 作为 Modbus TCP Client（Master），主动读写 IPC 的寄存器
- * - PLC 每 100ms 用 FuncId=16 写入命令区（40001-40045）
- * - PLC 每 100ms 用 FuncId=3 读取结果区（40101-40184）
+ * - PLC 每 100ms 用 FuncId=16 写入命令区（40001-40051）
+ * - PLC 每 100ms 用 FuncId=3 读取结果区（40101-40186）
  *
  * 接口说明：
  * - writeRegister/writeRegisters：IPC 侧主动更新结果区寄存器，PLC 下次读取时自动拿到新值
@@ -45,7 +45,7 @@ public:
     bool writeRegister(int startAddress, quint16 value);
     bool writeRegisters(int startAddress, const QVector<quint16>& values);
 
-    /// 程序退出时将 IPC 结果区（40101-40184）全部清零
+    /// 程序退出时将 IPC 结果区（40101-40186）全部清零
     bool resetIpcResultBlock();
 
 signals:

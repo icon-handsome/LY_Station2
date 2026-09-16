@@ -64,6 +64,7 @@ public:
     virtual bool writeSelfCheckFailWords(const QVector<quint16>& failWords) = 0;
     virtual bool clearScanSegmentDoneRegisters() = 0;
     virtual bool clearIpcSafetyActionWord() = 0;
+    virtual bool clearWorkpieceHeadType() = 0;
 
     virtual void completeScanSegmentCapture(
         quint16 resultCode,

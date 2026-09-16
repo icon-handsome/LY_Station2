@@ -106,8 +106,10 @@ Trig_Inspection（PLC）或 cmd.debug_trigger_inspection（显控）
 }
 ```
 
-- `single_endcap`（也可传 `single` / `单封头`）：执行全部有效路径，包含环缝 `path5`。
-- `none`（也可传 `no_endcap` / `无封头`）：运行时跳过 `path5`，不会采集、检测或计入路径总数。
+- `single_endcap`（也可传 `single` / `单封头` / 数值 `1`）：执行全部有效路径，包含环缝 `path5`。
+- `none`（也可传 `no_endcap` / `无封头` / 数值 `2`）：运行时跳过 `path5`，不会采集、检测或计入路径总数。
+- 启动与 `Trig_ResultReset` 后默认为未选择（`headType=unselected`，PLC `40186=0`），须重新选择后 PLC 才可发路径触发。
+- IPC→PLC：`40186 WorkpieceHeadType`：`0`=未选择，`1`=单封头，`2`=无封头。
 - 选择只能在当前工件尚未开始时修改；已有任务、缓存、路径进度或后台算法时 Core 返回失败。
 - 最后一条有效路径检测成功后 Core 不再回到 `path1`，`status.system.workpieceComplete=true`；下一件必须等待 PLC `Trig_ResultReset`。
 - `cmd.get_config` 的 `config.workpiece` / `config.scanPaths`，以及 `status.system` / `status.plc` 会回显 `headType` 与 `runtimeSkippedPathIds`。路径项另含 `runtimeEnabled`、`runtimeSkipped`。

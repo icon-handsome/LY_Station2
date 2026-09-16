@@ -177,8 +177,10 @@ QString workpieceHeadTypeToString(WorkpieceHeadType type)
     case WorkpieceHeadType::NoEndCap:
         return QStringLiteral("none");
     case WorkpieceHeadType::SingleEndCap:
-    default:
         return QStringLiteral("single_endcap");
+    case WorkpieceHeadType::Unselected:
+    default:
+        return QStringLiteral("unselected");
     }
 }
 
@@ -202,6 +204,11 @@ bool parseWorkpieceHeadType(const QString& text, WorkpieceHeadType* out)
                normalized == QLatin1String("without_head") ||
                normalized == QStringLiteral("无封头")) {
         type = WorkpieceHeadType::NoEndCap;
+    } else if (normalized == QLatin1String("unselected") ||
+               normalized == QLatin1String("not_selected") ||
+               normalized == QLatin1String("unknown") ||
+               normalized == QStringLiteral("未选择")) {
+        type = WorkpieceHeadType::Unselected;
     } else {
         return false;
     }

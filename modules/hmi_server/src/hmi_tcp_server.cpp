@@ -720,7 +720,8 @@ void HmiTcpServer::handleCmdSetHeadType(const QJsonObject& message)
         << QStringLiteral("[TCPIP] 接收 cmd.set_head_type msgId=") << msgId
         << QStringLiteral(" headType=") << rawHeadType.toString();
 
-    common::WorkpieceHeadType headType = common::WorkpieceHeadType::SingleEndCap;
+    // 与 PLC 40186 一致：1=单封头，2=无封头；0=未选择不可通过本命令写入。
+    common::WorkpieceHeadType headType = common::WorkpieceHeadType::Unselected;
     bool parsed = false;
     if (rawHeadType.isString()) {
         parsed = common::parseWorkpieceHeadType(rawHeadType.toString(), &headType);
@@ -737,9 +738,9 @@ void HmiTcpServer::handleCmdSetHeadType(const QJsonObject& message)
 
     bool success = false;
     QString responseMessage;
-    if (!parsed) {
+    if (!parsed || headType == common::WorkpieceHeadType::Unselected) {
         responseMessage = QStringLiteral(
-            "headType 无效，应为 single_endcap（单封头）或 none（无封头）");
+            "headType 无效，应为 single_endcap/1（单封头）或 none/2（无封头）");
         qWarning(LOG_HMI_SERVER).noquote()
             << QStringLiteral("[TCPIP] cmd.set_head_type 解析失败，msgId=") << msgId
             << QStringLiteral(" 原始值=") << rawHeadType;
@@ -755,7 +756,8 @@ void HmiTcpServer::handleCmdSetHeadType(const QJsonObject& message)
                 : QStringLiteral("已选择单封头，将执行环缝路径 path5");
             qInfo(LOG_HMI_SERVER).noquote()
                 << QStringLiteral("[TCPIP] cmd.set_head_type 设置成功，msgId=") << msgId
-                << QStringLiteral(" 类型=") << (headType == common::WorkpieceHeadType::NoEndCap ? "无封头" : "单封头");
+                << QStringLiteral(" 类型=") << (headType == common::WorkpieceHeadType::NoEndCap ? "无封头" : "单封头")
+                << QStringLiteral("（40186=") << static_cast<int>(headType) << QLatin1Char(')');
         } else {
             qWarning(LOG_HMI_SERVER).noquote()
                 << QStringLiteral("[TCPIP] cmd.set_head_type 设置失败，msgId=") << msgId

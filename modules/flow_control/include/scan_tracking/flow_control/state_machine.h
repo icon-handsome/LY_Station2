@@ -162,6 +162,7 @@ public:
     bool writeSelfCheckFailWords(const QVector<quint16>& failWords) override;
     bool clearScanSegmentDoneRegisters() override;
     bool clearIpcSafetyActionWord() override;
+    bool clearWorkpieceHeadType() override;
 
     void completeScanSegmentCapture(
         quint16 resultCode,

@@ -23,9 +23,9 @@ constexpr int kTotalRegisterCount = 200;
 /// 命令区（PLC 写入）：offset 0-50，覆盖 PLC 40001~40051
 constexpr int kCommandBlockStart = 0;
 constexpr int kCommandBlockSize = 51;
-/// 结果区（IPC 写入，PLC 读取）：offset 101-185（40101~40185，含 ScanPathIdEcho）
+/// 结果区（IPC 写入，PLC 读取）：offset 101-186（40101~40186，含 ScanPathIdEcho / WorkpieceHeadType）
 constexpr int kResultBlockStart = 101;  // 40101，与 plc_protocol 一致（40000+下标）
-constexpr int kResultBlockSize = 85;
+constexpr int kResultBlockSize = 86;
 }
 
 ModbusService::ModbusService(QObject* parent)
@@ -51,7 +51,7 @@ void ModbusService::initRegisterMap()
     m_server->setMap(reg);
 
     qInfo(LOG_MODBUS) << "寄存器映射已初始化，总大小:" << kTotalRegisterCount
-                      << "命令区: 0-45, 结果区: 100-183";
+                      << "命令区: 0-50, 结果区: 101-186";
 }
 
 bool ModbusService::connectDevice()
@@ -173,7 +173,7 @@ bool ModbusService::writeRegisters(int startAddress, const QVector<quint16>& val
 bool ModbusService::resetIpcResultBlock()
 {
     qInfo(LOG_MODBUS).noquote()
-        << QStringLiteral("正在清零 IPC 结果区寄存器 40101-40184（共 ")
+        << QStringLiteral("正在清零 IPC 结果区寄存器 40101-40186（共 ")
         << kResultBlockSize << QStringLiteral(" 个）");
     return writeRegisters(kResultBlockStart, QVector<quint16>(kResultBlockSize, 0));
 }

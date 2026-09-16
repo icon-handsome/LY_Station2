@@ -1,6 +1,7 @@
 #include "scan_tracking/flow_control/state_machine.h"
 
 #include "scan_tracking/flow_control/detail/state_machine_internal.h"
+#include "scan_tracking/common/config_manager.h"
 
 namespace scan_tracking::flow_control {
 
@@ -179,6 +180,24 @@ bool StateMachine::clearIpcSafetyActionWord()
     const bool cleared = m_modbus->writeRegisters(protocol::registers::kIpcSafetyActionWord, {0});
     if (!cleared) {
         qWarning(LOG_FLOW).noquote() << QStringLiteral("清除 IPC 安全动作字失败");
+    }
+    return cleared;
+}
+
+bool StateMachine::clearWorkpieceHeadType()
+{
+    // ResultReset / 新工件边界：本地与 40186 同步回 0=未选择，等待 HMI 重新选择。
+    if (auto* cfgMgr = common::ConfigManager::instance()) {
+        cfgMgr->setWorkpieceHeadType(common::WorkpieceHeadType::Unselected);
+    }
+
+    if (!isModbusConnected()) {
+        return false;
+    }
+
+    const bool cleared = m_modbus->writeRegister(protocol::registers::kWorkpieceHeadType, 0);
+    if (!cleared) {
+        qWarning(LOG_FLOW).noquote() << QStringLiteral("清除工件封头类型寄存器失败");
     }
     return cleared;
 }

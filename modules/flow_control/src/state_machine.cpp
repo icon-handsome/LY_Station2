@@ -372,7 +372,7 @@ bool StateMachine::setWorkpieceHeadType(
 
     if (type != common::WorkpieceHeadType::SingleEndCap &&
         type != common::WorkpieceHeadType::NoEndCap) {
-        return fail(QStringLiteral("不支持的封头类型"));
+        return fail(QStringLiteral("不支持的封头类型（仅支持 1=单封头 / 2=无封头）"));
     }
 
     auto* cfgMgr = common::ConfigManager::instance();
@@ -572,6 +572,7 @@ void StateMachine::executeResultResetTask()
         clearScanSegmentDoneRegisters();
         clearInspectionResultRegisters();
         clearIpcSafetyActionWord();
+        clearWorkpieceHeadType();
     }
 
     completeActiveTask(1);

@@ -397,6 +397,14 @@ void StateMachine::processTrigger(const protocol::TriggerDefinition& trigger, co
             return;
         }
         if (configMgr != nullptr) {
+            // 40186=0 表示 HMI 尚未选择；PLC 应等待非 0 后再发路径触发。
+            if (configMgr->workpieceHeadType() == common::WorkpieceHeadType::Unselected) {
+                rejectPathFlowTrigger(
+                    trigger,
+                    8,
+                    QStringLiteral("尚未选择封头类型（40186=0），请先由 HMI 选择单封头/无封头"));
+                return;
+            }
             if (requestedPathId > 0 && !configMgr->isPathEnabledForRuntime(requestedPathId)) {
                 rejectPathFlowTrigger(
                     trigger,
@@ -669,6 +677,15 @@ void StateMachine::publishIpcStatus()
 
     if (!m_modbus->writeRegisters(protocol::registers::kIpcHeartbeat, status)) {
         qWarning(LOG_FLOW).noquote() << QStringLiteral("写入 IPC 心跳状态失败");
+    }
+
+    // 写入工件封头类型到 40186
+    auto* cfgMgr = common::ConfigManager::instance();
+    if (cfgMgr != nullptr) {
+        const quint16 headTypeValue = static_cast<quint16>(cfgMgr->workpieceHeadType());
+        if (!m_modbus->writeRegister(protocol::registers::kWorkpieceHeadType, headTypeValue)) {
+            qWarning(LOG_FLOW).noquote() << QStringLiteral("写入工件封头类型失败");
+        }
     }
 }
 

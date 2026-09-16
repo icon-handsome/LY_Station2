@@ -176,8 +176,9 @@ enum class ScanDeviceKind {
 
 /// 当前工件的封头类型。该选择由 HMI 在新工件开始前设置，运行期间只影响有效扫描路径。
 enum class WorkpieceHeadType {
-    SingleEndCap = 0,  ///< 单封头：包含环缝 path5
-    NoEndCap = 1,      ///< 无封头：跳过环缝 path5
+    Unselected = 0,    ///< 未选择：用户尚未指定封头类型
+    SingleEndCap = 1,  ///< 单封头：包含环缝 path5
+    NoEndCap = 2,      ///< 无封头：跳过环缝 path5
 };
 
 /// 封头类型的协议字符串转换与解析。解析同时兼容英文别名和中文显示值。
@@ -401,7 +402,7 @@ private:
     HmiConfig m_hmiConfig;
     StationProfile m_stationProfile;
     ScanPathsConfig m_scanPathsConfig;
-    WorkpieceHeadType m_workpieceHeadType = WorkpieceHeadType::NoEndCap;
+    WorkpieceHeadType m_workpieceHeadType = WorkpieceHeadType::Unselected;
     QSet<int> m_runtimeSkippedPathIds;
 };
 

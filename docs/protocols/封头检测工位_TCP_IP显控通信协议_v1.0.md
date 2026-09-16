@@ -65,8 +65,8 @@ TCP 是流式协议，为解决粘包和半包问题，采用长度前缀的帧�
   - `ipcReady` (int): 0/1
   - `progress` (int): 0~100
   - `stationId` / `stationName` / `workMode`(string，工位 profile) / `enabledTriggers`
-  - `headType` (string): 当前工件类型，`single_endcap`=单封头，`none`=无封头
-  - `runtimeSkippedPathIds` (array[int]): 当前类型运行时跳过的路径；无封头时固定包含 `5`
+  - `headType` (string): 当前工件类型，`unselected`=未选择，`single_endcap`=单封头，`none`=无封头（对应 PLC 40186：0/1/2）
+  - `runtimeSkippedPathIds` (array[int]): 当前类型运行时跳过的路径；无封头时固定包含 `5`；未选择时为空
   - `workpieceComplete` (bool): 最后一条有效路径检测成功后为 `true`，直到 `Trig_ResultReset`
   - `scanPathProgress` (object)：当前路径基础显示，见 §2.5 / `docs/hmi/路径状态交互指令.txt`
 
@@ -308,7 +308,7 @@ Qt 发送 request（附带不重复的 `msgId`），Core 执行后返回对应 `
 }
 ```
 
-选择失败时 `success=false`；工件已开始、已完成或仍有任务/缓存/后台算法时不会修改当前类型。PLC 若仍请求被跳过的 `ScanPathId=5`，对应路径触发返回 `Res=8`、`Ack=3`，不会按旧路径继续采集。
+选择失败时 `success=false`；工件已开始、已完成或仍有任务/缓存/后台算法时不会修改当前类型。IPC 通过 Modbus `40186 WorkpieceHeadType` 通知 PLC：`0`=未选择，`1`=单封头（含 path5），`2`=无封头（跳过 path5）。`Trig_ResultReset` 后清回 `0`，须重新选择。PLC 若在 `40186=0` 时发路径触发，或请求被跳过的 `ScanPathId=5`，对应路径触发返回 `Res=8`、`Ack=3`。
 
 ---
 
