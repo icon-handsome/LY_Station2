@@ -1,6 +1,6 @@
 {
-  "version": "1.8",
-  "lastModified": "2026-08-11",
+  "version": "1.9",
+  "lastModified": "2026-09-16",
   "activePathId": 1,
   "scanPaths": [
     {
@@ -80,6 +80,20 @@
         { "pointIndex": 10, "purpose": "inner_surface", "needRotation": false },
         { "pointIndex": 11, "purpose": "thickness_inner", "needRotation": false },
         { "pointIndex": 12, "purpose": "thickness_outer", "needRotation": false }
+      ]
+    },
+    {
+      "pathId": 6,
+      "enabled": true,
+      "name": "endcap_code_read",
+      "algorithm": "code_read",
+      "description": "单封头专用编号检测：AO47(臂)×1；采集同 path2，仅智能相机；无封头运行时跳过",
+      "capture": {
+        "arm": { "mechEye3d": false, "hikSmartC": true, "hikCxp": false },
+        "telescopic": { "mechEye3d": false, "hikSmartC": false }
+      },
+      "devices": [
+        { "device": "arm", "totalPoints": 1 }
       ]
     },
     {

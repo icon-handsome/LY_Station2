@@ -752,8 +752,8 @@ void HmiTcpServer::handleCmdSetHeadType(const QJsonObject& message)
         success = m_stateMachine->setWorkpieceHeadType(headType, &responseMessage);
         if (success) {
             responseMessage = headType == common::WorkpieceHeadType::NoEndCap
-                ? QStringLiteral("已选择无封头，环缝路径 path5 将跳过")
-                : QStringLiteral("已选择单封头，将执行环缝路径 path5");
+                ? QStringLiteral("已选择无封头，将执行 path1–4，跳过 path5/path6")
+                : QStringLiteral("已选择单封头，将执行 path6（编号）+ path5（环缝）");
             qInfo(LOG_HMI_SERVER).noquote()
                 << QStringLiteral("[TCPIP] cmd.set_head_type 设置成功，msgId=") << msgId
                 << QStringLiteral(" 类型=") << (headType == common::WorkpieceHeadType::NoEndCap ? "无封头" : "单封头")

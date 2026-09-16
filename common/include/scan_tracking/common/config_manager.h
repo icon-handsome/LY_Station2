@@ -177,8 +177,8 @@ enum class ScanDeviceKind {
 /// 当前工件的封头类型。该选择由 HMI 在新工件开始前设置，运行期间只影响有效扫描路径。
 enum class WorkpieceHeadType {
     Unselected = 0,    ///< 未选择：用户尚未指定封头类型
-    SingleEndCap = 1,  ///< 单封头：包含环缝 path5
-    NoEndCap = 2,      ///< 无封头：跳过环缝 path5
+    SingleEndCap = 1,  ///< 单封头：仅 path6（编号）+ path5（环缝）
+    NoEndCap = 2,      ///< 无封头：path1–4；跳过 path5（环缝）与 path6（单封头编号）
 };
 
 /// 封头类型的协议字符串转换与解析。解析同时兼容英文别名和中文显示值。
@@ -314,7 +314,7 @@ public:
     /// 设置运行时跳过路径。调用方应在工件空闲时使用；非法/不存在的 pathId 会被忽略。
     void setRuntimeSkippedPaths(const QSet<int>& pathIds);
 
-    /// 设置当前工件封头类型；无封头模式默认跳过 path5 环缝。
+    /// 设置当前工件封头类型；单封头仅 path6+path5，无封头 path1–4（跳过 path5/path6）。
     bool setWorkpieceHeadType(WorkpieceHeadType type);
 
     /// 判断路径是否同时满足 JSON enabled 与运行时选择条件。

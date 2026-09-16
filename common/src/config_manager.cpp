@@ -319,9 +319,16 @@ bool ConfigManager::setWorkpieceHeadType(WorkpieceHeadType type)
 {
     m_workpieceHeadType = type;
     QSet<int> skipped;
-    if (type == WorkpieceHeadType::NoEndCap) {
-        // path5 在 station2_cylinder_semi.json 中固定表示环缝检测。
+    if (type == WorkpieceHeadType::SingleEndCap) {
+        // 单封头仅跑 path6（专用编号）+ path5（环缝）；JSON 中 path6 排在 path5 之前。
+        skipped.insert(1);
+        skipped.insert(2);
+        skipped.insert(3);
+        skipped.insert(4);
+    } else if (type == WorkpieceHeadType::NoEndCap) {
+        // 无封头跑 path1–4；跳过环缝 path5 与单封头专用编号 path6。
         skipped.insert(5);
+        skipped.insert(6);
     }
     setRuntimeSkippedPaths(skipped);
     QStringList skippedText;

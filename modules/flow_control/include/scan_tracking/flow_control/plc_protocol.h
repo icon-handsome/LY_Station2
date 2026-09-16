@@ -342,7 +342,7 @@ constexpr int kTelescopicCloudFrameCount = modbusIndexFromPlcAddress(40184);
 constexpr int kScanPathIdEcho = modbusIndexFromPlcAddress(40185);
 
 /// 工件封头类型（IPC → PLC，v0.3.1+）：
-/// 0=未选择，1=单封头（含环缝 path5），2=无封头（跳过 path5）
+/// 0=未选择，1=单封头（仅 path6 编号 + path5 环缝），2=无封头（path1–4，跳过 path5/path6）
 constexpr int kWorkpieceHeadType = modbusIndexFromPlcAddress(40186);
 
 // --- 综合检测（Inspection）---

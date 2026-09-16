@@ -161,7 +161,7 @@ private:
     /// 处理获取配置指令 (暂未开放热更配置，返回空)
     void handleCmdGetConfig(const QJsonObject& message);
 
-    /// 处理工件封头类型选择（单封头 / 无封头，决定是否跳过环缝 path5）
+    /// 处理工件封头类型选择（单封头：path6+path5；无封头：path1–4，跳过 path5/path6）
     void handleCmdSetHeadType(const QJsonObject& message);
     
     /// 处理连接 Modbus 指令，手动重连 PLC

@@ -66,7 +66,7 @@ TCP 是流式协议，为解决粘包和半包问题，采用长度前缀的帧�
   - `progress` (int): 0~100
   - `stationId` / `stationName` / `workMode`(string，工位 profile) / `enabledTriggers`
   - `headType` (string): 当前工件类型，`unselected`=未选择，`single_endcap`=单封头，`none`=无封头（对应 PLC 40186：0/1/2）
-  - `runtimeSkippedPathIds` (array[int]): 当前类型运行时跳过的路径；无封头时固定包含 `5`；未选择时为空
+  - `runtimeSkippedPathIds` (array[int]): 当前类型运行时跳过的路径；单封头为 `[1,2,3,4]`，无封头为 `[5,6]`；未选择时为空
   - `workpieceComplete` (bool): 最后一条有效路径检测成功后为 `true`，直到 `Trig_ResultReset`
   - `scanPathProgress` (object)：当前路径基础显示，见 §2.5 / `docs/hmi/路径状态交互指令.txt`
 
@@ -257,7 +257,7 @@ Qt 发送 request（附带不重复的 `msgId`），Core 执行后返回对应 `
 | `cmd.clear_alarm` | `{}` | - | 清除当前报警记录 |
 | `cmd.get_status` | `{}` | `system`, `plc`, `camera`, `device` 全量状态对象 | 主动拉取全量状态 |
 | `cmd.get_config` | `{ "section": "..." }` | 全量 JSON：`app`/`logger`/`modbus`/`camera`/`vision`/`flowControl`/`scanPaths`/`workpiece`/`hmi`（无坡口配方） | 获取 Core 侧配置；路径项含 `runtimeEnabled`/`runtimeSkipped` |
-| `cmd.set_head_type` | `{ "headType": "single_endcap" }` | `headType`、`runtimeSkippedPathIds` | 新工件开始前选择单封头或无封头；无封头跳过环缝 `path5` |
+| `cmd.set_head_type` | `{ "headType": "single_endcap" }` | `headType`、`runtimeSkippedPathIds` | 新工件开始前选择：单封头跑 path6+path5；无封头跑 path1–4（跳过 path5/path6） |
 | `cmd.set_bevel_recipe` | （任意） | - | **废弃**：固定返回失败（第二工位无坡口配方） |
 | `cmd.trigger_scan` | `{ "segmentIndex": 1, "taskId": 123 }` | - | 触发单段扫描（**Core 拒绝**，须 PLC） |
 | `cmd.trigger_inspection` | `{ "taskId": 123 }` | - | 触发综合检测（**Core 拒绝**，须 PLC） |
@@ -301,14 +301,14 @@ Qt 发送 request（附带不重复的 `msgId`），Core 执行后返回对应 `
   "timestamp": 1710000000050,
   "payload": {
     "success": true,
-    "message": "已选择无封头，环缝路径 path5 将跳过",
+    "message": "已选择无封头，将执行 path1–4，跳过 path5/path6",
     "headType": "none",
-    "runtimeSkippedPathIds": [5]
+    "runtimeSkippedPathIds": [5, 6]
   }
 }
 ```
 
-选择失败时 `success=false`；工件已开始、已完成或仍有任务/缓存/后台算法时不会修改当前类型。IPC 通过 Modbus `40186 WorkpieceHeadType` 通知 PLC：`0`=未选择，`1`=单封头（含 path5），`2`=无封头（跳过 path5）。`Trig_ResultReset` 后清回 `0`，须重新选择。PLC 若在 `40186=0` 时发路径触发，或请求被跳过的 `ScanPathId=5`，对应路径触发返回 `Res=8`、`Ack=3`。
+选择失败时 `success=false`；工件已开始、已完成或仍有任务/缓存/后台算法时不会修改当前类型。IPC 通过 Modbus `40186 WorkpieceHeadType` 通知 PLC：`0`=未选择，`1`=单封头（仅 path6 编号 + path5 环缝），`2`=无封头（path1–4，跳过 path5/path6）。`Trig_ResultReset` 后清回 `0`，须重新选择。PLC 若在 `40186=0` 时发路径触发，或请求被当前类型跳过的 `ScanPathId`，对应路径触发返回 `Res=8`、`Ack=3`。
 
 ---
 

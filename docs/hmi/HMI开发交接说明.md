@@ -1,13 +1,14 @@
 # HMI 显控 TCP 开发交接说明
 
-**文档版本**: v1.9
-**最后更新**: 2026-09-15
+**文档版本**: v1.10
+**最后更新**: 2026-09-16
 **适用范围**: 本仓库（IPC_Station2，第二工位专用）— **仅 TCP Server 端**；麒麟 OS Qt 显控为独立 Client 工程。
 
+> **v1.10 变更**：单封头仅跑 `path6`（专用编号）+ `path5`（环缝）；无封头跑 path1–4，跳过 `path5`/`path6`。  
 > **v1.9 变更**：新增吊装辅助：显控 `cmd.start_hoist_assist` / `cmd.stop_hoist_assist`，结果事件 `event.hoist_assist.started` / `.passed` / `.failed`（需 `enableHoistAssist=true`；成败只看双 TF）。  
 > **v1.7 变更**：清理第一工位坡口 / Tracking 文案与协议样例；`cmd.get_config` 配置节改为 `scanPaths`；`event.inspection.finished` 以 `headMetrics`（含 `qualityCode`）为准；`cmd.set_bevel_recipe` 仍识别但固定失败。  
 > **v1.6 变更**：`cmd.debug_trigger_inspection` 接入缓存评估 + `publishInspectionResult`（不写 PLC）。
-> **v1.8 变更**：增加 `cmd.set_head_type`；无封头运行时跳过环缝 `path5`；最后有效路径检测成功后保持工件结束态，等待 PLC `Trig_ResultReset`。
+> **v1.8 变更**：增加 `cmd.set_head_type`；最后有效路径检测成功后保持工件结束态，等待 PLC `Trig_ResultReset`。
 
 > **新接手请先读**：本文 → [`checklists/现场联调_阶段0-1.md`](./checklists/现场联调_阶段0-1.md) → [`封头检测工位_TCP_IP显控通信协议_v1.0.md`](../protocols/封头检测工位_TCP_IP显控通信协议_v1.0.md)
 
@@ -82,7 +83,7 @@ Trig_Inspection（PLC）或 cmd.debug_trigger_inspection（显控）
 
 - [x] `cmd.start` / `cmd.stop` / `cmd.reset` / `cmd.clear_alarm`
 - [x] `cmd.get_status` / `cmd.get_config`（含 `scanPaths`）
-- [x] `cmd.set_head_type`（单封头 / 无封头；无封头跳过环缝 `path5`）
+- [x] `cmd.set_head_type`（单封头：path6+path5；无封头：path1–4，跳过 path5/path6）
 - [x] `cmd.modbus_connect` / `cmd.modbus_disconnect`
 - [x] `cmd.capture_mech_eye` / `cmd.capture_bundle` / `cmd.refresh_camera`
 - [x] `cmd.debug_trigger_inspection`
@@ -106,12 +107,12 @@ Trig_Inspection（PLC）或 cmd.debug_trigger_inspection（显控）
 }
 ```
 
-- `single_endcap`（也可传 `single` / `单封头` / 数值 `1`）：执行全部有效路径，包含环缝 `path5`。
-- `none`（也可传 `no_endcap` / `无封头` / 数值 `2`）：运行时跳过 `path5`，不会采集、检测或计入路径总数。
+- `single_endcap`（也可传 `single` / `单封头` / 数值 `1`）：仅执行 `path6`（`endcap_code_read` 专用编号）→ `path5`（`ring_weld` 环缝）；跳过 path1–4。
+- `none`（也可传 `no_endcap` / `无封头` / 数值 `2`）：执行 path1–4；运行时跳过 `path5`（环缝）与 `path6`（单封头编号），不采集、不检测、不计入路径总数。
 - 启动与 `Trig_ResultReset` 后默认为未选择（`headType=unselected`，PLC `40186=0`），须重新选择后 PLC 才可发路径触发。
-- IPC→PLC：`40186 WorkpieceHeadType`：`0`=未选择，`1`=单封头，`2`=无封头。
+- IPC→PLC：`40186 WorkpieceHeadType`：`0`=未选择，`1`=单封头（path6+path5），`2`=无封头（path1–4）。
 - 选择只能在当前工件尚未开始时修改；已有任务、缓存、路径进度或后台算法时 Core 返回失败。
-- 最后一条有效路径检测成功后 Core 不再回到 `path1`，`status.system.workpieceComplete=true`；下一件必须等待 PLC `Trig_ResultReset`。
+- 最后一条有效路径检测成功后 Core 不再回到首条路径，`status.system.workpieceComplete=true`；下一件必须等待 PLC `Trig_ResultReset`。
 - `cmd.get_config` 的 `config.workpiece` / `config.scanPaths`，以及 `status.system` / `status.plc` 会回显 `headType` 与 `runtimeSkippedPathIds`。路径项另含 `runtimeEnabled`、`runtimeSkipped`。
 
 ---
