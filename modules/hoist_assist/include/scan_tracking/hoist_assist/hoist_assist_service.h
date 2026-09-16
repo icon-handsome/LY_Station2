@@ -16,8 +16,9 @@ namespace scan_tracking::hoist_assist {
 // - 缓存各路传感器最新输入，并按周期重新判定
 // - TF 采样超时后自动失效，避免断线后仍沿用旧数据通过检查
 // - TF 明确失败 → Unsafe + checkFailed；双 TF 通过 → checkPassed（边沿触发）
+// - 本轮一旦 Passed 即锁定，直至下次 start/stop/reset；失败仍可继续调位直至通过
 //
-// 典型流程：start → 持续 update* / evaluate → stop
+// 典型流程：start → 持续 update* / evaluate →（Passed 锁定）→ 下一件再 start
 class HoistAssistService final : public QObject {
     Q_OBJECT
 
@@ -59,9 +60,9 @@ signals:
     void stateChanged(scan_tracking::hoist_assist::HoistAssistState state, QString message);
     /// 综合结果刷新时发出（含未运行时的输入更新）。
     void resultChanged(scan_tracking::hoist_assist::HoistAssistResult result);
-    /// 双 TF 首次（或再次）通过时发出，供 HMI 绿灯/成功提示。
+    /// 双 TF 首次通过时发出（本轮仅一次）；锁定后直至下次 start 不再重发。
     void checkPassed(scan_tracking::hoist_assist::HoistAssistResult result);
-    /// 明确失败时发出（边沿），供 HMI 报警/失败提示。
+    /// 明确失败时发出（边沿）；通过锁定前可随调位多次失败，通过后不再发出。
     void checkFailed(scan_tracking::hoist_assist::HoistAssistResult result);
 
 private:

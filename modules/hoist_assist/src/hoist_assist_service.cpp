@@ -137,6 +137,16 @@ void HoistAssistService::recompute()
         return;
     }
 
+    // 本轮已通过则锁定：测距在阈值附近抖动时不再反复推 passed/failed，也不撤销拍照门禁。
+    // 下一件须显控再发 cmd.start_hoist_assist（start 会清 m_lastOutcome）。
+    if (m_lastOutcome == Outcome::Passed) {
+        m_result.allChecksPassed = true;
+        m_result.failReason = HoistAssistFailReason::None;
+        m_result.message = QStringLiteral("吊装辅助 TF 定位通过");
+        emit resultChanged(m_result);
+        return;
+    }
+
     // 碰撞 / 海康分支保留：kJudgeCollisionAndHik=true 时重新计入成败。
     if (kJudgeCollisionAndHik && m_result.collisionResultReceived && !m_result.collisionSafe) {
         m_result.failReason = HoistAssistFailReason::Collision;
@@ -162,7 +172,7 @@ void HoistAssistService::recompute()
     } else {
         m_result.message = QStringLiteral("等待吊装辅助 TF 定位结果");
         publishState(HoistAssistState::Running, m_result.message);
-        // 只有从失败状态回到等待态才重置,避免在等待态反复震荡时重复发送通过事件
+        // 失败后回到等待态可再次判定通过；已通过则在上方锁定，不会走到这里。
         if (m_lastOutcome == Outcome::Failed) {
             m_lastOutcome = Outcome::None;
         }

@@ -235,6 +235,7 @@ TCP 是流式协议，为解决粘包和半包问题，采用长度前缀的帧�
 - `collisionLevel` / `hikPassed`：监视字段，不改变本事件的成功/失败。
 - 结果事件 **无需回执**；按 `type` 分发到 UI 即可
 - 未收到 `cmd.start_hoist_assist` 前，不推送 passed/failed
+- **本轮通过后锁定**：首次 `passed` 后不再因 TF 抖动推送 `failed`/`passed`；`allChecksPassed` 保持 true 直至下次 `cmd.start_hoist_assist` / `cmd.stop_hoist_assist`。失败未通过前仍可继续调位并多次 `failed`，直至通过。
 ### 2.8 报警与日志
 - `event.alarm`: `{ level, code, message, timestamp }` (单向发送，无需回执)
 - **辅机 PLC 报警 code（920 段，与 Modbus 900 段、相机 910 段区分）**：
