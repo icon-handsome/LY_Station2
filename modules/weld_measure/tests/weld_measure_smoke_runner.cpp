@@ -1,13 +1,13 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
-#include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtCore/QString>
@@ -15,29 +15,32 @@
 
 #include "scan_tracking/weld_measure/weld_measure_service.h"
 
+using scan_tracking::weld_measure::WeldFrameMeasurement;
 using scan_tracking::weld_measure::WeldMeasureError;
 using scan_tracking::weld_measure::WeldMeasureService;
-using scan_tracking::weld_measure::WeldSectionMeasurement;
 
 namespace {
 
-QString DefaultDataDir()
+QString DefaultIniPath()
 {
-    // Same sample as baseline_A; ASCII path under tools/weld_compare/data.
-    return QStringLiteral("D:/work/LY/IPC_Station2/tools/weld_compare/data/1_000000.txt");
+    return QDir(QCoreApplication::applicationDirPath())
+        .filePath(QStringLiteral("config/weld_measure/weld_measurement-arm.ini"));
+}
+
+QString DefaultScanPath()
+{
+    return QDir(QCoreApplication::applicationDirPath())
+        .filePath(QStringLiteral("config/weld_measure/Data/path1/Scan_Path1_Arm_cloud_1.pcd"));
 }
 
 QString DefaultOutPath()
 {
-    return QStringLiteral("D:/work/LY/IPC_Station2/tools/weld_compare/baseline_B/smoke_B.json");
+    return QDir(QCoreApplication::applicationDirPath())
+        .filePath(QStringLiteral("weld_measure_smoke_frame.json"));
 }
 
 bool LoadTextXyz(const QString& path, std::vector<float>* xyz, size_t* count, QString* error)
 {
-    if (xyz == nullptr || count == nullptr) {
-        return false;
-    }
-
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         if (error) {
@@ -76,7 +79,131 @@ bool LoadTextXyz(const QString& path, std::vector<float>* xyz, size_t* count, QS
     *count = xyz->size() / 3u;
     if (*count == 0) {
         if (error) {
-            *error = QStringLiteral("Text point cloud contains no valid XYZ rows: %1").arg(path);
+            *error = QStringLiteral("Text point cloud empty: %1").arg(path);
+        }
+        return false;
+    }
+    return true;
+}
+
+bool LoadBinaryPcdXyz(
+    const QString& path,
+    std::vector<float>* xyz,
+    size_t* count,
+    size_t maxKeep,
+    QString* error)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        if (error) {
+            *error = QStringLiteral("Cannot open PCD: %1").arg(path);
+        }
+        return false;
+    }
+
+    QByteArray fields;
+    QByteArray sizes;
+    QByteArray countsLine;
+    qint64 points = 0;
+    bool binary = false;
+    while (!file.atEnd()) {
+        const QByteArray line = file.readLine();
+        if (line.startsWith("FIELDS ")) {
+            fields = line.mid(7).trimmed();
+        } else if (line.startsWith("SIZE ")) {
+            sizes = line.mid(5).trimmed();
+        } else if (line.startsWith("COUNT ")) {
+            countsLine = line.mid(6).trimmed();
+        } else if (line.startsWith("POINTS ")) {
+            points = line.mid(7).trimmed().toLongLong();
+        } else if (line.startsWith("DATA binary")) {
+            binary = true;
+            break;
+        } else if (line.startsWith("DATA ascii")) {
+            binary = false;
+            break;
+        }
+    }
+
+    if (!binary || points <= 0) {
+        // Fallback: text xyz rows.
+        file.close();
+        return LoadTextXyz(path, xyz, count, error);
+    }
+
+    const QList<QByteArray> fieldTok = fields.split(' ');
+    const QList<QByteArray> sizeTok = sizes.split(' ');
+    const QList<QByteArray> countTok = countsLine.split(' ');
+    if (fieldTok.size() == 0 || fieldTok.size() != sizeTok.size() || fieldTok.size() != countTok.size()) {
+        if (error) {
+            *error = QStringLiteral("Invalid PCD header field layout: %1").arg(path);
+        }
+        return false;
+    }
+
+    size_t pointStep = 0;
+    int xOff = -1;
+    int yOff = -1;
+    int zOff = -1;
+    for (int i = 0; i < fieldTok.size(); ++i) {
+        const int sz = sizeTok[i].toInt();
+        const int cnt = countTok[i].toInt();
+        if (fieldTok[i] == "x") {
+            xOff = static_cast<int>(pointStep);
+        } else if (fieldTok[i] == "y") {
+            yOff = static_cast<int>(pointStep);
+        } else if (fieldTok[i] == "z") {
+            zOff = static_cast<int>(pointStep);
+        }
+        pointStep += static_cast<size_t>(sz) * static_cast<size_t>(cnt);
+    }
+    if (xOff < 0 || yOff < 0 || zOff < 0 || pointStep == 0) {
+        if (error) {
+            *error = QStringLiteral("PCD missing xyz offsets: %1").arg(path);
+        }
+        return false;
+    }
+
+    size_t stride = 1;
+    size_t keep = static_cast<size_t>(points);
+    if (maxKeep > 0 && keep > maxKeep) {
+        stride = (keep + maxKeep - 1) / maxKeep;
+        keep = (keep + stride - 1) / stride;
+    }
+
+    xyz->clear();
+    xyz->reserve(keep * 3);
+    std::vector<char> buf(pointStep);
+    size_t n = 0;
+    for (qint64 i = 0; i < points; ++i) {
+        if (file.read(buf.data(), static_cast<qint64>(pointStep)) != static_cast<qint64>(pointStep)) {
+            break;
+        }
+        if (static_cast<size_t>(i) % stride != 0) {
+            continue;
+        }
+        float x = 0.0f;
+        float y = 0.0f;
+        float z = 0.0f;
+        std::memcpy(&x, buf.data() + xOff, sizeof(float));
+        std::memcpy(&y, buf.data() + yOff, sizeof(float));
+        std::memcpy(&z, buf.data() + zOff, sizeof(float));
+        if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+            continue;
+        }
+        xyz->push_back(x);
+        xyz->push_back(y);
+        xyz->push_back(z);
+        ++n;
+        if (n >= keep) {
+            break;
+        }
+    }
+
+    *count = n;
+    if (n == 0) {
+        if (error) {
+            *error = QStringLiteral("PCD yielded no points: %1").arg(path);
         }
         return false;
     }
@@ -86,39 +213,30 @@ bool LoadTextXyz(const QString& path, std::vector<float>* xyz, size_t* count, QS
 bool WriteSmokeJson(
     const QString& path,
     const QString& cloudPath,
-    const QString& modelPath,
+    const QString& configPath,
     size_t pointCount,
-    const WeldSectionMeasurement& r)
+    int frameIndex,
+    const WeldFrameMeasurement& r)
 {
     QJsonObject obj;
     obj.insert(QStringLiteral("source"),
-               QStringLiteral("IPC WeldMeasureService + third_party WeldMeasure.dll"));
+               QStringLiteral("IPC WeldMeasureService V2.0 measureFrame"));
     obj.insert(QStringLiteral("input_cloud"), cloudPath);
-    obj.insert(QStringLiteral("onnx_model"), modelPath.isEmpty() ? QStringLiteral("(from_ini)") : modelPath);
+    obj.insert(QStringLiteral("config"), configPath);
+    obj.insert(QStringLiteral("frame_index"), frameIndex);
     obj.insert(QStringLiteral("loaded_points"), static_cast<qint64>(pointCount));
-    obj.insert(QStringLiteral("mismatch_mm"), r.mismatchMm);
-    obj.insert(QStringLiteral("reinforcement_mm"), r.reinforcementMm);
-    obj.insert(QStringLiteral("included_angle_rad"), r.includedAngleRad);
-    obj.insert(QStringLiteral("included_angle_deg"), r.includedAngleRad * 180.0 / 3.14159265358979323846);
-    obj.insert(QStringLiteral("angularity_mm"), r.angularityMm);
-    obj.insert(QStringLiteral("left_undercut_mm"), r.leftUndercutMm);
-    obj.insert(QStringLiteral("right_undercut_mm"), r.rightUndercutMm);
-    obj.insert(QStringLiteral("max_undercut_mm"), r.maxUndercutMm);
-    obj.insert(QStringLiteral("toe_center_x"), r.toeCenterX);
-    obj.insert(QStringLiteral("undercut_raw_flag"), r.undercutRawFlag);
-    obj.insert(QStringLiteral("valid"), r.valid);
-
-    QJsonArray leftToe;
-    leftToe.append(r.leftToeX);
-    leftToe.append(r.leftToeY);
-    leftToe.append(r.leftToeZ);
-    obj.insert(QStringLiteral("left_toe_mm"), leftToe);
-
-    QJsonArray rightToe;
-    rightToe.append(r.rightToeX);
-    rightToe.append(r.rightToeY);
-    rightToe.append(r.rightToeZ);
-    obj.insert(QStringLiteral("right_toe_mm"), rightToe);
+    obj.insert(QStringLiteral("valid_sections"), r.validSections);
+    obj.insert(QStringLiteral("total_sections"), r.totalSections);
+    obj.insert(QStringLiteral("mismatch_mm"), r.average.mismatchMm);
+    obj.insert(QStringLiteral("reinforcement_mm"), r.average.reinforcementMm);
+    obj.insert(QStringLiteral("angularity_mm"), r.average.angularityMm);
+    obj.insert(QStringLiteral("included_angle_rad"), r.average.includedAngleRad);
+    obj.insert(QStringLiteral("left_undercut_mm"), r.average.leftUndercutMm);
+    obj.insert(QStringLiteral("right_undercut_mm"), r.average.rightUndercutMm);
+    obj.insert(QStringLiteral("max_undercut_mm"), r.average.maxUndercutMm);
+    obj.insert(QStringLiteral("left_undercut_length_mm"), r.leftUndercutLengthMm);
+    obj.insert(QStringLiteral("right_undercut_length_mm"), r.rightUndercutLengthMm);
+    obj.insert(QStringLiteral("valid"), r.average.valid);
 
     QDir().mkpath(QFileInfo(path).absolutePath());
     QFile file(path);
@@ -135,28 +253,27 @@ int main(int argc, char* argv[])
 {
     QCoreApplication app(argc, argv);
 
-    const QString dataDir = (argc >= 2) ? QString::fromLocal8Bit(argv[1]) : DefaultDataDir();
-    const QString outPath = (argc >= 3) ? QString::fromLocal8Bit(argv[2]) : DefaultOutPath();
-    const QString modelArg = (argc >= 4) ? QString::fromLocal8Bit(argv[3]) : QString();
+    // Usage:
+    //   smoke [ini] [scan.pcd|txt] [out.json] [frameIndex]
+    const QString iniPath = (argc >= 2) ? QString::fromLocal8Bit(argv[1]) : DefaultIniPath();
+    const QString cloudPath = (argc >= 3) ? QString::fromLocal8Bit(argv[2]) : DefaultScanPath();
+    const QString outPath = (argc >= 4) ? QString::fromLocal8Bit(argv[3]) : DefaultOutPath();
+    const int frameIndex = (argc >= 5) ? QString::fromLocal8Bit(argv[4]).toInt() : 1;
 
-    QString cloudPath = dataDir;
-    const QFileInfo dataInfo(dataDir);
-    if (dataInfo.isDir() || !dataInfo.exists()) {
-        const QString candidate = QDir(dataDir).filePath(QStringLiteral("1_000000.txt"));
-        if (QFileInfo::exists(candidate)) {
-            cloudPath = candidate;
-        }
-    }
-
-    std::printf("WeldMeasure IPC smoke (WeldMeasureService)\n");
+    std::printf("WeldMeasure IPC smoke (measureFrame / V2.0)\n");
+    std::printf("Ini: %s\n", qPrintable(iniPath));
     std::printf("Cloud: %s\n", qPrintable(cloudPath));
     std::printf("Out: %s\n", qPrintable(outPath));
+    std::printf("Frame: %d\n", frameIndex);
     std::fflush(stdout);
 
     std::vector<float> xyz;
     size_t pointCount = 0;
     QString loadError;
-    if (!LoadTextXyz(cloudPath, &xyz, &pointCount, &loadError)) {
+    const bool loaded = cloudPath.endsWith(QStringLiteral(".pcd"), Qt::CaseInsensitive)
+        ? LoadBinaryPcdXyz(cloudPath, &xyz, &pointCount, 400000, &loadError)
+        : LoadTextXyz(cloudPath, &xyz, &pointCount, &loadError);
+    if (!loaded) {
         std::fprintf(stderr, "Load failed: %s\n", qPrintable(loadError));
         return 2;
     }
@@ -165,52 +282,44 @@ int main(int argc, char* argv[])
 
     WeldMeasureService service;
     WeldMeasureError error;
-    const bool ok = modelArg.isEmpty()
-        ? service.initializeFromIni(QString(), &error)
-        : (QFileInfo(modelArg).suffix().compare(QStringLiteral("ini"), Qt::CaseInsensitive) == 0
-               ? service.initializeFromIni(modelArg, &error)
-               : service.initialize(modelArg, &error));
-    if (!ok) {
-        std::fprintf(stderr, "initialize failed: %s (code=%d)\n",
+    if (!service.initializeFromIni(iniPath, &error)) {
+        std::fprintf(stderr, "initializeFromIni failed: %s (code=%d)\n",
                      qPrintable(error.message), error.statusCode);
         return 3;
     }
-    if (!service.configPath().isEmpty()) {
-        std::printf("Config: %s\n", qPrintable(service.configPath()));
-    }
+    std::printf("Config: %s\n", qPrintable(service.configPath()));
     std::printf("Model: %s\n", qPrintable(service.modelPath()));
-    std::printf("WeldMeasureService ready\n");
     std::fflush(stdout);
 
-    WeldSectionMeasurement result;
-    if (!service.measureSection(xyz.data(), pointCount, &result, &error) || !result.valid) {
-        std::fprintf(stderr, "measureSection failed: %s (code=%d) valid=%d\n",
-                     qPrintable(error.message), error.statusCode, result.valid ? 1 : 0);
+    WeldFrameMeasurement frame;
+    if (!service.measureFrame(frameIndex, xyz.data(), pointCount, &frame, &error)) {
+        std::fprintf(stderr, "measureFrame failed: %s (code=%d)\n",
+                     qPrintable(error.message), error.statusCode);
         return 4;
     }
-
-    const double includedAngleDeg = result.includedAngleRad * 180.0 / 3.14159265358979323846;
-    std::printf("\n=== smoke_B result ===\n");
-    std::printf("mismatch_mm: %.12f\n", result.mismatchMm);
-    std::printf("reinforcement_mm: %.12f\n", result.reinforcementMm);
-    std::printf("included_angle_rad: %.12f\n", result.includedAngleRad);
-    std::printf("included_angle_deg: %.12f\n", includedAngleDeg);
-    std::printf("angularity_mm: %.12f\n", result.angularityMm);
-    std::printf("left_undercut_mm: %.12f\n", result.leftUndercutMm);
-    std::printf("right_undercut_mm: %.12f\n", result.rightUndercutMm);
-    std::printf("max_undercut_mm: %.12f\n", result.maxUndercutMm);
-    std::printf("left_toe_mm: %.6f, %.6f, %.6f\n",
-                result.leftToeX, result.leftToeY, result.leftToeZ);
-    std::printf("right_toe_mm: %.6f, %.6f, %.6f\n",
-                result.rightToeX, result.rightToeY, result.rightToeZ);
-    std::printf("valid: %d\n", result.valid ? 1 : 0);
-    std::fflush(stdout);
-
-    if (!WriteSmokeJson(outPath, cloudPath, service.modelPath(), pointCount, result)) {
-        std::fprintf(stderr, "Failed to write: %s\n", qPrintable(outPath));
+    if (!frame.average.valid || frame.validSections <= 0) {
+        std::fprintf(stderr, "measureFrame returned no valid sections (valid=%d sections=%d)\n",
+                     frame.average.valid ? 1 : 0, frame.validSections);
         return 5;
     }
-    std::printf("Saved: %s\n", qPrintable(outPath));
+
+    std::printf("\n=== measureFrame result ===\n");
+    std::printf("valid_sections: %d/%d\n", frame.validSections, frame.totalSections);
+    std::printf("mismatch_mm: %.6f\n", frame.average.mismatchMm);
+    std::printf("reinforcement_mm: %.6f\n", frame.average.reinforcementMm);
+    std::printf("angularity_mm: %.6f\n", frame.average.angularityMm);
+    std::printf("included_angle_deg: %.6f\n",
+                frame.average.includedAngleRad * 180.0 / 3.14159265358979323846);
+    std::printf("left/right undercut depth: %.6f / %.6f\n",
+                frame.average.leftUndercutMm, frame.average.rightUndercutMm);
+    std::printf("left/right undercut length: %.6f / %.6f\n",
+                frame.leftUndercutLengthMm, frame.rightUndercutLengthMm);
     std::fflush(stdout);
+
+    if (!WriteSmokeJson(outPath, cloudPath, service.configPath(), pointCount, frameIndex, frame)) {
+        std::fprintf(stderr, "Failed to write: %s\n", qPrintable(outPath));
+        return 6;
+    }
+    std::printf("Saved: %s\n", qPrintable(outPath));
     return 0;
 }

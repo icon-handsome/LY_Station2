@@ -78,8 +78,9 @@ typedef struct wm_section_result {
 } wm_section_result;
 
 /**
- * One-frame formal-pipeline result (matches V2.0 main.cpp frame loop):
- * downsample -> ICP to template -> multi-section extract -> average metrics.
+ * One-frame formal-pipeline result.
+ * V2.0 kernel reports per-frame maxima after median filter; the C API maps those
+ * maxima into average.* fields so existing IPC callers keep a stable layout.
  */
 typedef struct wm_frame_result {
     wm_section_result average;
@@ -91,29 +92,12 @@ typedef struct wm_frame_result {
     double right_max_undercut_depth_mm;
 } wm_frame_result;
 
-/** Fill onnx config with defaults (NULL string fields; model_path must be set by caller). */
 WELD_MEASURE_API void wm_onnx_config_default(wm_onnx_config* config);
-
-/** Fill measurement/undercut options with algorithm defaults. */
 WELD_MEASURE_API void wm_options_default(wm_options* options);
 
-/**
- * Create a measurement context and load the ONNX toe model.
- * @param onnx  Required; model_path must be non-NULL.
- * @param out_ctx  Receives opaque handle on success.
- */
 WELD_MEASURE_API wm_status wm_create(const wm_onnx_config* onnx, wm_context** out_ctx);
-
-/**
- * Create context from weld_measurement.ini (stores Frame/ICP/Undercut for wm_measure_frame).
- * Relative paths inside ini are resolved against the ini directory first.
- */
 WELD_MEASURE_API wm_status wm_create_from_ini(const char* ini_path, wm_context** out_ctx);
 
-/**
- * Measure one weld section (already-cut thin section cloud).
- * @param xyz  Interleaved x,y,z floats, length = point_count * 3. Non-finite points are skipped.
- */
 WELD_MEASURE_API wm_status wm_measure_section(
     wm_context* ctx,
     const float* xyz,
@@ -123,11 +107,6 @@ WELD_MEASURE_API wm_status wm_measure_section(
     char* message,
     size_t message_capacity);
 
-/**
- * Formal V2.0 frame pipeline for one scan segment.
- * @param frame_index_1based  Frame1..N from the ini used in wm_create_from_ini.
- * @param scan_xyz            In-memory scan cloud (camera/world as acquired).
- */
 WELD_MEASURE_API wm_status wm_measure_frame(
     wm_context* ctx,
     int frame_index_1based,
@@ -139,7 +118,6 @@ WELD_MEASURE_API wm_status wm_measure_frame(
     size_t message_capacity);
 
 WELD_MEASURE_API void wm_destroy(wm_context* ctx);
-
 WELD_MEASURE_API const char* wm_status_string(wm_status status);
 
 #ifdef __cplusplus

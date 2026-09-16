@@ -34,7 +34,7 @@ public:
     static QString defaultRingArmConfigPath();
     /// 伸缩杆环焊缝 ini（通常 18 帧）。
     static QString defaultRingTelescopicConfigPath();
-    /// 默认 ONNX 模型：`<applicationDir>/models/weld_measure/pointnet_weld_seam_V7.3_good.onnx`
+    /// 默认 ONNX 模型：`<applicationDir>/models/weld_measure/pointnet_weld_seam_V8.2_good.onnx`
     static QString defaultModelPath();
 
     /// 是否已成功创建 DLL 上下文（可测量）。

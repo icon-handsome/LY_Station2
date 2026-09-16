@@ -401,7 +401,7 @@ private:
     HmiConfig m_hmiConfig;
     StationProfile m_stationProfile;
     ScanPathsConfig m_scanPathsConfig;
-    WorkpieceHeadType m_workpieceHeadType = WorkpieceHeadType::SingleEndCap;
+    WorkpieceHeadType m_workpieceHeadType = WorkpieceHeadType::NoEndCap;
     QSet<int> m_runtimeSkippedPathIds;
 };
 

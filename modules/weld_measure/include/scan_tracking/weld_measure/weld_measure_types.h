@@ -24,11 +24,12 @@ struct WeldSectionMeasurement {
     bool valid = false;                ///< 本截面结果是否有效
 };
 
-/// 单帧正式流水线结果：多截面均值 + 咬边长度/最大深度统计。
+/// 单帧正式流水线结果：多截面统计 + 咬边长度/最大深度。
+/// V2.0 内核按帧输出中值滤波后的最大值；封装层将其填入 average.* 以保持 ABI。
 struct WeldFrameMeasurement {
-    WeldSectionMeasurement average;    ///< 各有效截面指标的平均值
+    WeldSectionMeasurement average;    ///< V2.0：帧内指标最大值（历史字段名 average 保留）
     int validSections = 0;             ///< 有效截面数
-    int totalSections = 0;             ///< 总截面数
+    int totalSections = 0;             ///< 总截面数（V2.0 与 validSections 同值）
     double leftUndercutLengthMm = 0.0; ///< 左侧咬边累计长度 (mm)
     double rightUndercutLengthMm = 0.0;///< 右侧咬边累计长度 (mm)
     double leftMaxUndercutDepthMm = 0.0;  ///< 左侧最大咬边深度 (mm)

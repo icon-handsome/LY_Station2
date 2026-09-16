@@ -140,7 +140,7 @@ QString WeldMeasureService::defaultRingTelescopicConfigPath()
 QString WeldMeasureService::defaultModelPath()
 {
     return QDir(QCoreApplication::applicationDirPath())
-        .filePath(QStringLiteral("models/weld_measure/pointnet_weld_seam_V7.3_good.onnx"));
+        .filePath(QStringLiteral("models/weld_measure/pointnet_weld_seam_V8.2_good.onnx"));
 }
 
 bool WeldMeasureService::isReady() const

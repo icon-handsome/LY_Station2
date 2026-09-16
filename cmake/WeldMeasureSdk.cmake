@@ -78,6 +78,10 @@ function(scan_tracking_deploy_weld_measure_runtime target_name)
     set(_models_dir "${_sdk_dir}/models")
     set(_config_dir "${CMAKE_SOURCE_DIR}/config/weld_measure")
     set(_config_ini "${_config_dir}/weld_measurement.ini")
+    set(_model_onnx "${_models_dir}/pointnet_weld_seam_V8.2_good.onnx")
+    if(NOT EXISTS "${_model_onnx}")
+        message(FATAL_ERROR "WeldMeasure ONNX model not found: ${_model_onnx}")
+    endif()
 
     set(_copy_cmds
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -89,9 +93,28 @@ function(scan_tracking_deploy_weld_measure_runtime target_name)
         COMMAND ${CMAKE_COMMAND} -E make_directory
             "$<TARGET_FILE_DIR:${target_name}>/models/weld_measure"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${_models_dir}/pointnet_weld_seam_V7.3_good.onnx"
-            "$<TARGET_FILE_DIR:${target_name}>/models/weld_measure/pointnet_weld_seam_V7.3_good.onnx"
+            "${_model_onnx}"
+            "$<TARGET_FILE_DIR:${target_name}>/models/weld_measure/pointnet_weld_seam_V8.2_good.onnx"
     )
+
+    # V2.0 kernel depends on a small set of PCL runtime DLLs shipped beside WeldMeasure.dll.
+    foreach(_pcl_dll IN ITEMS
+        pcl_common.dll
+        pcl_search.dll
+        pcl_registration.dll
+        pcl_kdtree.dll
+        pcl_octree.dll
+        pcl_filters.dll
+    )
+        set(_pcl_src "${_sdk_dir}/bin/Release/${_pcl_dll}")
+        if(EXISTS "${_pcl_src}")
+            list(APPEND _copy_cmds
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_pcl_src}"
+                    "$<TARGET_FILE_DIR:${target_name}>"
+            )
+        endif()
+    endforeach()
 
     if(EXISTS "${_config_ini}")
         list(APPEND _copy_cmds

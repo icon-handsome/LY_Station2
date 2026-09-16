@@ -162,8 +162,10 @@ void HoistAssistService::recompute()
     } else {
         m_result.message = QStringLiteral("等待吊装辅助 TF 定位结果");
         publishState(HoistAssistState::Running, m_result.message);
-        // 回到等待态，允许随后再次边沿触发成功/失败
-        m_lastOutcome = Outcome::None;
+        // 只有从失败状态回到等待态才重置,避免在等待态反复震荡时重复发送通过事件
+        if (m_lastOutcome == Outcome::Failed) {
+            m_lastOutcome = Outcome::None;
+        }
     }
     emit resultChanged(m_result);
 }

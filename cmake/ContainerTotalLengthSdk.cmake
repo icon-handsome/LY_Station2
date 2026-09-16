@@ -8,12 +8,38 @@ set(
 )
 
 option(
-    SCAN_TRACKING_USE_CONTAINER_TOTAL_LENGTH_V22
-    "Use the separately packaged path3 ContainerTotalLength V2.2 SDK"
+    SCAN_TRACKING_USE_CONTAINER_TOTAL_LENGTH_V23
+    "Use the separately packaged path3 ContainerTotalLength V2.3 SDK (default)"
     ON
 )
 
-if(SCAN_TRACKING_USE_CONTAINER_TOTAL_LENGTH_V22)
+option(
+    SCAN_TRACKING_USE_CONTAINER_TOTAL_LENGTH_V22
+    "Use the separately packaged path3 ContainerTotalLength V2.2 SDK (rollback)"
+    OFF
+)
+
+# Old caches may still have V22=ON from before V2.3; prefer V23 and heal the cache.
+if(SCAN_TRACKING_USE_CONTAINER_TOTAL_LENGTH_V23 AND SCAN_TRACKING_USE_CONTAINER_TOTAL_LENGTH_V22)
+    message(WARNING
+        "Both SCAN_TRACKING_USE_CONTAINER_TOTAL_LENGTH_V23 and V22 were ON; "
+        "preferring V2.3 and forcing V22=OFF. "
+        "For V2.2 rollback: -DSCAN_TRACKING_USE_CONTAINER_TOTAL_LENGTH_V23=OFF "
+        "-DSCAN_TRACKING_USE_CONTAINER_TOTAL_LENGTH_V22=ON")
+    set(SCAN_TRACKING_USE_CONTAINER_TOTAL_LENGTH_V22 OFF CACHE BOOL
+        "Use the separately packaged path3 ContainerTotalLength V2.2 SDK (rollback)"
+        FORCE)
+endif()
+
+if(SCAN_TRACKING_USE_CONTAINER_TOTAL_LENGTH_V23)
+    set(
+        SCAN_TRACKING_CONTAINER_TOTAL_LENGTH_SDK_DIR
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/container_total_length_v2_3"
+        CACHE PATH
+        "Path to the ContainerTotalLength V2.3 SDK directory (headers/lib/bin)"
+        FORCE
+    )
+elseif(SCAN_TRACKING_USE_CONTAINER_TOTAL_LENGTH_V22)
     set(
         SCAN_TRACKING_CONTAINER_TOTAL_LENGTH_SDK_DIR
         "${CMAKE_CURRENT_SOURCE_DIR}/third_party/container_total_length_v2_2"
@@ -58,7 +84,7 @@ function(scan_tracking_require_container_total_length_sdk)
         if(NOT EXISTS "${_required_path}")
             message(FATAL_ERROR
                 "ContainerTotalLength SDK file not found: ${_required_path}\n"
-                "Build ContainerTotalLengthDll and run scripts/package_sdk_to_ipc.ps1 in the algorithm repo.")
+                "Build ContainerTotalLengthDll and package into third_party/container_total_length_v2_3.")
         endif()
     endforeach()
 
@@ -68,7 +94,7 @@ function(scan_tracking_require_container_total_length_sdk)
         if(NOT EXISTS "${_pcl_path}")
             message(FATAL_ERROR
                 "ContainerTotalLength SDK PCL runtime missing: ${_pcl_path}\n"
-                "Copy PCL 1.12.0 Release DLLs into ${_bin_release}, or re-run the algorithm repo packaging script.")
+                "Copy PCL 1.12.0 Release DLLs into ${_bin_release}.")
         endif()
     endforeach()
 
@@ -106,7 +132,7 @@ function(scan_tracking_deploy_container_total_length_runtime target_name)
     get_property(_sdk_dir GLOBAL PROPERTY SCAN_TRACKING_CONTAINER_TOTAL_LENGTH_SDK_DIR)
 
     set(_config_dir "${CMAKE_SOURCE_DIR}/config/container_total_length")
-    if(SCAN_TRACKING_USE_CONTAINER_TOTAL_LENGTH_V22)
+    if(SCAN_TRACKING_USE_CONTAINER_TOTAL_LENGTH_V23 OR SCAN_TRACKING_USE_CONTAINER_TOTAL_LENGTH_V22)
         set(_config_ini "${_sdk_dir}/config.ini")
         set(_config_data_dir "${_sdk_dir}/Data")
     else()
@@ -147,6 +173,16 @@ function(scan_tracking_deploy_container_total_length_runtime target_name)
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${_config_data_dir}/Template_Path3_Arm_All_Samp.pcd"
                 "$<TARGET_FILE_DIR:${target_name}>/config/container_total_length/Data/Template_Path3_Arm_All_Samp.pcd"
+        )
+    endif()
+
+    if(EXISTS "${_config_data_dir}/Template_Path3_Arm_All_Samp_20260914.pcd")
+        list(APPEND _copy_cmds
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_FILE_DIR:${target_name}>/config/container_total_length/Data"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_config_data_dir}/Template_Path3_Arm_All_Samp_20260914.pcd"
+                "$<TARGET_FILE_DIR:${target_name}>/config/container_total_length/Data/Template_Path3_Arm_All_Samp_20260914.pcd"
         )
     endif()
 
