@@ -9,9 +9,9 @@
 
 namespace scan_tracking::thickness_measure_v2 {
 
-/// Thin façade over ThicknessMeasureV3 via an out-of-process worker.
-/// Host never loads ThicknessMeasureV3.dll; create/measure/destroy run in
-/// thickness-measure-v3-worker.exe. Calls are serialized per instance.
+/// Thin façade over ThicknessMeasurement V3.2 via an out-of-process worker.
+/// Host never loads ThicknessMeasurement.dll; create/measure/destroy run in
+/// workers/thickness_v3_2/thickness-measure-v3_2-worker.exe. Calls are serialized per instance.
 class ThicknessMeasureV2Service {
 public:
     ThicknessMeasureV2Service();

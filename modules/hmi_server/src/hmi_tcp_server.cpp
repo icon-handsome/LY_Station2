@@ -716,6 +716,10 @@ void HmiTcpServer::handleCmdSetHeadType(const QJsonObject& message)
     const QJsonObject requestPayload = message.value(QLatin1String("payload")).toObject();
     const QJsonValue rawHeadType = requestPayload.value(QLatin1String("headType"));
 
+    qInfo(LOG_HMI_SERVER).noquote()
+        << QStringLiteral("[TCPIP] 接收 cmd.set_head_type msgId=") << msgId
+        << QStringLiteral(" headType=") << rawHeadType.toString();
+
     common::WorkpieceHeadType headType = common::WorkpieceHeadType::SingleEndCap;
     bool parsed = false;
     if (rawHeadType.isString()) {
@@ -736,14 +740,26 @@ void HmiTcpServer::handleCmdSetHeadType(const QJsonObject& message)
     if (!parsed) {
         responseMessage = QStringLiteral(
             "headType 无效，应为 single_endcap（单封头）或 none（无封头）");
+        qWarning(LOG_HMI_SERVER).noquote()
+            << QStringLiteral("[TCPIP] cmd.set_head_type 解析失败，msgId=") << msgId
+            << QStringLiteral(" 原始值=") << rawHeadType;
     } else if (m_stateMachine == nullptr) {
         responseMessage = QStringLiteral("状态机不可用");
+        qWarning(LOG_HMI_SERVER).noquote()
+            << QStringLiteral("[TCPIP] cmd.set_head_type 状态机不可用，msgId=") << msgId;
     } else {
         success = m_stateMachine->setWorkpieceHeadType(headType, &responseMessage);
         if (success) {
             responseMessage = headType == common::WorkpieceHeadType::NoEndCap
                 ? QStringLiteral("已选择无封头，环缝路径 path5 将跳过")
                 : QStringLiteral("已选择单封头，将执行环缝路径 path5");
+            qInfo(LOG_HMI_SERVER).noquote()
+                << QStringLiteral("[TCPIP] cmd.set_head_type 设置成功，msgId=") << msgId
+                << QStringLiteral(" 类型=") << (headType == common::WorkpieceHeadType::NoEndCap ? "无封头" : "单封头");
+        } else {
+            qWarning(LOG_HMI_SERVER).noquote()
+                << QStringLiteral("[TCPIP] cmd.set_head_type 设置失败，msgId=") << msgId
+                << QStringLiteral(" 原因：") << responseMessage;
         }
     }
 

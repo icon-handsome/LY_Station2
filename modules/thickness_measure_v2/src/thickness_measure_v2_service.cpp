@@ -56,11 +56,14 @@ QString WorkerExecutablePath()
     if (selected.compare("legacy", Qt::CaseInsensitive) == 0) {
         return appDir.filePath(QString::fromLatin1(kWorkerExeName));
     }
-    if (!selected.isEmpty() && selected.compare("v3_1", Qt::CaseInsensitive) != 0) {
+    if (selected.compare("v3_1", Qt::CaseInsensitive) == 0) {
+        return appDir.filePath(QString::fromLatin1(worker_protocol::kWorkerV31RelPath));
+    }
+    if (!selected.isEmpty() && selected.compare("v3_2", Qt::CaseInsensitive) != 0) {
         return appDir.filePath(QString::fromLocal8Bit(selected));
     }
     // Private dir: ThicknessMeasurement.dll + PCL 1.15 live beside this exe.
-    return appDir.filePath(QString::fromLatin1(worker_protocol::kWorkerV31RelPath));
+    return appDir.filePath(QString::fromLatin1(worker_protocol::kWorkerV32RelPath));
 }
 
 int ResolveTimeoutMs()
@@ -371,8 +374,12 @@ ThicknessMeasureV2Service::~ThicknessMeasureV2Service()
 
 QString ThicknessMeasureV2Service::defaultConfigPath()
 {
-    return QDir(QCoreApplication::applicationDirPath())
-        .filePath(QStringLiteral("config/thickness_measure_v3_1/thickness_measurement.ini"));
+    const QByteArray selected = qgetenv("SCAN_TRACKING_THICKNESS_WORKER");
+    const QString relative =
+        (selected.compare("v3_1", Qt::CaseInsensitive) == 0)
+            ? QStringLiteral("config/thickness_measure_v3_1/thickness_measurement.ini")
+            : QStringLiteral("config/thickness_measure_v3_2/thickness_measurement.ini");
+    return QDir(QCoreApplication::applicationDirPath()).filePath(relative);
 }
 
 bool ThicknessMeasureV2Service::isReady() const

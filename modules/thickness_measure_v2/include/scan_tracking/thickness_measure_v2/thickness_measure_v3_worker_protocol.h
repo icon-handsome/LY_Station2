@@ -37,9 +37,10 @@ namespace scan_tracking::thickness_measure_v2::worker_protocol {
 constexpr const char* kRequestFileName = "request.txt";
 constexpr const char* kResultFileName = "result.txt";
 constexpr const char* kWorkerExeName = "thickness-measure-v3-worker.exe";
-/// Default V3.1 worker (PCL 1.15). Kept under a private dir so path3 PCL 1.12
+/// Default V3.2 worker (PCL 1.15). Kept under a private dir so path3 PCL 1.12
 /// in the host exe folder cannot be loaded by accident.
 constexpr const char* kWorkerV31RelPath = "workers/thickness_v3_1/thickness-measure-v3_1-worker.exe";
+constexpr const char* kWorkerV32RelPath = "workers/thickness_v3_2/thickness-measure-v3_2-worker.exe";
 
 /// Default host wait for worker (PCL/ONNX + full clouds can be slow).
 constexpr int kDefaultTimeoutMs = 300000;

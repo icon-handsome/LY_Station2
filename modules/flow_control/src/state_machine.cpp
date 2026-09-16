@@ -385,12 +385,10 @@ bool StateMachine::setWorkpieceHeadType(
     if (m_workpieceComplete) {
         return fail(QStringLiteral("当前工件已完成，请先等待 PLC ResultReset 后再选择封头类型"));
     }
+    // 核心判断：只要没有活跃任务和实际缓存数据，就允许切换封头类型。
+    // PLC 的段号/路径ID 可能在 ResultReset 后未及时清零，不作为硬性拒绝条件。
     if (m_activeTask.definition != nullptr || m_codeReadPending || m_codeReadSoftPending ||
         m_scanSegmentCache.cachedSegmentCount() > 0 ||
-        !m_scanSegmentCache.runCaptureRoot().isEmpty() ||
-        m_scanSegmentCache.runTaskId() != 0 ||
-        !m_emittedPathStarted.isEmpty() || !m_emittedPathFinished.isEmpty() ||
-        m_lastInspectedPathId > 0 ||
         m_state == AppState::Scanning || m_ipcState == protocol::IpcState::Busy) {
         return fail(QStringLiteral("当前工件已开始或仍有任务，不能切换封头类型"));
     }

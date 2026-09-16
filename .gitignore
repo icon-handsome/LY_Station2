@@ -65,6 +65,10 @@ third_party/*
 !third_party/weld_measure/**
 !third_party/thickness_measure/
 !third_party/thickness_measure/**
+!third_party/thickness_measure_v3_1/
+!third_party/thickness_measure_v3_1/**
+!third_party/thickness_measure_v3_2/
+!third_party/thickness_measure_v3_2/**
 !third_party/inner_surface_measure/
 !third_party/inner_surface_measure/**
 !third_party/undercut_length_measure/
@@ -121,6 +125,7 @@ third_party/MVS/**/bin/
 /_path4_new_result.txt
 /_deploy_v31_stage2/config/thickness_measure_v3_1
 /_deploy_v31_stage2.zip
+/_deploy_v32_stage.zip
 
 # Large template clouds (local deploy only)
 third_party/container_total_length_v2_2/**/*.pcd

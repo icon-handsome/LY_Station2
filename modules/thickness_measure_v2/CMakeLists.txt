@@ -1,4 +1,6 @@
 scan_tracking_require_thickness_measure_v3_sdk()
+scan_tracking_require_thickness_measure_v3_1_sdk()
+scan_tracking_require_thickness_measure_v3_2_sdk()
 
 # Host façade: no link to ThicknessMeasureV3 (process isolation).
 add_library(scan_tracking_thickness_measure_v2 STATIC
@@ -65,6 +67,28 @@ target_link_libraries(thickness_measure_v3_1_worker PRIVATE
 target_compile_features(thickness_measure_v3_1_worker PRIVATE cxx_std_17)
 scan_tracking_deploy_thickness_measure_v3_1_runtime(thickness_measure_v3_1_worker)
 
+add_executable(thickness_measure_v3_2_worker
+    src/thickness_measure_v3_1_worker_main.cpp
+)
+set_target_properties(thickness_measure_v3_2_worker PROPERTIES
+    OUTPUT_NAME "thickness-measure-v3_2-worker"
+    FOLDER "modules")
+target_include_directories(thickness_measure_v3_2_worker PRIVATE
+    "${SCAN_TRACKING_PCL_ROOT}/include/pcl-1.15"
+    "${SCAN_TRACKING_PCL_ROOT}/3rdParty/Eigen3/include/eigen3"
+    "${SCAN_TRACKING_PCL_ROOT}/3rdParty/Boost/include/boost-1_87"
+    "${SCAN_TRACKING_PCL_ROOT}/3rdParty/FLANN/include")
+target_link_directories(thickness_measure_v3_2_worker PRIVATE
+    "${SCAN_TRACKING_PCL_ROOT}/lib"
+    "${SCAN_TRACKING_PCL_ROOT}/3rdParty/Boost/lib"
+    "${SCAN_TRACKING_PCL_ROOT}/3rdParty/FLANN/lib")
+target_link_libraries(thickness_measure_v3_2_worker PRIVATE
+    ThicknessMeasureV3_2Sdk::Api
+    pcl_common pcl_io pcl_filters pcl_sample_consensus pcl_features pcl_search
+    pcl_kdtree pcl_octree pcl_registration flann_cpp_s)
+target_compile_features(thickness_measure_v3_2_worker PRIVATE cxx_std_17)
+scan_tracking_deploy_thickness_measure_v3_2_runtime(thickness_measure_v3_2_worker)
+
 function(scan_tracking_deploy_thickness_measure_v3_worker target)
     if(NOT TARGET thickness_measure_v3_worker)
         message(FATAL_ERROR "thickness_measure_v3_worker target missing")
@@ -95,6 +119,21 @@ function(scan_tracking_deploy_thickness_measure_v3_1_worker target)
     scan_tracking_deploy_thickness_measure_v3_1_runtime(${target})
 endfunction()
 
+function(scan_tracking_deploy_thickness_measure_v3_2_worker target)
+    if(NOT TARGET thickness_measure_v3_2_worker)
+        message(FATAL_ERROR "thickness_measure_v3_2_worker target missing")
+    endif()
+    add_dependencies(${target} thickness_measure_v3_2_worker)
+    add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:${target}>/${SCAN_TRACKING_THICKNESS_V3_2_WORKER_RELDIR}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:thickness_measure_v3_2_worker>"
+            "$<TARGET_FILE_DIR:${target}>/${SCAN_TRACKING_THICKNESS_V3_2_WORKER_RELDIR}"
+        COMMENT "Deploying thickness-measure-v3_2-worker into ${SCAN_TRACKING_THICKNESS_V3_2_WORKER_RELDIR}")
+    scan_tracking_deploy_thickness_measure_v3_2_runtime(${target})
+endfunction()
+
 add_executable(scan_tracking_thickness_measure_v2_smoke
     tests/thickness_measure_v2_smoke_runner.cpp
 )
@@ -111,3 +150,4 @@ set_target_properties(scan_tracking_thickness_measure_v2_smoke PROPERTIES
 )
 
 scan_tracking_deploy_thickness_measure_v3_worker(scan_tracking_thickness_measure_v2_smoke)
+scan_tracking_deploy_thickness_measure_v3_2_worker(scan_tracking_thickness_measure_v2_smoke)
