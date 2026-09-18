@@ -20,6 +20,7 @@
 #include <QJsonObject>
 #include <QLoggingCategory>
 #include <QStringList>
+#include <qfileinfo.h>
 
 #include "scan_tracking/common/logger.h"
 
@@ -290,11 +291,26 @@ QSet<int> ConfigManager::runtimeSkippedPathIds() const
 
 bool ConfigManager::isPathEnabledForRuntime(int pathId) const
 {
-    if (pathId <= 0 || m_runtimeSkippedPathIds.contains(pathId)) {
-        return false;
+    return pathRuntimeUnavailableReason(pathId).isEmpty();
+}
+
+QString ConfigManager::pathRuntimeUnavailableReason(int pathId) const
+{
+    if (pathId <= 0) {
+        return QStringLiteral("非法 pathId");
     }
     const ScanPathConfig* path = findScanPathById(pathId);
-    return path != nullptr && path->enabled;
+    if (path == nullptr) {
+        return QStringLiteral("scan_paths 中不存在（请确认已部署含 path%1 的 JSON 并重启）")
+            .arg(pathId);
+    }
+    if (!path->enabled) {
+        return QStringLiteral("JSON 中 enabled=false");
+    }
+    if (m_runtimeSkippedPathIds.contains(pathId)) {
+        return QStringLiteral("被当前封头类型运行时跳过");
+    }
+    return {};
 }
 
 void ConfigManager::setRuntimeSkippedPaths(const QSet<int>& pathIds)
@@ -317,30 +333,71 @@ void ConfigManager::setRuntimeSkippedPaths(const QSet<int>& pathIds)
 
 bool ConfigManager::setWorkpieceHeadType(WorkpieceHeadType type)
 {
-    m_workpieceHeadType = type;
     QSet<int> skipped;
+    QVector<int> requiredPathIds;
     if (type == WorkpieceHeadType::SingleEndCap) {
         // 单封头仅跑 path6（专用编号）+ path5（环缝）；JSON 中 path6 排在 path5 之前。
         skipped.insert(1);
         skipped.insert(2);
         skipped.insert(3);
         skipped.insert(4);
+        requiredPathIds = {6, 5};
     } else if (type == WorkpieceHeadType::NoEndCap) {
         // 无封头跑 path1–4；跳过环缝 path5 与单封头专用编号 path6。
         skipped.insert(5);
         skipped.insert(6);
+        requiredPathIds = {1, 2, 3, 4};
     }
+
+    // 切换前校验：避免单封头缺 path6 时静默只剩 path5，随后 PLC 写 ScanPathId=6 被拒。
+    if (type == WorkpieceHeadType::SingleEndCap) {
+        for (int pathId : requiredPathIds) {
+            const ScanPathConfig* path = findScanPathById(pathId);
+            if (path == nullptr || !path->enabled) {
+                qWarning(LOG_CONFIG).noquote()
+                    << QStringLiteral("设置封头类型失败：单封头需要 path6+path5，但 path")
+                    << pathId
+                    << (path == nullptr ? QStringLiteral(" 不存在于当前 scan_paths JSON")
+                                        : QStringLiteral(" 在 JSON 中已禁用"));
+                return false;
+            }
+        }
+    } else if (type == WorkpieceHeadType::NoEndCap) {
+        bool anyEnabled = false;
+        for (int pathId : requiredPathIds) {
+            const ScanPathConfig* path = findScanPathById(pathId);
+            if (path != nullptr && path->enabled) {
+                anyEnabled = true;
+                break;
+            }
+        }
+        if (!anyEnabled) {
+            qWarning(LOG_CONFIG).noquote()
+                << QStringLiteral("设置封头类型失败：无封头需要 path1–4 中至少一条 enabled 路径");
+            return false;
+        }
+    }
+
+    m_workpieceHeadType = type;
     setRuntimeSkippedPaths(skipped);
     QStringList skippedText;
     for (int pathId : m_runtimeSkippedPathIds) {
         skippedText.append(QString::number(pathId));
+    }
+    QStringList enabledText;
+    for (int pathId : enabledPathIds()) {
+        enabledText.append(QString::number(pathId));
     }
     qInfo(LOG_CONFIG).noquote()
         << QStringLiteral("工件封头类型已设置：") << workpieceHeadTypeToString(type)
         << QStringLiteral("，运行时跳过路径=")
         << (skippedText.isEmpty() ? QStringLiteral("[]")
                                    : QStringLiteral("[") + skippedText.join(QLatin1Char(','))
-                                         + QLatin1Char(']'));
+                                         + QLatin1Char(']'))
+        << QStringLiteral("，有效路径=")
+        << (enabledText.isEmpty() ? QStringLiteral("[]")
+                                  : QStringLiteral("[") + enabledText.join(QLatin1Char(','))
+                                        + QLatin1Char(']'));
     return true;
 }
 
@@ -401,10 +458,11 @@ bool ConfigManager::setActivePathId(int pathId)
             << QStringLiteral("setActivePathId：非法 pathId=") << pathId;
         return false;
     }
-    if (!isPathEnabledForRuntime(pathId)) {
+    const QString unavailable = pathRuntimeUnavailableReason(pathId);
+    if (!unavailable.isEmpty()) {
         qWarning(LOG_CONFIG).noquote()
             << QStringLiteral("setActivePathId：pathId=") << pathId
-            << QStringLiteral(" 不存在、已禁用或被运行时跳过");
+            << QStringLiteral(" 不可用：") << unavailable;
         return false;
     }
 

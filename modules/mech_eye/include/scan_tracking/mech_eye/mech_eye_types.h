@@ -39,7 +39,7 @@ enum class CaptureErrorCode {
 
 /* 相机运行状态 */
 enum class CameraRuntimeState {
-    Idle = 0,
+    Idle = 0,   
     Discovering = 1,
     Connecting = 2,
     Ready = 3,

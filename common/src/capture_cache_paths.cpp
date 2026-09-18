@@ -79,6 +79,7 @@ QString captureDeviceTagForFileName(const QString& deviceTag)
         return QStringLiteral("Telescopic");
     }
     return tag.left(1).toUpper() + tag.mid(1);
+
 }
 
 QString buildCaptureArtifactFileName(

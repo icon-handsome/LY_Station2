@@ -2,194 +2,192 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Configure (Ninja Debug)",
-      "type": "shell",
-      "command": "cmd",
-      "args": [
-        "/c",
-        "${workspaceFolder}/tools/scan_tracking_dev.cmd",
-        "configure-debug"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "presentation": {
-        "reveal": "always",
-        "panel": "shared",
-        "clear": true
-      },
+      "label": "CMake: Configure Debug",
+      "detail": "cmake --preset win-msvc2019-qtcore-ninja-debug",
+      "type": "process",
+      "command": "cmd.exe",
+      "args": ["/d", "/c", "tools\\scan_tracking_dev.cmd", "configure-debug"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true, "focus": true },
       "problemMatcher": [],
       "group": "build"
     },
     {
-      "label": "Build (Ninja Debug)",
-      "type": "shell",
-      "command": "cmd",
-      "args": [
-        "/c",
-        "${workspaceFolder}/tools/scan_tracking_dev.cmd",
-        "build-debug"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "presentation": {
-        "reveal": "always",
-        "panel": "shared",
-        "clear": true
-      },
-      "problemMatcher": [
-        "$msCompile"
-      ],
-      "group": {
-        "kind": "build",
-        "isDefault": true
-      }
+      "label": "CMake: Configure Release",
+      "detail": "cmake --preset win-msvc2019-qtcore-ninja-release",
+      "type": "process",
+      "command": "cmd.exe",
+      "args": ["/d", "/c", "tools\\scan_tracking_dev.cmd", "configure-release"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true, "focus": true },
+      "problemMatcher": [],
+      "group": "build"
     },
     {
-      "label": "Run scan-tracking (Debug)",
-      "type": "shell",
-      "command": "cmd",
-      "args": [
-        "/c",
-        "${workspaceFolder}/tools/scan_tracking_dev.cmd",
-        "run-debug"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "presentation": {
-        "reveal": "always",
-        "panel": "dedicated",
-        "clear": true,
-        "close": false
-      },
+      "label": "CMake: Build Debug",
+      "detail": "cmake --build --preset win-msvc2019-qtcore-ninja-debug",
+      "type": "process",
+      "command": "cmd.exe",
+      "args": ["/d", "/c", "tools\\scan_tracking_dev.cmd", "build-debug"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true, "focus": true },
+      "problemMatcher": ["$msCompile"],
+      "group": { "kind": "build", "isDefault": true }
+    },
+    {
+      "label": "CMake: Build Release",
+      "detail": "cmake --build --preset win-msvc2019-qtcore-ninja-release",
+      "type": "process",
+      "command": "cmd.exe",
+      "args": ["/d", "/c", "tools\\scan_tracking_dev.cmd", "build-release"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true, "focus": true },
+      "problemMatcher": ["$msCompile"],
+      "group": "build"
+    },
+    {
+      "label": "CMake: Clean Debug",
+      "detail": "Delete build/win-msvc2019-qtcore-ninja-debug (VS Delete Cache)",
+      "type": "process",
+      "command": "cmd.exe",
+      "args": ["/d", "/c", "tools\\scan_tracking_dev.cmd", "clean-debug"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true, "focus": true },
       "problemMatcher": []
     },
     {
-      "label": "Build and Run (Debug)",
-      "dependsOn": [
-        "Build (Ninja Debug)",
-        "Run scan-tracking (Debug)"
-      ],
+      "label": "CMake: Clean Release",
+      "detail": "Delete build/win-msvc2019-qtcore-ninja-release (VS Delete Cache)",
+      "type": "process",
+      "command": "cmd.exe",
+      "args": ["/d", "/c", "tools\\scan_tracking_dev.cmd", "clean-release"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true, "focus": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "CMake: Rebuild Debug",
+      "detail": "clean + configure + build (Debug preset)",
+      "type": "process",
+      "command": "cmd.exe",
+      "args": ["/d", "/c", "tools\\scan_tracking_dev.cmd", "rebuild-debug"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true, "focus": true },
+      "problemMatcher": ["$msCompile"],
+      "group": "build"
+    },
+    {
+      "label": "CMake: Rebuild Release",
+      "detail": "clean + configure + build (Release preset)",
+      "type": "process",
+      "command": "cmd.exe",
+      "args": ["/d", "/c", "tools\\scan_tracking_dev.cmd", "rebuild-release"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true, "focus": true },
+      "problemMatcher": ["$msCompile"],
+      "group": "build"
+    },
+    {
+      "label": "Run: scan-tracking Debug",
+      "detail": "Run Debug app with cwd/PATH/GenTL matching VS deploy dir",
+      "type": "process",
+      "command": "cmd.exe",
+      "args": ["/d", "/c", "tools\\scan_tracking_dev.cmd", "run-debug"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true, "close": false, "focus": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Run: scan-tracking Release",
+      "detail": "Run Release app with cwd/PATH/GenTL matching VS deploy dir",
+      "type": "process",
+      "command": "cmd.exe",
+      "args": ["/d", "/c", "tools\\scan_tracking_dev.cmd", "run-release"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true, "close": false, "focus": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Build and Run: Debug",
+      "dependsOn": ["CMake: Build Debug", "Run: scan-tracking Debug"],
       "dependsOrder": "sequence",
       "problemMatcher": []
+    },
+    {
+      "label": "Build and Run: Release",
+      "dependsOn": ["CMake: Build Release", "Run: scan-tracking Release"],
+      "dependsOrder": "sequence",
+      "problemMatcher": []
+    },
+    {
+      "label": "clangd: Refresh compile_commands",
+      "detail": "Re-configure Debug to refresh compile_commands.json",
+      "type": "process",
+      "command": "cmd.exe",
+      "args": ["/d", "/c", "tools\\scan_tracking_dev.cmd", "configure-debug"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "silent", "panel": "shared", "showReuseMessage": false },
+      "problemMatcher": []
+    },
+    {
+      "label": "Configure (Ninja Debug)",
+      "dependsOn": ["CMake: Configure Debug"],
+      "problemMatcher": [],
+      "hide": true
     },
     {
       "label": "Configure (Ninja Release)",
-      "type": "shell",
-      "command": "cmd",
-      "args": [
-        "/c",
-        "${workspaceFolder}/tools/scan_tracking_dev.cmd",
-        "configure-release"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "presentation": {
-        "reveal": "always",
-        "panel": "shared",
-        "clear": true
-      },
+      "dependsOn": ["CMake: Configure Release"],
       "problemMatcher": [],
-      "group": "build"
+      "hide": true
+    },
+    {
+      "label": "Build (Ninja Debug)",
+      "dependsOn": ["CMake: Build Debug"],
+      "problemMatcher": [],
+      "hide": true
     },
     {
       "label": "Build (Ninja Release)",
-      "type": "shell",
-      "command": "cmd",
-      "args": [
-        "/c",
-        "${workspaceFolder}/tools/scan_tracking_dev.cmd",
-        "build-release"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "presentation": {
-        "reveal": "always",
-        "panel": "shared",
-        "clear": true
-      },
-      "problemMatcher": [
-        "$msCompile"
-      ],
-      "group": "build"
-    },
-    {
-      "label": "Run scan-tracking (Release)",
-      "type": "shell",
-      "command": "cmd",
-      "args": [
-        "/c",
-        "${workspaceFolder}/tools/scan_tracking_dev.cmd",
-        "run-release"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "presentation": {
-        "reveal": "always",
-        "panel": "dedicated",
-        "clear": true,
-        "close": false
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "Refresh compile_commands (CMake)",
-      "type": "shell",
-      "command": "cmd",
-      "args": [
-        "/c",
-        "${workspaceFolder}/tools/scan_tracking_dev.cmd",
-        "configure-debug"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "presentation": {
-        "reveal": "silent",
-        "panel": "shared",
-        "showReuseMessage": false
-      },
+      "dependsOn": ["CMake: Build Release"],
       "problemMatcher": [],
-      "group": "none"
-    },
-    {
-      "label": "Rebuild (Ninja Debug)",
-      "dependsOn": [
-        "Clean Build Directory (Debug)",
-        "Configure (Ninja Debug)",
-        "Build (Ninja Debug)"
-      ],
-      "dependsOrder": "sequence",
-      "presentation": {
-        "reveal": "always",
-        "panel": "shared",
-        "clear": true
-      },
-      "problemMatcher": [
-        "$msCompile"
-      ],
-      "group": "build"
+      "hide": true
     },
     {
       "label": "Clean Build Directory (Debug)",
-      "type": "shell",
-      "command": "powershell",
-      "args": [
-        "-NoProfile",
-        "-Command",
-        "$target = Resolve-Path -LiteralPath '${workspaceFolder}/build/win-msvc2019-qtcore-ninja-debug' -ErrorAction SilentlyContinue; if ($target) { Remove-Item -LiteralPath $target.Path -Recurse -Force }"
-      ],
-      "presentation": {
-        "reveal": "always",
-        "panel": "shared",
-        "clear": true
-      },
-      "problemMatcher": []
+      "dependsOn": ["CMake: Clean Debug"],
+      "problemMatcher": [],
+      "hide": true
+    },
+    {
+      "label": "Rebuild (Ninja Debug)",
+      "dependsOn": ["CMake: Rebuild Debug"],
+      "problemMatcher": [],
+      "hide": true
+    },
+    {
+      "label": "Run scan-tracking (Debug)",
+      "dependsOn": ["Run: scan-tracking Debug"],
+      "problemMatcher": [],
+      "hide": true
+    },
+    {
+      "label": "Run scan-tracking (Release)",
+      "dependsOn": ["Run: scan-tracking Release"],
+      "problemMatcher": [],
+      "hide": true
+    },
+    {
+      "label": "Build and Run (Debug)",
+      "dependsOn": ["Build and Run: Debug"],
+      "problemMatcher": [],
+      "hide": true
+    },
+    {
+      "label": "Refresh compile_commands (CMake)",
+      "dependsOn": ["clangd: Refresh compile_commands"],
+      "problemMatcher": [],
+      "hide": true
     }
   ]
 }

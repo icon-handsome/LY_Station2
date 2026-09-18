@@ -386,7 +386,7 @@ MechEyeWorker::MechEyeWorker(const QString& roleName, QObject* parent)
 MechEyeWorker::~MechEyeWorker()
 {
     const std::lock_guard<std::mutex> sdkLock(mechEyeSdkMutex());
-    QString errorMessage;
+    QString errorMessage;   
     disconnectCamera(&errorMessage);
     delete m_impl;
     m_impl = nullptr;

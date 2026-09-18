@@ -421,7 +421,12 @@ bool StateMachine::setWorkpieceHeadType(
     }
 
     const common::WorkpieceHeadType previousType = cfgMgr->workpieceHeadType();
-    cfgMgr->setWorkpieceHeadType(type);
+    if (!cfgMgr->setWorkpieceHeadType(type)) {
+        const QString detail = type == common::WorkpieceHeadType::SingleEndCap
+            ? QStringLiteral("单封头需要 scan_paths 中启用 path6（编号）与 path5（环缝）；请部署最新 station2_cylinder_semi.json 并重启 IPC")
+            : QStringLiteral("无封头需要 scan_paths 中至少一条 path1–4 启用路径");
+        return fail(detail);
+    }
     if (cfgMgr->enabledPathIds().isEmpty()) {
         cfgMgr->setWorkpieceHeadType(previousType);
         return fail(QStringLiteral("所选封头类型没有可执行的扫描路径"));
@@ -437,7 +442,8 @@ bool StateMachine::setWorkpieceHeadType(
 
     qInfo(LOG_FLOW).noquote()
         << QStringLiteral("HMI 已设置工件封头类型：") << cfgMgr->workpieceHeadTypeName()
-        << QStringLiteral("，有效路径数=") << cfgMgr->enabledPathIds().size();
+        << QStringLiteral("，有效路径数=") << cfgMgr->enabledPathIds().size()
+        << QStringLiteral(" 首条=") << cfgMgr->activePathId();
     return true;
 }
 

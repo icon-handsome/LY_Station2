@@ -157,7 +157,7 @@ struct TfminiPlusConfig {
     bool enabled = false;
     QString portName;               ///< TF1 串口名，如 COM3
     QString portName2;              ///< TF2 串口名，如 COM4；空则仅开一路
-    int baudRate = 115200;
+    int baudRate = 115200;          /// 波特率默认为115200
     int collisionThresholdMm = 0;   ///< 碰撞阈值（毫米），0 表示禁用
     bool logFrames = false;         ///< 是否逐帧打印测距日志
 };
@@ -315,10 +315,14 @@ public:
     void setRuntimeSkippedPaths(const QSet<int>& pathIds);
 
     /// 设置当前工件封头类型；单封头仅 path6+path5，无封头 path1–4（跳过 path5/path6）。
+    /// 若配置缺少该类型所需路径（或 JSON 已禁用），返回 false 且不修改当前类型/跳过集。
     bool setWorkpieceHeadType(WorkpieceHeadType type);
 
     /// 判断路径是否同时满足 JSON enabled 与运行时选择条件。
     bool isPathEnabledForRuntime(int pathId) const;
+
+    /// 路径当前不可用原因（空串表示可用）：不存在 / 已禁用 / 被当前封头类型跳过。
+    QString pathRuntimeUnavailableReason(int pathId) const;
 
     /// 活跃路径 name；无则空串。
     QString activePathName() const;

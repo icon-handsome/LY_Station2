@@ -59,7 +59,7 @@ if(MSVC)
         /DELAYLOAD:OrbbecSDK.dll
         /DELAYLOAD:MVCameraControl.dll
         /DELAYLOAD:WeldMeasure.dll
-        /DELAYLOAD:InnerSurfaceMeasure.dll
+        /DELAYLOAD:InnerSurfaceAndVolume.dll
         /DELAYLOAD:UndercutLengthMeasure.dll
         /DELAYLOAD:CollisionDetection.dll
         /DELAYLOAD:opencv_world343.dll
@@ -97,7 +97,8 @@ scan_tracking_deploy_weld_measure_runtime(scan_tracking)
 scan_tracking_deploy_thickness_measure_v3_worker(scan_tracking)
 scan_tracking_deploy_thickness_measure_v3_1_worker(scan_tracking)
 scan_tracking_deploy_thickness_measure_v3_2_worker(scan_tracking)
-scan_tracking_deploy_inner_surface_measure_runtime(scan_tracking)
+# path4 InnerSurfaceAndVolume (All-in-one PCL *_release.dll + VTK).
+scan_tracking_deploy_inner_surface_measure_v2_runtime(scan_tracking)
 scan_tracking_deploy_undercut_length_measure_runtime(scan_tracking)
 # path3 ContainerTotalLength runs in container-total-length-worker.exe (process isolation).
 scan_tracking_deploy_container_total_length_runtime(scan_tracking)

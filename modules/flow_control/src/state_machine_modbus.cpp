@@ -406,11 +406,13 @@ void StateMachine::processTrigger(const protocol::TriggerDefinition& trigger, co
                 return;
             }
             if (requestedPathId > 0 && !configMgr->isPathEnabledForRuntime(requestedPathId)) {
+                const QString reason = configMgr->pathRuntimeUnavailableReason(requestedPathId);
                 rejectPathFlowTrigger(
                     trigger,
                     8,
-                    QStringLiteral("PLC 请求的 ScanPathId=%1 不存在、已禁用或被当前封头类型跳过")
-                        .arg(requestedPathId));
+                    QStringLiteral("PLC 请求的 ScanPathId=%1 不可用：%2")
+                        .arg(requestedPathId)
+                        .arg(reason));
                 return;
             }
             if (configMgr->activePathId() <= 0) {
